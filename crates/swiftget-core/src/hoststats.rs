@@ -103,9 +103,9 @@ impl HostStats {
         Some(rec.host_cap)
     }
 
-    /// Record a throttle event: update the per-host cap (429/503 only; never persist cap < 2).
+    /// Record a throttle event: update the per-host cap (429/503 only).
     pub fn record_throttle(&self, host: &str, cap: usize) {
-        if cap < 2 {
+        if cap == 0 {
             return;
         }
         {
@@ -170,6 +170,23 @@ mod tests {
         // Lower throughput does not override the best.
         hs.observe("example.com", 16, 500.0);
         assert_eq!(hs.best_connections("example.com"), Some(8));
+    }
+
+    #[test]
+    fn throttle_cap_expires_after_24h() {
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_secs();
+        let hs = HostStats::in_memory();
+        hs.record_throttle("host.test", 4);
+        assert_eq!(hs.host_cap("host.test"), Some(4));
+        {
+            let mut s = hs.store.lock().unwrap();
+            let rec = s.hosts.get_mut("host.test").unwrap();
+            rec.last_throttle = now.saturating_sub(HOST_CAP_DECAY_SECS + 1);
+        }
+        assert_eq!(hs.host_cap("host.test"), None);
     }
 
     #[test]
