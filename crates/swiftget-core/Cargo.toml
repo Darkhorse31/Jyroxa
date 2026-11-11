@@ -18,7 +18,6 @@ http3 = []
 
 [dependencies]
 tokio = { workspace = true }
-reqwest = { workspace = true }
 futures = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
@@ -31,6 +30,22 @@ md-5 = { workspace = true }
 hex = { workspace = true }
 bytes = { workspace = true }
 tracing = { workspace = true }
+
+[target.'cfg(target_os = "android")'.dependencies]
+# NDK builds: no system OpenSSL; pure-Rust TLS (ring builds with cargo-ndk's clang).
+reqwest = { version = "0.12", default-features = false, features = [
+    "rustls-tls",
+    "rustls-tls-webpki-roots",
+    "stream",
+    "http2",
+    "charset",
+    "gzip",
+    "brotli",
+    "deflate",
+] }
+
+[target.'cfg(not(target_os = "android"))'.dependencies]
+reqwest = { workspace = true }
 
 [dev-dependencies]
 axum = "0.7"

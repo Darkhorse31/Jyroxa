@@ -1,4 +1,36 @@
-# SwiftGet build outputs (Windows GNU)
+# SwiftGet build outputs
+
+## Android (release APK)
+
+Built on **2026-11-10** with JDK 17, Android SDK 35 (platform 34 + build-tools 34.0.0), NDK 27.2, Gradle 8.7.
+
+| Artifact | Path |
+|----------|------|
+| Release APK (arm32 + arm64, signed) | `E:\SwiftGet\dist\SwiftGet-0.1.0-universal.apk` |
+| Gradle output (same bytes) | `E:\SwiftGet\android\app\build\outputs\apk\release\app-release.apk` |
+
+### Commands used (isolated toolchain env)
+
+```powershell
+$env:JAVA_HOME="E:\.swiftget-tools\jdk17"
+$env:ANDROID_HOME="E:\.swiftget-tools\android-sdk"
+$env:ANDROID_NDK_HOME="E:\.swiftget-tools\android-sdk\ndk\27.2.12479018"
+$env:ANDROID_USER_HOME="E:\.swiftget-tools\android-user-home"
+$env:GRADLE_USER_HOME="E:\.swiftget-tools\gradle-home"
+$env:RUSTC_WRAPPER=""   # skip Windows GNU rustc wrapper when cross-compiling
+
+cd E:\SwiftGet\crates\swiftget-ffi
+cargo ndk -t arm64-v8a -t armeabi-v7a -o E:\SwiftGet\android\app\src\main\jniLibs build --release
+
+cd E:\SwiftGet\android
+.\gradlew.bat assembleRelease
+```
+
+Rust on Android uses **rustls** (via `swiftget-core` target cfg); Windows desktop builds still use **native-tls** (schannel).
+
+---
+
+## Desktop (Windows GNU)
 
 Built on **2026-11-10** with host `x86_64-pc-windows-gnu`, Tauri v2.
 

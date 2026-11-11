@@ -58,22 +58,25 @@ To build and run the Android application:
 2. **Android SDK:**
    - Platform SDK: Android 14 (API 34)
    - Build Tools: 34.0.0 or later
-   - NDK: 25.x or 26.x (`ndk.dir` or `ANDROID_NDK_HOME`)
+   - NDK: 27.x (`ANDROID_NDK_HOME` or `ndk.dir` in `local.properties`)
 3. **Rust Toolchain & cargo-ndk (for building native Rust engine):**
    ```bash
    cargo install cargo-ndk
-   rustup target add aarch64-linux-android armv7-linux-androideabi i686-linux-android x86_64-linux-android
+   rustup target add aarch64-linux-android armv7-linux-androideabi
    ```
+4. **`android/local.properties`** (git-ignored): point `sdk.dir` at your SDK root (Windows example: `sdk.dir=E\:\\.swiftget-tools\\android-sdk`).
+
+On the reference Windows GNU host, set `RUSTC_WRAPPER=` when running `cargo ndk` so the desktop raw-dylib rustc wrapper is not applied to Android targets.
 
 ---
 
 ## Native Rust Engine Compilation (`cargo-ndk`)
 
-SwiftGet uses `crates/swiftget-ffi` to compile a shared C library (`libswiftget_ffi.so`) for all target Android ABIs:
+SwiftGet uses `crates/swiftget-ffi` to compile a shared C library (`libswiftget_ffi.so`) for phone ABIs (release APK ships both in one universal package):
 - **32-bit ARM:** `armeabi-v7a` (`armv7-linux-androideabi`)
 - **64-bit ARM:** `arm64-v8a` (`aarch64-linux-android`)
-- **32-bit x86:** `x86` (`i686-linux-android`)
-- **64-bit x86:** `x86_64` (`x86_64-linux-android`)
+
+`swiftget-core` uses **reqwest + rustls** on `target_os = "android"` (no system OpenSSL).
 
 ### Option A: Via Gradle Task
 
@@ -102,8 +105,6 @@ cd crates/swiftget-ffi
 cargo ndk \
   -t armeabi-v7a \
   -t arm64-v8a \
-  -t x86 \
-  -t x86_64 \
   -o ../../android/app/src/main/jniLibs \
   build --release
 ```
@@ -153,6 +154,32 @@ Output: `android/app/build/outputs/apk/debug/app-debug.apk`
 ```bash
 ./gradlew installDebug
 ```
+
+### Signed release APK (local / sideload)
+
+Create a keystore once (passwords go in git-ignored `android/keystore.properties`):
+
+```powershell
+mkdir android\keystore
+keytool -genkeypair -v `
+  -keystore android\keystore\swiftget-release.jks `
+  -alias swiftget -keyalg RSA -keysize 2048 -validity 10000
+```
+
+Example `android/keystore.properties`:
+
+```properties
+storeFile=keystore/swiftget-release.jks
+storePassword=YOUR_STORE_PASSWORD
+keyAlias=swiftget
+keyPassword=YOUR_KEY_PASSWORD
+```
+
+```bash
+./gradlew assembleRelease
+```
+
+Output: `android/app/build/outputs/apk/release/app-release.apk` — copy to `dist/SwiftGet-<version>-universal.apk` for distribution.
 
 ### Release Android App Bundle (AAB for Google Play)
 ```bash

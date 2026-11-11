@@ -12,6 +12,9 @@ apps/desktop/src-tauri/target/
 android/.gradle/
 android/build/
 android/local.properties
+android/keystore.properties
+android/keystore/*.jks
+*.jks
 
 # SwiftGet runtime state & logs
 *.sgstate

@@ -15,6 +15,9 @@
 - Android command-line tools + SDK (platform-tools, platforms;android-35, build-tools;35.0.0, ndk;27.2.12479018): E:\.swiftget-tools\android-sdk (ANDROID_USER_HOME=E:\.swiftget-tools\android-user-home; Gradle may also create %USERPROFILE%\.android and %USERPROFILE%\.gradle caches - remove at cleanup if they were not present before: .gradle absent=True .android absent=True at 2026-11-10T21:10:12)
 - Rust targets aarch64-linux-android, armv7-linux-androideabi (inside E:\.swiftget-tools\rustup)
 - cargo-ndk (cargo install, inside E:\.swiftget-tools\cargo\bin)
+- Gradle 8.7 distribution (extracted for wrapper bootstrap): `E:\.swiftget-tools\gradle-8.7` and zip `E:\.swiftget-tools\gradle-8.7-bin.zip`
+- Android SDK components pulled during Gradle build: `platforms;android-34`, `build-tools;34.0.0` (into `E:\.swiftget-tools\android-sdk`)
+- Gradle wrapper distribution cache: `GRADLE_USER_HOME=E:\.swiftget-tools\gradle-home`
 
 ## Windows GNU raw-dylib linker workaround (build helpers under E:\SwiftGet\.toolbin, git-ignored)
 This host is `x86_64-pc-windows-gnu` with an incomplete self-contained MinGW: GNU
