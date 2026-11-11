@@ -11,6 +11,8 @@ apps/desktop/src-tauri/target/
 # Android (later phase)
 android/.gradle/
 android/build/
+android/app/build/
+*.db
 android/local.properties
 android/keystore.properties
 android/keystore/*.jks

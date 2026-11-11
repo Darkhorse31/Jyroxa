@@ -4,6 +4,7 @@ members = [
     "crates/swiftget-core",
     "crates/swiftget-cli",
     "crates/swiftget-ffi",
+    "apps/desktop/src-tauri",
 ]
 default-members = [
     "crates/swiftget-core",
