@@ -754,6 +754,8 @@ impl DesktopEngine {
 
             let _ = consumer.await;
 
+            let notifications_on = settings_lock.lock().await.notifications;
+            let mut native_toast: Option<(String, String)> = None;
             {
                 let mut items = engine.items.lock().await;
                 if let Some(inner) = items.get_mut(&id) {
@@ -770,6 +772,12 @@ impl DesktopEngine {
                                 total: out.total_size,
                             };
                             let _ = app.emit("download-finished", finished);
+                            if notifications_on {
+                                native_toast = Some((
+                                    "Download complete".into(),
+                                    inner.view.filename.clone(),
+                                ));
+                            }
                         }
                         Err(swiftget_core::Error::Cancelled) => {
                             inner.view.status = TaskStatus::Cancelled;
@@ -777,10 +785,19 @@ impl DesktopEngine {
                         Err(e) => {
                             inner.view.status = TaskStatus::Failed;
                             inner.view.error = Some(e.to_string());
+                            if notifications_on {
+                                native_toast = Some((
+                                    format!("Download failed: {}", inner.view.filename),
+                                    e.to_string(),
+                                ));
+                            }
                         }
                     }
                     inner.control = None;
                 }
+            }
+            if let Some((title, body)) = native_toast {
+                show_native_notification(&app, &title, &body);
             }
 
             {
@@ -976,6 +993,16 @@ impl DesktopEngine {
         out
     }
 
+}
+
+fn show_native_notification(app: &AppHandle, title: &str, body: &str) {
+    use tauri_plugin_notification::NotificationExt;
+    let _ = app
+        .notification()
+        .builder()
+        .title(title)
+        .body(body)
+        .show();
 }
 
 #[derive(Clone, Serialize)]
