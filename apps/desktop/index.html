@@ -7,86 +7,216 @@
     <link rel="stylesheet" href="/src/styles.css" />
   </head>
   <body data-theme="dark">
-    <div id="app">
+    <div id="app" class="app-container">
       <header class="topbar">
-        <div class="brand">
-          <span class="logo">SwiftGet</span>
-          <span class="tagline">fast segmented downloads</span>
+        <div class="brand-group">
+          <div class="brand-icon">
+            <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+              <polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"></polygon>
+            </svg>
+          </div>
+          <div class="brand-text">
+            <h1 class="logo">SwiftGet</h1>
+            <span class="tagline">fast segmented downloads</span>
+          </div>
         </div>
+
+        <div class="topbar-metrics" aria-label="Global download stats">
+          <div class="metric-pill" title="Active downloads">
+            <span class="metric-dot active"></span>
+            <span id="stat-active" class="metric-text">0 active</span>
+          </div>
+          <div class="metric-pill" title="Combined download speed">
+            <span id="stat-speed" class="metric-text highlight">0 B/s</span>
+          </div>
+          <div class="metric-pill" title="Completed downloads">
+            <span id="stat-done" class="metric-text">0 completed</span>
+          </div>
+        </div>
+
         <div class="toolbar">
-          <button type="button" id="btn-add" class="primary">Add download</button>
-          <button type="button" id="btn-grabber">LinkGrabber</button>
-          <button type="button" id="btn-settings">Settings</button>
-          <button type="button" id="btn-theme" title="Toggle theme">◑</button>
+          <button type="button" id="btn-add" class="btn primary" title="Add a new download URL (Ctrl+N)">
+            <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><line x1="12" y1="5" x2="12" y2="19"></line><line x1="5" y1="12" x2="19" y2="12"></line></svg>
+            <span>Add download</span>
+          </button>
+          <button type="button" id="btn-grabber" class="btn secondary" title="Open LinkGrabber panel to crawl and batch import">
+            <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71"></path><path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71"></path></svg>
+            <span>LinkGrabber</span>
+          </button>
+          <button type="button" id="btn-settings" class="btn secondary" title="Configure engine and connection settings">
+            <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"></circle><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z"></path></svg>
+            <span>Settings</span>
+          </button>
+          <button type="button" id="btn-theme" class="btn-icon theme-toggle" title="Toggle Light / Dark theme" aria-label="Toggle theme">
+            <span class="icon-sun">
+              <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="5"></circle><line x1="12" y1="1" x2="12" y2="3"></line><line x1="12" y1="21" x2="12" y2="23"></line><line x1="4.22" y1="4.22" x2="5.64" y2="5.64"></line><line x1="18.36" y1="18.36" x2="19.78" y2="19.78"></line><line x1="1" y1="12" x2="3" y2="12"></line><line x1="21" y1="12" x2="23" y2="12"></line><line x1="4.22" y1="19.78" x2="5.64" y2="18.36"></line><line x1="18.36" y1="5.64" x2="19.78" y2="4.22"></line></svg>
+            </span>
+            <span class="icon-moon">
+              <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"></path></svg>
+            </span>
+          </button>
         </div>
       </header>
 
       <main class="layout">
         <section class="panel downloads-panel">
           <div class="panel-head">
-            <h2>Downloads</h2>
-            <canvas id="speed-graph" width="640" height="80" aria-label="Speed graph"></canvas>
+            <div class="panel-title-area">
+              <h2>Downloads</h2>
+            </div>
+            <div class="graph-card">
+              <canvas id="speed-graph" width="560" height="74" aria-label="Bandwidth speed graph"></canvas>
+            </div>
           </div>
+
+          <div class="downloads-filter-bar">
+            <div class="filter-tabs" role="tablist">
+              <button type="button" class="tab-btn active" data-tab="all" role="tab" aria-selected="true">
+                <span>All</span>
+                <span class="tab-badge" id="badge-tab-all">0</span>
+              </button>
+              <button type="button" class="tab-btn" data-tab="active" role="tab" aria-selected="false">
+                <span>Active</span>
+                <span class="tab-badge" id="badge-tab-active">0</span>
+              </button>
+              <button type="button" class="tab-btn" data-tab="paused" role="tab" aria-selected="false">
+                <span>Paused</span>
+                <span class="tab-badge" id="badge-tab-paused">0</span>
+              </button>
+              <button type="button" class="tab-btn" data-tab="completed" role="tab" aria-selected="false">
+                <span>Completed</span>
+                <span class="tab-badge" id="badge-tab-completed">0</span>
+              </button>
+            </div>
+
+            <div class="search-box">
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="8"></circle><line x1="21" y1="21" x2="16.65" y2="16.65"></line></svg>
+              <input type="text" id="downloads-search" class="form-input search-input" placeholder="Search downloads..." aria-label="Search downloads" />
+            </div>
+          </div>
+
           <div id="download-list" class="download-list"></div>
+          <div id="download-empty" class="empty hidden">No downloads yet. Add a URL or use LinkGrabber.</div>
         </section>
 
         <aside id="sidebar" class="panel sidebar hidden">
-          <div id="grabber-panel" class="hidden"></div>
-          <div id="settings-panel" class="hidden"></div>
+          <div class="sidebar-header">
+            <span id="sidebar-title" class="sidebar-title">Panel</span>
+            <button type="button" id="sidebar-close" class="btn-icon" title="Close sidebar" aria-label="Close sidebar">
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="6" x2="6" y2="18"></line><line x1="6" y1="6" x2="18" y2="18"></line></svg>
+            </button>
+          </div>
+          <div id="grabber-panel" class="sidebar-content hidden"></div>
+          <div id="settings-panel" class="sidebar-content hidden"></div>
         </aside>
       </main>
     </div>
 
-    <dialog id="dlg-add">
-      <form method="dialog" id="form-add">
-        <h3>Add download</h3>
-        <label
-          >URLs (one per line)
-          <textarea id="add-urls" rows="4" required></textarea>
-        </label>
-        <label
-          >Save as
-          <input id="add-filename" type="text" required />
-        </label>
-        <label
-          >Folder
-          <div class="row">
-            <input id="add-folder" type="text" required />
-            <button type="button" id="btn-pick-folder">Browse</button>
+    <!-- Add Download Modal Dialog -->
+    <dialog id="dlg-add" class="app-dialog">
+      <form method="dialog" id="form-add" class="dialog-card">
+        <div class="dialog-header">
+          <div class="dialog-title-group">
+            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path><polyline points="7 10 12 15 17 10"></polyline><line x1="12" y1="15" x2="12" y2="3"></line></svg>
+            <h3>Add Download</h3>
           </div>
-        </label>
-        <label class="row check">
-          <input id="add-auto-conn" type="checkbox" checked />
-          Auto connections (1–32)
-        </label>
-        <label
-          >Connections
-          <input id="add-connections" type="number" min="1" max="32" value="8" disabled />
-        </label>
-        <label
-          >SHA-256 (optional)
-          <input id="add-sha256" type="text" autocomplete="off" />
-        </label>
-        <label
-          >MD5 (optional)
-          <input id="add-md5" type="text" autocomplete="off" />
-        </label>
+          <button type="button" id="add-close-btn" class="btn-icon" aria-label="Close dialog">
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="6" x2="6" y2="18"></line><line x1="6" y1="6" x2="18" y2="18"></line></svg>
+          </button>
+        </div>
+
+        <div class="dialog-body">
+          <div class="form-group">
+            <label class="form-label" for="add-urls">Download URLs (one per line for mirror/fallback)</label>
+            <textarea id="add-urls" class="form-textarea" rows="3" placeholder="https://example.com/archive.zip" required></textarea>
+          </div>
+
+          <div class="form-group">
+            <label class="form-label" for="add-filename">File name</label>
+            <input id="add-filename" type="text" class="form-input" placeholder="filename.ext" required />
+          </div>
+
+          <div class="form-group">
+            <label class="form-label" for="add-folder">Save folder</label>
+            <div class="input-with-btn">
+              <input id="add-folder" type="text" class="form-input" required />
+              <button type="button" id="btn-pick-folder" class="btn secondary">
+                <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"></path></svg>
+                Browse
+              </button>
+            </div>
+          </div>
+
+          <div class="form-row-split">
+            <div class="form-group">
+              <label class="check-label">
+                <input id="add-auto-conn" type="checkbox" class="form-checkbox" checked />
+                <span>Auto connections</span>
+              </label>
+              <span class="form-hint">Calibrates active connections automatically (1–32).</span>
+            </div>
+
+            <div class="form-group">
+              <label class="form-label" for="add-connections">Connections</label>
+              <input id="add-connections" type="number" class="form-input" min="1" max="32" value="8" disabled />
+            </div>
+          </div>
+
+          <div class="form-row-split">
+            <div class="form-group">
+              <label class="form-label" for="add-sha256">SHA-256 (optional)</label>
+              <input id="add-sha256" type="text" class="form-input code" placeholder="Optional checksum" autocomplete="off" />
+            </div>
+            <div class="form-group">
+              <label class="form-label" for="add-md5">MD5 (optional)</label>
+              <input id="add-md5" type="text" class="form-input code" placeholder="Optional checksum" autocomplete="off" />
+            </div>
+          </div>
+        </div>
+
         <div class="dialog-actions">
-          <button type="submit" class="primary">Queue</button>
-          <button type="button" id="add-cancel">Cancel</button>
+          <button type="button" id="add-cancel" class="btn secondary">Cancel</button>
+          <button type="submit" class="btn primary">
+            <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="12" y1="5" x2="12" y2="19"></line><line x1="5" y1="12" x2="19" y2="12"></line></svg>
+            Queue Download
+          </button>
         </div>
       </form>
     </dialog>
 
-    <dialog id="dlg-clipboard">
-      <form method="dialog">
-        <h3>URL in clipboard</h3>
-        <p id="clipboard-url-text"></p>
-        <p class="hint">Open LinkGrabber to probe, or queue directly.</p>
+    <!-- Clipboard URL Detected Modal Dialog -->
+    <dialog id="dlg-clipboard" class="app-dialog">
+      <form method="dialog" class="dialog-card">
+        <div class="dialog-header">
+          <div class="dialog-title-group">
+            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71"></path><path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71"></path></svg>
+            <h3>Download Link in Clipboard</h3>
+          </div>
+          <button type="button" id="clip-close-btn" class="btn-icon" aria-label="Close dialog">
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="6" x2="6" y2="18"></line><line x1="6" y1="6" x2="18" y2="18"></line></svg>
+          </button>
+        </div>
+
+        <div class="dialog-body">
+          <div class="clipboard-box">
+            <span class="clipboard-icon">
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"></circle><line x1="12" y1="16" x2="12" y2="12"></line><line x1="12" y1="8" x2="12.01" y2="8"></line></svg>
+            </span>
+            <p id="clipboard-url-text" class="clipboard-url-text code"></p>
+          </div>
+          <p class="form-hint">Would you like to open LinkGrabber to probe this link, or queue it directly?</p>
+        </div>
+
         <div class="dialog-actions">
-          <button type="button" id="clipboard-grab" class="primary">LinkGrabber</button>
-          <button type="button" id="clipboard-queue">Queue URL</button>
-          <button type="button" id="clipboard-dismiss">Dismiss</button>
+          <button type="button" id="clipboard-dismiss" class="btn secondary">Dismiss</button>
+          <button type="button" id="clipboard-grab" class="btn secondary">
+            <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71"></path><path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71"></path></svg>
+            LinkGrabber
+          </button>
+          <button type="button" id="clipboard-queue" class="btn primary">
+            <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path><polyline points="7 10 12 15 17 10"></polyline><line x1="12" y1="15" x2="12" y2="3"></line></svg>
+            Queue URL
+          </button>
         </div>
       </form>
     </dialog>
