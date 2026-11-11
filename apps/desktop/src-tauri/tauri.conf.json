@@ -27,6 +27,7 @@
   },
   "bundle": {
     "active": true,
+    "publisher": "Prateek Kumar",
     "targets": ["nsis"],
     "resources": {
       "WebView2Loader.dll": "./"

@@ -87,7 +87,7 @@ Portable distribution:
 ```powershell
 .\build-gnu.ps1
 .\package-portable.ps1
-# => dist/SwiftGet-<version>-windows-x64-portable.zip (SwiftGet.exe + WebView2Loader.dll)
+# => dist/Jyroxa-<version>-windows-x64-portable.zip (Jyroxa.exe + WebView2Loader.dll)
 ```
 
 Output paths are recorded in [BUILD_OUTPUTS.md](./BUILD_OUTPUTS.md).

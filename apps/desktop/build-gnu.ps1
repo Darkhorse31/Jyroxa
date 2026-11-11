@@ -1,4 +1,4 @@
-# Build SwiftGet desktop on x86_64-pc-windows-gnu (no MSVC).
+# Build Jyroxa desktop on x86_64-pc-windows-gnu (no MSVC).
 # Requires .toolbin/winlibs (see docs/BUILD_WINDOWS_GNU.md) and llvm windres on PATH.
 $ErrorActionPreference = "Stop"
 $ndkBin = "E:\.swiftget-tools\android-sdk\ndk\27.2.12479018\toolchains\llvm\prebuilt\windows-x86_64\bin"

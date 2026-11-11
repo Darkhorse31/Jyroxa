@@ -1,29 +1,35 @@
 ﻿# Build artifacts
 target/
-dist/
-build/
-
-# Node / desktop (later phase)
-node_modules/
+**/node_modules/
 apps/desktop/dist/
-apps/desktop/src-tauri/target/
-
-# Android (later phase)
+dist/*.zip
+dist/*.exe
+*.apk
+*.aab
 android/.gradle/
 android/build/
 android/app/build/
-*.db
 android/local.properties
-android/keystore.properties
-android/keystore/*.jks
+android/keystore/
 *.jks
+*.keystore
+keystore.properties
+android/keystore.properties
 
-# SwiftGet runtime state & logs
-*.sgstate
-*.sgstate.tmp
-.swiftget/
-.swiftget-bench/
+# Runtime / local state
+.env
+.env.*
 .logs/
+.swiftget/
+.jyroxa/
+.jyroxa-bench/
+.swiftget-bench/
+*.part
+*.sgstate
+*.jxstate
+
+# Task specs (local only)
+.tasks/
 
 # GNU toolchain helpers: track scripts under .toolbin/, ignore generated artifacts
 .toolbin/winlibs/
@@ -33,8 +39,9 @@ android/keystore/*.jks
 .toolbin/*.a
 .toolbin/*.7z
 
-# Task specs (local only)
-.tasks/
+# Legacy paths (dist root stays for release artifacts)
+dist/
+build/
 
 # OS / editor noise
 Thumbs.db

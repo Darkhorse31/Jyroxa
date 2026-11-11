@@ -1,4 +1,4 @@
-# SwiftGet build configuration.
+# Jyroxa build configuration (GNU Windows workaround).
 #
 # The host toolchain is x86_64-pc-windows-gnu with an incomplete self-contained
 # MinGW: GNU `dlltool` cannot run (no bundled `as.exe` assembler). Many deps
