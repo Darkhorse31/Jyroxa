@@ -108,7 +108,7 @@ enum Command {
     },
 }
 
-#[tokio::main]
+#[tokio::main(flavor = "multi_thread", worker_threads = 4)]
 async fn main() {
     if let Err(e) = real_main().await {
         eprintln!("error: {e:#}");

@@ -107,38 +107,42 @@ pub struct SegmentTable {
     next_index: AtomicU64,
     /// Minimum size of each half for a split to be worthwhile.
     min_steal: u64,
+    /// Cap segment splits to avoid handshake storms on lossy links.
+    steal_cap: usize,
 }
 
 impl SegmentTable {
     /// Build a table from inclusive ranges (fresh download).
-    pub fn from_ranges(ranges: &[(u64, u64)], min_steal: u64) -> Self {
+    pub fn from_ranges(ranges: &[(u64, u64)], min_steal: u64, steal_cap: usize) -> Self {
         let segs: Vec<Arc<Segment>> = ranges
             .iter()
             .enumerate()
             .map(|(i, &(s, e))| Segment::new(i, s, e, s))
             .collect();
-        Self::build(segs, min_steal)
+        Self::build(segs, min_steal, steal_cap)
     }
 
     /// Build a table from persisted state (resume). Completed segments are kept
     /// for the snapshot but are not re-queued.
-    pub fn from_state(segments: &[SegmentState], min_steal: u64) -> Self {
+    pub fn from_state(segments: &[SegmentState], min_steal: u64, steal_cap: usize) -> Self {
         let segs: Vec<Arc<Segment>> = segments
             .iter()
             .map(|s| Segment::new(s.index, s.start, s.end, s.cursor()))
             .collect();
-        Self::build(segs, min_steal)
+        Self::build(segs, min_steal, steal_cap)
     }
 
-    fn build(segs: Vec<Arc<Segment>>, min_steal: u64) -> Self {
+    fn build(segs: Vec<Arc<Segment>>, min_steal: u64, steal_cap: usize) -> Self {
         let queue: VecDeque<Arc<Segment>> =
             segs.iter().filter(|s| s.remaining() > 0).cloned().collect();
         let next = segs.iter().map(|s| s.index as u64 + 1).max().unwrap_or(0);
+        let cap = steal_cap.max(segs.len()).max(8);
         SegmentTable {
             all: Mutex::new(segs),
             queue: Mutex::new(queue),
             next_index: AtomicU64::new(next),
             min_steal: min_steal.max(1),
+            steal_cap: cap,
         }
     }
 
@@ -198,49 +202,74 @@ impl SegmentTable {
         }
     }
 
-    /// Steal work: find the active segment with the most remaining bytes and,
-    /// if it is large enough, split it in half, shrinking the victim and
-    /// returning a fresh segment covering the second half.
+    /// Steal work: prefer the largest remaining slice; tie-break on slowest cursor.
     pub fn steal(&self) -> Option<Arc<Segment>> {
+        let min_tail = self.min_steal.saturating_mul(2);
+        self.try_steal(min_tail)
+            .or_else(|| self.try_steal(self.min_steal.max(64 * 1024)))
+    }
+
+    /// Split the tail of a specific in-progress segment after a stall.
+    pub fn split_tail(&self, victim: &Arc<Segment>) -> Option<Arc<Segment>> {
         let mut segs = self.all.lock().unwrap();
+        if segs.len() >= self.steal_cap {
+            return None;
+        }
+        split_segment_tail(&mut segs, victim, self.min_steal.max(64 * 1024), &self.next_index)
+    }
+
+    fn try_steal(&self, min_tail: u64) -> Option<Arc<Segment>> {
+        let mut segs = self.all.lock().unwrap();
+        if segs.len() >= self.steal_cap {
+            return None;
+        }
 
         let mut best: Option<(usize, u64, u64)> = None;
         for (i, s) in segs.iter().enumerate() {
             let rem = s.remaining();
-            if rem < self.min_steal.saturating_mul(2) {
+            if rem < min_tail {
                 continue;
             }
             let cur = s.current();
             let replace = best
-                .map(|(_, r, c)| rem > r || (rem == r && cur > c))
+                .map(|(_, r, c)| rem > r || (rem == r && cur < c))
                 .unwrap_or(true);
             if replace {
                 best = Some((i, rem, cur));
             }
         }
 
-        let (victim_idx, remaining, _) = best?;
-        let _ = remaining;
-
+        let (victim_idx, _, _) = best?;
         let victim = segs[victim_idx].clone();
-        let cur = victim.current();
-        let end = victim.end();
-        if cur > end {
-            return None;
-        }
-        // The stolen half is the tail, so the victim's in-flight write at `cur`
-        // is never contended.
-        let mid = cur + (end - cur) / 2;
-        if mid <= cur || mid >= end {
-            return None;
-        }
-
-        victim.end.store(mid, Ordering::Release);
-        let new_index = self.next_index.fetch_add(1, Ordering::Relaxed) as usize;
-        let stolen = Segment::new(new_index, mid + 1, end, mid + 1);
-        segs.push(stolen.clone());
-        Some(stolen)
+        split_segment_tail(&mut segs, &victim, min_tail, &self.next_index)
     }
+}
+
+fn split_segment_tail(
+    segs: &mut Vec<Arc<Segment>>,
+    victim: &Arc<Segment>,
+    min_tail: u64,
+    next_index: &AtomicU64,
+) -> Option<Arc<Segment>> {
+    let cur = victim.current();
+    let end = victim.end();
+    if cur > end {
+        return None;
+    }
+    let rem = end.saturating_sub(cur).saturating_add(1);
+    if rem < min_tail {
+        return None;
+    }
+    let mid = cur + (end - cur) / 2;
+    if mid <= cur || mid >= end {
+        return None;
+    }
+
+    victim.end.store(mid, Ordering::Release);
+    let new_index = next_index.fetch_add(1, Ordering::Relaxed) as usize;
+    let stolen = Segment::new(new_index, mid + 1, end, mid + 1);
+    segs.push(stolen.clone());
+    Some(stolen)
 }
 
 #[cfg(test)]
@@ -277,7 +306,7 @@ mod tests {
 
     #[test]
     fn queue_then_steal() {
-        let table = SegmentTable::from_ranges(&[(0, 999)], 10);
+        let table = SegmentTable::from_ranges(&[(0, 999)], 10, 16);
         assert_eq!(table.queued(), 1);
         // First worker claims the queued segment.
         let first = table.next_work(true).expect("queued work");
@@ -293,14 +322,14 @@ mod tests {
 
     #[test]
     fn steal_respects_min() {
-        let table = SegmentTable::from_ranges(&[(0, 15)], 100);
+        let table = SegmentTable::from_ranges(&[(0, 15)], 100, 16);
         let _ = table.next_work(true);
         assert!(table.steal().is_none());
     }
 
     #[test]
     fn steal_follows_cursor() {
-        let table = SegmentTable::from_ranges(&[(0, 999)], 10);
+        let table = SegmentTable::from_ranges(&[(0, 999)], 10, 16);
         let victim = table.next_work(true).unwrap();
         victim.current.store(400, Ordering::Release);
         let stolen = table.steal().expect("should steal");
@@ -316,7 +345,7 @@ mod tests {
             SegmentState { index: 0, start: 0, end: 99, downloaded: 100 }, // complete
             SegmentState { index: 1, start: 100, end: 199, downloaded: 40 }, // pending
         ];
-        let table = SegmentTable::from_state(&segs, 10);
+        let table = SegmentTable::from_state(&segs, 10, 16);
         assert_eq!(table.len(), 2);
         assert_eq!(table.queued(), 1);
         let w = table.next_work(true).unwrap();

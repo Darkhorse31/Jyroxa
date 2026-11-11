@@ -7,16 +7,17 @@ use std::time::{Duration, Instant};
 
 use futures::future::BoxFuture;
 use futures::StreamExt;
-use tokio::sync::{watch, Notify};
+use tokio::sync::{mpsc, watch, Notify};
 
 use crate::checksum::{self, Algo};
 use crate::error::{Error, Result};
 use crate::events::{progress_tick, EventSender, ProgressEvent};
 use crate::hoststats::HostStats;
 use crate::limiter::RateLimiter;
-use crate::tuner::{parse_retry_after, Tuner, TunerInput};
 use crate::segment::{split_initial, Segment, SegmentTable};
 use crate::state::DownloadState;
+use crate::trace::Trace;
+use crate::tuner::{parse_retry_after, Tuner, TunerInput};
 
 /// A callback that, given an expired URL, asynchronously returns a fresh one.
 /// Used for links that return 403/410 after their signed-token expires.
@@ -109,6 +110,7 @@ async fn interruptible_sleep(rx: &mut watch::Receiver<Cmd>, dur: Duration) -> Re
 const SEGMENT_WRITE_BUF: usize = 512 * 1024;
 const RETRY_AFTER_CAP: Duration = Duration::from_secs(30);
 const PROGRESS_EMIT_INTERVAL: Duration = Duration::from_millis(250);
+const SEGMENT_STALL_TIMEOUT: Duration = Duration::from_secs(5);
 
 // ---------------------------------------------------------------------------
 // Configuration and request/outcome types
@@ -483,13 +485,21 @@ fn pwrite_all(file: &std::fs::File, mut offset: u64, mut buf: &[u8]) -> std::io:
 // Shared download context
 // ---------------------------------------------------------------------------
 
+struct WriteChunk {
+    offset: u64,
+    data: Vec<u8>,
+    seg: Arc<Segment>,
+}
+
 struct Ctx {
     client: reqwest::Client,
+    writer: mpsc::Sender<WriteChunk>,
     pool: MirrorPool,
     path: PathBuf,
     total: u64,
     table: SegmentTable,
     downloaded: AtomicU64,
+    write_pending: Arc<AtomicUsize>,
     limiter: RateLimiter,
     global: Arc<RateLimiter>,
     control: Control,
@@ -503,12 +513,81 @@ struct Ctx {
     recent_throttles: AtomicU64,
     global_fail_streak: AtomicUsize,
     global_fail_bound: usize,
-    fatal: Mutex<Option<Error>>,
+    fatal: Arc<Mutex<Option<Error>>>,
     notify: Notify,
     final_connections: AtomicUsize,
     busy_workers: AtomicUsize,
     range_fallback: AtomicBool,
     last_progress_emit: Mutex<Instant>,
+    trace: Mutex<Trace>,
+}
+
+fn spawn_disk_writer(
+    path: PathBuf,
+    fatal: Arc<Mutex<Option<Error>>>,
+    pending: Arc<AtomicUsize>,
+) -> mpsc::Sender<WriteChunk> {
+    let (tx, mut rx) = mpsc::channel::<WriteChunk>(64);
+    tokio::spawn(async move {
+        let file = match std::fs::OpenOptions::new().write(true).open(&path) {
+            Ok(f) => f,
+            Err(e) => {
+                let mut slot = fatal.lock().unwrap();
+                if slot.is_none() {
+                    *slot = Some(Error::other(e.to_string()));
+                }
+                return;
+            }
+        };
+        while let Some(chunk) = rx.recv().await {
+            let off = chunk.offset;
+            let data = chunk.data;
+            let len = data.len();
+            let seg = chunk.seg;
+            let out = match file.try_clone() {
+                Ok(f) => f,
+                Err(e) => {
+                    let mut slot = fatal.lock().unwrap();
+                    if slot.is_none() {
+                        *slot = Some(Error::other(e.to_string()));
+                    }
+                    break;
+                }
+            };
+            let written = tokio::task::spawn_blocking(move || pwrite_all(&out, off, &data)).await;
+            pending.fetch_sub(1, Ordering::AcqRel);
+            match written {
+                Ok(Ok(())) => {
+                    let end = off + len as u64;
+                    seg.current.store(end, Ordering::Release);
+                }
+                Ok(Err(e)) => {
+                    let mut slot = fatal.lock().unwrap();
+                    if slot.is_none() {
+                        *slot = Some(Error::other(e.to_string()));
+                    }
+                    break;
+                }
+                Err(e) => {
+                    let mut slot = fatal.lock().unwrap();
+                    if slot.is_none() {
+                        *slot = Some(Error::other(e.to_string()));
+                    }
+                    break;
+                }
+            }
+        }
+    });
+    tx
+}
+
+async fn drain_disk_writes(ctx: &Ctx) {
+    for _ in 0..10_000 {
+        if ctx.write_pending.load(Ordering::Acquire) == 0 {
+            return;
+        }
+        tokio::time::sleep(Duration::from_millis(2)).await;
+    }
 }
 
 impl Ctx {
@@ -524,11 +603,6 @@ impl Ctx {
             *slot = Some(err);
         }
         self.control.cancel();
-    }
-
-    /// Open a dedicated write handle for a worker (avoids a shared file cursor).
-    fn open_write(&self) -> std::io::Result<std::fs::File> {
-        std::fs::OpenOptions::new().write(true).open(&self.path)
     }
 }
 
@@ -662,7 +736,11 @@ impl Downloader {
                     ) =>
             {
                 resumed = true;
-                SegmentTable::from_state(&st.segments, self.config.min_segment_size)
+                SegmentTable::from_state(
+                    &st.segments,
+                    self.config.min_segment_size,
+                    initial_conn.saturating_mul(4).max(8),
+                )
             }
             other => {
                 if other.is_some() {
@@ -670,7 +748,11 @@ impl Downloader {
                     DownloadState::remove(&state_path)?;
                 }
                 let ranges = split_initial(total, initial_conn);
-                SegmentTable::from_ranges(&ranges, self.config.min_segment_size)
+                SegmentTable::from_ranges(
+                    &ranges,
+                    self.config.min_segment_size,
+                    initial_conn.saturating_mul(4).max(8),
+                )
             }
         };
 
@@ -688,13 +770,19 @@ impl Downloader {
             self.config.max_global_failures
         };
 
+        let fatal_slot: Arc<Mutex<Option<Error>>> = Arc::new(Mutex::new(None));
+        let write_pending = Arc::new(AtomicUsize::new(0));
+        let writer = spawn_disk_writer(output.clone(), fatal_slot.clone(), write_pending.clone());
+
         let ctx = Arc::new(Ctx {
             client: self.segment_client.clone(),
+            writer,
             pool: MirrorPool::new(&req.urls, events.clone()),
             path: output.clone(),
             total,
             table,
             downloaded: AtomicU64::new(already),
+            write_pending: write_pending.clone(),
             limiter: RateLimiter::new(req.speed_limit),
             global: self.global_limiter.clone(),
             control: control.clone(),
@@ -707,12 +795,13 @@ impl Downloader {
             recent_throttles: AtomicU64::new(0),
             global_fail_streak: AtomicUsize::new(0),
             global_fail_bound,
-            fatal: Mutex::new(None),
+            fatal: fatal_slot,
             notify: Notify::new(),
             final_connections: AtomicUsize::new(initial_conn),
             busy_workers: AtomicUsize::new(0),
             range_fallback: AtomicBool::new(false),
             last_progress_emit: Mutex::new(Instant::now()),
+            trace: Mutex::new(Trace::new()),
         });
 
         ctx.emit(ProgressEvent::Started {
@@ -797,6 +886,8 @@ impl Downloader {
             persist_state(&ctx, &req, &meta, &state_path, initial_conn);
             return Err(Error::other("download ended with incomplete segments"));
         }
+
+        drain_disk_writes(&ctx).await;
 
         let elapsed = start.elapsed();
         let connections_used = ctx.final_connections.load(Ordering::Relaxed).max(1);
@@ -1008,7 +1099,7 @@ fn spawn_worker(ctx: Arc<Ctx>) {
                 if ctx.table.all_done() {
                     break;
                 }
-                let _ = tokio::time::timeout(Duration::from_millis(25), ctx.notify.notified()).await;
+                let _ = tokio::time::timeout(Duration::from_millis(50), ctx.notify.notified()).await;
                 continue;
             };
             ctx.busy_workers.fetch_add(1, Ordering::AcqRel);
@@ -1074,7 +1165,6 @@ fn reconcile_workers(ctx: &Arc<Ctx>) {
 
 async fn flush_segment_buf(
     ctx: &Arc<Ctx>,
-    file: &std::fs::File,
     buf: &mut Vec<u8>,
     at: &mut u64,
     seg: &Arc<Segment>,
@@ -1082,14 +1172,50 @@ async fn flush_segment_buf(
     if buf.is_empty() {
         return Ok(());
     }
-    ctx.limiter.acquire(buf.len() as u64).await;
-    ctx.global.acquire(buf.len() as u64).await;
-    pwrite_all(file, *at, buf)?;
-    *at += buf.len() as u64;
+    let len = buf.len();
+    ctx.limiter.acquire(len as u64).await;
+    ctx.global.acquire(len as u64).await;
+    let offset = *at;
+    let data = std::mem::take(buf);
+    *at += len as u64;
     seg.current.store(*at, Ordering::Release);
-    ctx.downloaded
-        .fetch_add(buf.len() as u64, Ordering::Relaxed);
-    buf.clear();
+    ctx.downloaded.fetch_add(len as u64, Ordering::Relaxed);
+    ctx.write_pending.fetch_add(1, Ordering::AcqRel);
+    if ctx
+        .writer
+        .send(WriteChunk {
+            offset,
+            data,
+            seg: seg.clone(),
+        })
+        .await
+        .is_err()
+    {
+        ctx.write_pending.fetch_sub(1, Ordering::AcqRel);
+        return Err(Error::other("disk writer stopped"));
+    }
+    Ok(())
+}
+
+async fn handle_read_stall(
+    ctx: &Arc<Ctx>,
+    seg: &Arc<Segment>,
+    ctrl_rx: &mut watch::Receiver<Cmd>,
+    write_buf: &mut Vec<u8>,
+    write_at: &mut u64,
+    attempt: usize,
+) -> Result<()> {
+    flush_segment_buf(ctx, write_buf, write_at, seg).await?;
+    ctx.recent_errors.fetch_add(1, Ordering::Relaxed);
+    if let Some(stolen) = ctx.table.split_tail(seg) {
+        ctx.table.requeue(stolen);
+        ctx.notify.notify_waiters();
+    }
+    emit_retry(ctx, attempt + 1, "read stall");
+    if seg.remaining() > 0 {
+        ctx.table.requeue(seg.clone());
+    }
+    let _ = interruptible_sleep(ctrl_rx, Duration::from_millis(50)).await;
     Ok(())
 }
 
@@ -1099,7 +1225,6 @@ async fn run_segment(
     seg: &Arc<Segment>,
     ctrl_rx: &mut watch::Receiver<Cmd>,
 ) -> Result<()> {
-    let mut file = ctx.open_write()?;
     let mut attempt = 0usize;
 
     loop {
@@ -1214,9 +1339,25 @@ async fn run_segment(
         let mut stream_err: Option<Error> = None;
         let mut write_buf = Vec::with_capacity(SEGMENT_WRITE_BUF);
         let mut write_at = pos;
+        let mut stall_deadline =
+            tokio::time::Instant::now() + SEGMENT_STALL_TIMEOUT;
+        let mut stalled = false;
 
         loop {
             let chunk_res = tokio::select! {
+                _ = tokio::time::sleep_until(stall_deadline) => {
+                    handle_read_stall(
+                        ctx,
+                        seg,
+                        ctrl_rx,
+                        &mut write_buf,
+                        &mut write_at,
+                        attempt,
+                    )
+                    .await?;
+                    stalled = true;
+                    break;
+                }
                 item = stream.next() => item,
                 changed = ctrl_rx.changed() => {
                     if changed.is_err() {
@@ -1231,6 +1372,8 @@ async fn run_segment(
                     if chunk.is_empty() {
                         continue;
                     }
+                    stall_deadline =
+                        tokio::time::Instant::now() + SEGMENT_STALL_TIMEOUT;
                     let cur_end = seg.end();
                     let mut bytes: &[u8] = &chunk;
                     let last = pos + bytes.len() as u64 - 1;
@@ -1249,16 +1392,14 @@ async fn run_segment(
                         write_buf.extend_from_slice(bytes);
                         pos += bytes.len() as u64;
                         if write_buf.len() >= SEGMENT_WRITE_BUF {
-                            flush_segment_buf(ctx, &file, &mut write_buf, &mut write_at, seg)
-                                .await?;
+                            flush_segment_buf(ctx, &mut write_buf, &mut write_at, seg).await?;
                         }
                     }
 
                     let target = ctx.target.load(Ordering::Acquire);
                     let active = ctx.active_workers.load(Ordering::Acquire);
                     if active > target {
-                        flush_segment_buf(ctx, &file, &mut write_buf, &mut write_at, seg)
-                            .await?;
+                        flush_segment_buf(ctx, &mut write_buf, &mut write_at, seg).await?;
                         if seg.remaining() > 0 {
                             ctx.table.requeue(seg.clone());
                         }
@@ -1266,26 +1407,26 @@ async fn run_segment(
                     }
 
                     if truncated || pos > cur_end {
-                        flush_segment_buf(ctx, &file, &mut write_buf, &mut write_at, seg)
-                            .await?;
+                        flush_segment_buf(ctx, &mut write_buf, &mut write_at, seg).await?;
                         break;
                     }
                 }
                 Some(Err(e)) => {
-                    flush_segment_buf(ctx, &file, &mut write_buf, &mut write_at, seg).await?;
+                    flush_segment_buf(ctx, &mut write_buf, &mut write_at, seg).await?;
                     ctx.recent_errors.fetch_add(1, Ordering::Relaxed);
                     stream_err = Some(e.into());
                     break;
                 }
                 None => {
-                    flush_segment_buf(ctx, &file, &mut write_buf, &mut write_at, seg).await?;
+                    flush_segment_buf(ctx, &mut write_buf, &mut write_at, seg).await?;
                     break;
                 }
             }
         }
 
-        use std::io::Write;
-        let _ = file.flush();
+        if stalled {
+            continue;
+        }
 
         if let Some(e) = stream_err {
             // Connection dropped mid-segment: retry, resuming from `pos`.
@@ -1300,8 +1441,7 @@ async fn run_segment(
             continue;
         }
 
-        // Did we finish this (possibly shrunk) segment?
-        if seg.current() > seg.end() {
+        if pos > seg.end() || seg.remaining() == 0 {
             seg.mark_done();
             ctx.pool.reward(&mirror);
             return Ok(());
@@ -1414,6 +1554,18 @@ async fn supervise(
 
         let errors = ctx.recent_errors.swap(0, Ordering::Relaxed);
         let throttles = ctx.recent_throttles.swap(0, Ordering::Relaxed);
+
+        let busy = ctx.busy_workers.load(Ordering::Relaxed);
+        let queued = ctx.table.queued();
+        ctx.trace.lock().unwrap().maybe_tick(
+            active,
+            busy,
+            target,
+            queued,
+            errors,
+            &ctx.table.segments(),
+            bytes,
+        );
 
         if let Some(t) = tuner.as_mut() {
             let out = t.tick(&TunerInput {
