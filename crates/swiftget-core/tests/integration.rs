@@ -1,8 +1,11 @@
 //! End-to-end tests against a local axum server with Range support.
 
 use std::net::SocketAddr;
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
+
+use sha2::{Digest, Sha256};
 
 use axum::body::Body;
 use axum::extract::State;
@@ -20,6 +23,13 @@ use swiftget_core::{
 struct AppState {
     data: Arc<Vec<u8>>,
     etag: String,
+}
+
+#[derive(Clone)]
+struct FlakyState {
+    data: Arc<Vec<u8>>,
+    etag: String,
+    responses: Arc<AtomicUsize>,
 }
 
 fn make_data(n: usize) -> Vec<u8> {
@@ -78,6 +88,68 @@ async fn serve_file(State(st): State<AppState>, headers: HeaderMap) -> Response 
 async fn serve_noranges(State(st): State<AppState>, _headers: HeaderMap) -> Response {
     // Ignores Range entirely and never advertises Accept-Ranges.
     build_response(&st.data, &st.etag, None, false)
+}
+
+/// Serves range data but intermittently truncates the body to force mid-stream EOF.
+async fn serve_flaky(State(st): State<FlakyState>, headers: HeaderMap) -> Response {
+    let range = headers.get(header::RANGE).and_then(|v| v.to_str().ok());
+    let total = st.data.len() as u64;
+    let slice = if let Some(r) = range {
+        let Some((s, e)) = parse_range(r, total) else {
+            return Response::builder()
+                .status(StatusCode::RANGE_NOT_SATISFIABLE)
+                .body(Body::empty())
+                .unwrap();
+        };
+        st.data[s as usize..=e as usize].to_vec()
+    } else {
+        st.data.to_vec()
+    };
+
+    let truncate = st.responses.fetch_add(1, Ordering::Relaxed) % 2 == 0;
+    let send_len = if truncate && slice.len() > 128 {
+        slice.len() / 3
+    } else {
+        slice.len()
+    };
+
+    if let Some(r) = range {
+        if let Some((s, e)) = parse_range(r, total) {
+            return Response::builder()
+                .status(StatusCode::PARTIAL_CONTENT)
+                .header(header::CONTENT_RANGE, format!("bytes {s}-{e}/{total}"))
+                .header(header::ACCEPT_RANGES, "bytes")
+                .header(header::CONTENT_LENGTH, slice.len().to_string())
+                .header(header::ETAG, &st.etag)
+                .body(Body::from(slice[..send_len].to_vec()))
+                .unwrap();
+        }
+    }
+
+    Response::builder()
+        .status(StatusCode::OK)
+        .header(header::CONTENT_LENGTH, slice.len().to_string())
+        .header(header::ACCEPT_RANGES, "bytes")
+        .header(header::ETAG, &st.etag)
+        .body(Body::from(slice[..send_len].to_vec()))
+        .unwrap()
+}
+
+async fn spawn_flaky_server(data: Vec<u8>) -> SocketAddr {
+    let st = FlakyState {
+        data: Arc::new(data),
+        etag: "\"flaky\"".into(),
+        responses: Arc::new(AtomicUsize::new(0)),
+    };
+    let app = Router::new()
+        .route("/flaky", get(serve_flaky))
+        .with_state(st);
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    tokio::spawn(async move {
+        axum::serve(listener, app).await.unwrap();
+    });
+    addr
 }
 
 async fn spawn_server(data: Vec<u8>) -> SocketAddr {
@@ -208,6 +280,25 @@ async fn resume_completes_and_matches() {
     assert!(outcome.resumed, "download should have resumed from state");
     assert_eq!(std::fs::read(&out).unwrap(), data);
     assert!(!DownloadState::state_path(&out).exists());
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn midstream_disconnects_retry_to_correct_checksum() {
+    let data = make_data(400 * 1024);
+    let sha = format!("{:x}", Sha256::digest(&data));
+    let addr = spawn_flaky_server(data.clone()).await;
+    let dir = tempfile::tempdir().unwrap();
+    let out = dir.path().join("flaky.bin");
+
+    let mut req = DownloadRequest::new(format!("http://{addr}/flaky"), out.clone()).connections(8);
+    req.sha256 = Some(sha);
+    let outcome = test_engine()
+        .download(req, None, Control::new(), None)
+        .await
+        .expect("flaky download should eventually complete");
+
+    assert_eq!(outcome.total_size, data.len() as u64);
+    assert_eq!(std::fs::read(&out).unwrap(), data);
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]

@@ -313,12 +313,37 @@ async fn run_bench(url: String, connections: usize, dir: PathBuf) -> Result<()> 
 
     // Multi-connection run.
     let outn = dir.join("bench_multi.part");
-    let mbpsn = bench_run(&url, connections, false, &outn).await?;
-    cleanup(&outn);
-    println!("  {connections:>2} connections  : {mbpsn:>8.2} MB/s", connections = connections);
+    let out_auto = dir.join("bench_autotune.part");
+    let mbpsn = match bench_run(&url, connections, false, &outn).await {
+        Ok(mbps) => {
+            cleanup(&outn);
+            println!("  {connections:>2} connections  : {mbps:>8.2} MB/s", connections = connections);
+            Some(mbps)
+        }
+        Err(e) => {
+            cleanup(&outn);
+            eprintln!("  {connections:>2} connections  : FAILED — {e:#}", connections = connections);
+            None
+        }
+    };
 
-    let speedup = if mbps1 > 0.0 { mbpsn / mbps1 } else { 0.0 };
-    println!("\n  speedup         : {speedup:>8.2}x");
+    match bench_run(&url, connections, true, &out_auto).await {
+        Ok(mbps) => {
+            cleanup(&out_auto);
+            println!("  autotune ({connections} max) : {mbps:>8.2} MB/s", connections = connections);
+        }
+        Err(e) => {
+            cleanup(&out_auto);
+            eprintln!("  autotune ({connections} max) : FAILED — {e:#}", connections = connections);
+        }
+    }
+
+    if let Some(mbpsn) = mbpsn {
+        let speedup = if mbps1 > 0.0 { mbpsn / mbps1 } else { 0.0 };
+        println!("\n  speedup         : {speedup:>8.2}x");
+    } else {
+        println!("\n  speedup         :     n/a (multi-connection run failed)");
+    }
 
     // Best-effort cleanup of the bench dir if empty.
     let _ = std::fs::remove_dir(&dir);

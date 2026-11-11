@@ -22,6 +22,9 @@ use crate::state::DownloadState;
 pub type RefreshFn =
     Arc<dyn Fn(String) -> BoxFuture<'static, Option<String>> + Send + Sync>;
 
+/// Mirrors with penalty at or above this threshold are treated as dead until all are.
+const MIRROR_DEAD_PENALTY: i64 = 20;
+
 // ---------------------------------------------------------------------------
 // Control (pause / resume / cancel)
 // ---------------------------------------------------------------------------
@@ -101,6 +104,8 @@ pub struct DownloadConfig {
     pub min_segment_size: u64,
     /// Max retries per segment before it is considered failed.
     pub max_retries: usize,
+    /// Segment exhaustion events allowed across all workers before the download fails.
+    pub max_global_failures: usize,
     /// Enable per-host connection auto-tuning.
     pub autotune: bool,
     /// How often to sample throughput / tune / persist state.
@@ -116,6 +121,7 @@ impl Default for DownloadConfig {
             initial_connections: 4,
             min_segment_size: 1 << 20, // 1 MiB
             max_retries: 5,
+            max_global_failures: 0,
             autotune: true,
             tune_interval: Duration::from_millis(1000),
             request_timeout: Duration::from_secs(60),
@@ -380,20 +386,33 @@ impl MirrorPool {
     /// Pick a mirror, preferring those with the lowest penalty, round-robin.
     fn pick(&self) -> Arc<Mirror> {
         let n = self.mirrors.len();
-        let min = self
+        if n == 0 {
+            unreachable!("mirror pool is never empty");
+        }
+        let viable: Vec<&Arc<Mirror>> = self
             .mirrors
+            .iter()
+            .filter(|m| m.penalty.load(Ordering::Relaxed) < MIRROR_DEAD_PENALTY)
+            .collect();
+        let pool: Vec<&Arc<Mirror>> = if viable.is_empty() {
+            self.mirrors.iter().collect()
+        } else {
+            viable
+        };
+        let min = pool
             .iter()
             .map(|m| m.penalty.load(Ordering::Relaxed))
             .min()
             .unwrap_or(0);
-        for _ in 0..n {
-            let i = self.rr.fetch_add(1, Ordering::Relaxed) % n;
-            if self.mirrors[i].penalty.load(Ordering::Relaxed) <= min + 1 {
-                return self.mirrors[i].clone();
+        let pn = pool.len();
+        for _ in 0..pn {
+            let i = self.rr.fetch_add(1, Ordering::Relaxed) % pn;
+            if pool[i].penalty.load(Ordering::Relaxed) <= min + 1 {
+                return pool[i].clone();
             }
         }
-        let i = self.rr.fetch_add(1, Ordering::Relaxed) % n;
-        self.mirrors[i].clone()
+        let i = self.rr.fetch_add(1, Ordering::Relaxed) % pn;
+        pool[i].clone()
     }
 
     fn url_of(&self, m: &Mirror) -> String {
@@ -487,6 +506,8 @@ struct Ctx {
     config: DownloadConfig,
     active_workers: AtomicUsize,
     recent_errors: AtomicU64,
+    global_fail_streak: AtomicUsize,
+    global_fail_bound: usize,
     fatal: Mutex<Option<Error>>,
     notify: Notify,
 }
@@ -573,13 +594,15 @@ impl Downloader {
 
         // Probe mirrors; the first that answers provides the reference metadata.
         let mut meta: Option<Meta> = None;
-        for u in &req.urls {
-            match probe(&self.client, u, self.config.request_timeout).await {
-                Ok(m) => {
-                    meta = Some(m);
-                    break;
+        'mirrors: for u in &req.urls {
+            for attempt in 0..=self.config.max_retries {
+                if attempt > 0 {
+                    tokio::time::sleep(backoff_delay(attempt)).await;
                 }
-                Err(_) => continue,
+                if let Ok(m) = probe(&self.client, u, self.config.request_timeout).await {
+                    meta = Some(m);
+                    break 'mirrors;
+                }
             }
         }
         let meta = meta.ok_or(Error::AllMirrorsFailed)?;
@@ -647,6 +670,15 @@ impl Downloader {
 
         let already = table.snapshot().iter().map(|s| s.downloaded).sum::<u64>();
 
+        let global_fail_bound = if self.config.max_global_failures == 0 {
+            self.config
+                .max_retries
+                .saturating_mul(initial_conn)
+                .max(self.config.max_retries * 2)
+        } else {
+            self.config.max_global_failures
+        };
+
         let ctx = Arc::new(Ctx {
             client: self.client.clone(),
             pool: MirrorPool::new(&req.urls, events.clone()),
@@ -662,6 +694,8 @@ impl Downloader {
             config: self.config.clone(),
             active_workers: AtomicUsize::new(0),
             recent_errors: AtomicU64::new(0),
+            global_fail_streak: AtomicUsize::new(0),
+            global_fail_bound,
             fatal: Mutex::new(None),
             notify: Notify::new(),
         });
@@ -884,13 +918,31 @@ fn spawn_worker(ctx: Arc<Ctx>) {
         let mut ctrl_rx = ctx.control.subscribe();
         // Keep claiming work (queue, then stealing) until nothing remains.
         while let Some(seg) = ctx.table.next_work() {
-            if let Err(e) = run_segment(&ctx, &seg, &mut ctrl_rx).await {
-                match e {
-                    Error::Cancelled => break,
-                    other => {
-                        ctx.set_fatal(other);
+            if ctx.fatal.lock().unwrap().is_some() {
+                break;
+            }
+            match run_segment(&ctx, &seg, &mut ctrl_rx).await {
+                Ok(()) => {
+                    ctx.global_fail_streak.store(0, Ordering::Release);
+                }
+                Err(Error::Cancelled) => break,
+                Err(e @ Error::LinkExpired { .. }) => {
+                    ctx.set_fatal(e);
+                    break;
+                }
+                Err(e) => {
+                    if seg.remaining() == 0 {
+                        continue;
+                    }
+                    ctx.table.requeue(seg);
+                    let streak = ctx.global_fail_streak.fetch_add(1, Ordering::AcqRel) + 1;
+                    emit_retry(&ctx, streak, &e.to_string());
+                    if streak >= ctx.global_fail_bound {
+                        ctx.set_fatal(e);
                         break;
                     }
+                    ctx.notify.notify_waiters();
+                    tokio::time::sleep(backoff_delay(streak)).await;
                 }
             }
         }
@@ -960,6 +1012,7 @@ async fn run_segment(
         }
         if status == reqwest::StatusCode::TOO_MANY_REQUESTS
             || status == reqwest::StatusCode::SERVICE_UNAVAILABLE
+            || status.is_server_error()
         {
             ctx.pool.demote(&mirror);
             ctx.recent_errors.fetch_add(1, Ordering::Relaxed);
@@ -1119,8 +1172,8 @@ async fn supervise(
 
         // Auto-tune: ramp up while throughput keeps improving and there were no
         // recent errors; back off (stop adding) otherwise.
+        let errors = ctx.recent_errors.swap(0, Ordering::Relaxed);
         if req.autotune {
-            let errors = ctx.recent_errors.swap(0, Ordering::Relaxed);
             let improving = speed >= best_speed * 0.9;
             let remaining = ctx.total.saturating_sub(bytes);
             let worth_it = remaining > ctx.config.min_segment_size * 2;
@@ -1132,14 +1185,15 @@ async fn supervise(
                     count: target,
                     reason: "throughput improving".into(),
                 });
-            } else if errors > 0 && target > 1 {
-                // Back off the target (existing workers finish naturally).
-                target = target.saturating_sub(1).max(1);
-                ctx.emit(ProgressEvent::ConnectionsChanged {
-                    count: target,
-                    reason: format!("backing off after {errors} error(s)"),
-                });
             }
+        }
+        if errors > 0 && target > 1 {
+            // Back off the target (existing workers finish naturally).
+            target = target.saturating_sub(1).max(1);
+            ctx.emit(ProgressEvent::ConnectionsChanged {
+                count: target,
+                reason: format!("backing off after {errors} error(s)"),
+            });
         }
 
         if ctx.active_workers.load(Ordering::Acquire) == 0 || ctx.control.is_cancelled() {

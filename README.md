@@ -80,9 +80,10 @@ SwiftGet/
 Measured on Windows 10, `x86_64-pc-windows-gnu`, release build. Full notes in
 [docs/BENCHMARK.md](docs/BENCHMARK.md).
 
-| Test | 1 conn | 16 conn | Speedup |
-|------|--------|---------|---------|
-| proof.ovh.net 100 MB | 16.45 MB/s | 18.97 MB/s | 1.15× |
+| Test | 1 conn | 16 conn | Autotune | Speedup |
+|------|--------|---------|----------|---------|
+| sin-speed.hetzner.com 100 MB (2026-11-10) | 0.55 MB/s | 1.41 MB/s | 6.06 MB/s | 2.54× |
+| fsn1-speed.hetzner.com 100 MB (2026-11-10) | 10.09 MB/s | 3.36 MB/s | 1.47 MB/s | 0.33× |
 
 On origins that throttle per connection, multi-connection gains are typically much
 larger than on a single fast HTTP/2 stream.
