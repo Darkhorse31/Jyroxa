@@ -208,6 +208,7 @@ impl DesktopEngine {
         }
 
         let close_to_tray = settings.close_to_tray;
+        crate::platform::set_close_to_tray(close_to_tray);
         let engine = Arc::new_cyclic(|weak| DesktopEngine {
             downloader,
             linkgrabber,
@@ -223,10 +224,12 @@ impl DesktopEngine {
         Ok(engine)
     }
 
+    #[allow(dead_code)]
     pub fn data_dir(&self) -> &Path {
         &self.data_dir
     }
 
+    #[allow(dead_code)]
     pub fn close_to_tray(&self) -> bool {
         self.close_to_tray_cached.load(Ordering::Relaxed)
     }
@@ -247,6 +250,7 @@ impl DesktopEngine {
         }
         self.close_to_tray_cached
             .store(s.close_to_tray, Ordering::Release);
+        crate::platform::set_close_to_tray(s.close_to_tray);
         {
             let mut dl = self.downloader.write().await;
             dl.set_global_limit(s.global_speed_limit);
