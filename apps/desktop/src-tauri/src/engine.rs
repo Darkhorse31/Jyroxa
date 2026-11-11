@@ -70,9 +70,10 @@ fn default_download_dir() -> String {
         .unwrap_or_else(|_| ".".into())
 }
 
-#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq, Default)]
 #[serde(rename_all = "snake_case")]
 pub enum TaskStatus {
+    #[default]
     Queued,
     Starting,
     Running,
@@ -149,11 +150,18 @@ pub struct PersistedItem {
     pub connections_auto: bool,
     pub sha256: Option<String>,
     pub md5: Option<String>,
+    #[serde(default)]
+    pub status: TaskStatus,
 }
 
 struct InnerItem {
     view: DownloadView,
     control: Option<Control>,
+}
+
+enum ResumeAction {
+    Live,
+    Respawn,
 }
 
 pub struct DesktopEngine {
@@ -451,6 +459,30 @@ impl DesktopEngine {
         self.data_dir.join("queue.json")
     }
 
+    fn schedule_queue_persist(engine: Arc<Self>) {
+        tauri::async_runtime::spawn(async move {
+            let _ = engine.save_queue_snapshot().await;
+        });
+    }
+
+    fn delete_download_artifacts(output: &str) {
+        let path = PathBuf::from(output);
+        let _ = std::fs::remove_file(&path);
+        let _ = std::fs::remove_file(path.with_extension("part"));
+        let _ = std::fs::remove_file(swiftget_core::state::DownloadState::state_path(&path));
+    }
+
+    fn progress_from_state(output: &Path) -> (u64, Option<u64>, Vec<SegmentState>) {
+        let state_path = swiftget_core::state::DownloadState::state_path(output);
+        match swiftget_core::state::DownloadState::load(&state_path) {
+            Ok(Some(st)) => {
+                let downloaded = st.segments.iter().map(|s| s.downloaded).sum();
+                (downloaded, st.total_size, st.segments)
+            }
+            _ => (0, None, Vec::new()),
+        }
+    }
+
     fn save_settings(&self, s: &AppSettings) -> CoreResult<()> {
         std::fs::create_dir_all(&self.data_dir)?;
         let text = serde_json::to_string_pretty(s)?;
@@ -474,6 +506,7 @@ impl DesktopEngine {
                     connections_auto: v.connections_auto,
                     sha256: v.sha256.clone(),
                     md5: v.md5.clone(),
+                    status: v.status.clone(),
                 });
             }
         }
@@ -492,6 +525,8 @@ impl DesktopEngine {
             Err(_) => return Ok(()),
         };
         let q: PersistedQueue = serde_json::from_str(&text)?;
+        let settings = self.settings.lock().await.clone();
+        let mut restored_paused = false;
         for item in q.items {
             let output = PathBuf::from(&item.output);
             let filename = output
@@ -499,24 +534,57 @@ impl DesktopEngine {
                 .and_then(|s| s.to_str())
                 .unwrap_or("download.bin")
                 .to_string();
-            let dir = output
-                .parent()
-                .and_then(|p| p.to_str())
-                .unwrap_or(&item.output)
-                .to_string();
-            self.add_download(
-                app.clone(),
-                AddDownloadArgs {
-                    urls: item.urls,
-                    output_dir: dir,
-                    filename,
-                    connections: item.connections,
-                    connections_auto: item.connections_auto,
-                    sha256: item.sha256,
-                    md5: item.md5,
-                },
-            )
-            .await?;
+            let status = match item.status {
+                TaskStatus::Running | TaskStatus::Starting => TaskStatus::Queued,
+                other => other,
+            };
+            let (downloaded, total, segments) = if status == TaskStatus::Paused {
+                Self::progress_from_state(&output)
+            } else {
+                (0, None, Vec::new())
+            };
+            let id = self.next_id.fetch_add(1, Ordering::Relaxed);
+            let connections = if item.connections_auto {
+                8
+            } else {
+                item.connections.clamp(1, swiftget_core::MAX_CONNECTIONS)
+            };
+            let view = DownloadView {
+                id,
+                urls: item.urls.clone(),
+                filename: filename.clone(),
+                output: item.output.clone(),
+                connections,
+                connections_auto: item.connections_auto,
+                sha256: item.sha256.clone(),
+                md5: item.md5.clone(),
+                status: status.clone(),
+                downloaded,
+                total,
+                speed_bps: 0.0,
+                segments,
+                error: None,
+            };
+            {
+                let mut items = self.items.lock().await;
+                items.insert(
+                    id,
+                    InnerItem {
+                        view: view.clone(),
+                        control: None,
+                    },
+                );
+            }
+            match status {
+                TaskStatus::Paused => restored_paused = true,
+                TaskStatus::Queued => self.enqueue(id).await,
+                _ => {}
+            }
+        }
+        let _ = app.emit("downloads-changed", ());
+        self.pump_queue(app.clone(), settings.max_concurrent).await;
+        if restored_paused {
+            let _ = self.save_queue_snapshot().await;
         }
         let _ = std::fs::remove_file(self.queue_path());
         Ok(())
@@ -738,82 +806,112 @@ impl DesktopEngine {
     }
 
     pub async fn resume(&self, app: AppHandle, id: u64) -> bool {
-        let ok = {
+        let action = {
             let items = self.items.lock().await;
-            if let Some(inner) = items.get(&id) {
-                if let Some(c) = &inner.control {
-                    c.resume();
-                    true
-                } else if inner.view.status == TaskStatus::Queued {
-                    false
-                } else {
-                    false
-                }
+            let Some(inner) = items.get(&id) else {
+                return false;
+            };
+            if let Some(c) = &inner.control {
+                c.resume();
+                Some(ResumeAction::Live)
+            } else if inner.view.status == TaskStatus::Paused {
+                Some(ResumeAction::Respawn)
             } else {
-                false
+                None
             }
         };
-        if ok {
-            let mut items = self.items.lock().await;
-            if let Some(inner) = items.get_mut(&id) {
-                inner.view.status = TaskStatus::Running;
+        let Some(action) = action else {
+            return false;
+        };
+        match action {
+            ResumeAction::Live => {
+                let mut items = self.items.lock().await;
+                if let Some(inner) = items.get_mut(&id) {
+                    inner.view.status = TaskStatus::Running;
+                }
             }
-            let _ = app.emit("downloads-changed", ());
+            ResumeAction::Respawn => {
+                {
+                    let mut items = self.items.lock().await;
+                    if let Some(inner) = items.get_mut(&id) {
+                        inner.view.status = TaskStatus::Queued;
+                    }
+                }
+                let max = self.settings.lock().await.max_concurrent;
+                self.enqueue(id).await;
+                self.pump_queue(app.clone(), max).await;
+            }
         }
-        ok
+        let _ = app.emit("downloads-changed", ());
+        let engine = self.weak.upgrade();
+        if let Some(engine) = engine {
+            Self::schedule_queue_persist(engine);
+        }
+        true
     }
 
     pub async fn cancel(&self, app: AppHandle, id: u64) -> bool {
-        let cancelled = {
+        let (cancelled, output, purge_files) = {
             let items = self.items.lock().await;
-            if let Some(inner) = items.get(&id) {
-                if let Some(c) = &inner.control {
-                    c.cancel();
-                    true
-                } else {
-                    matches!(
-                        inner.view.status,
-                        TaskStatus::Queued | TaskStatus::Starting
-                    )
-                }
+            let Some(inner) = items.get(&id) else {
+                return false;
+            };
+            let purge_files = inner.control.is_none();
+            let cancelled = if let Some(c) = &inner.control {
+                c.cancel();
+                true
             } else {
-                false
-            }
+                matches!(
+                    inner.view.status,
+                    TaskStatus::Queued | TaskStatus::Starting | TaskStatus::Paused
+                )
+            };
+            (cancelled, inner.view.output.clone(), purge_files)
         };
-        if cancelled {
+        if !cancelled {
+            return false;
+        }
+        {
             let mut items = self.items.lock().await;
             if let Some(inner) = items.get_mut(&id) {
                 if !matches!(inner.view.status, TaskStatus::Cancelled) {
                     inner.view.status = TaskStatus::Cancelled;
                 }
             }
+        }
+        {
             let mut pending = self.pending.lock().await;
             pending.retain(|&x| x != id);
-            let _ = app.emit("downloads-changed", ());
-            let _ = app.emit(
-                "download-progress",
-                ProgressPayload {
-                    id,
-                    event: ProgressEvent::Progress {
-                        downloaded: 0,
-                        total: None,
-                        speed_bps: 0.0,
-                        connections: 0,
-                        eta_secs: None,
-                        avg_speed_bps: None,
-                        elapsed_secs: None,
-                        active_connections: None,
-                        status: Some("cancelled".into()),
-                        resumable: None,
-                        server: None,
-                        protocol: None,
-                        segments: None,
-                    },
-                },
-            );
-            let _ = self.save_queue_snapshot().await;
         }
-        cancelled
+        if purge_files {
+            Self::delete_download_artifacts(&output);
+        }
+        let _ = app.emit("downloads-changed", ());
+        let _ = app.emit(
+            "download-progress",
+            ProgressPayload {
+                id,
+                event: ProgressEvent::Progress {
+                    downloaded: 0,
+                    total: None,
+                    speed_bps: 0.0,
+                    connections: 0,
+                    eta_secs: None,
+                    avg_speed_bps: None,
+                    elapsed_secs: None,
+                    active_connections: None,
+                    status: Some("cancelled".into()),
+                    resumable: None,
+                    server: None,
+                    protocol: None,
+                    segments: None,
+                },
+            },
+        );
+        if let Some(engine) = self.weak.upgrade() {
+            Self::schedule_queue_persist(engine);
+        }
+        true
     }
 
     pub async fn pause_and_mark(&self, app: AppHandle, id: u64) -> bool {
@@ -848,6 +946,9 @@ impl DesktopEngine {
                     },
                 },
             );
+            if let Some(engine) = self.weak.upgrade() {
+                Self::schedule_queue_persist(engine);
+            }
             true
         } else {
             false
@@ -892,7 +993,9 @@ async fn apply_event(items: &Mutex<HashMap<u64, InnerItem>>, id: u64, ev: &Progr
     let Some(inner) = guard.get_mut(&id) else {
         return;
     };
-    inner.view.status = TaskStatus::Running;
+    if !matches!(inner.view.status, TaskStatus::Paused) {
+        inner.view.status = TaskStatus::Running;
+    }
     match ev {
         ProgressEvent::Started { total_size, .. } => {
             inner.view.total = *total_size;
@@ -966,6 +1069,34 @@ pub fn clipboard_url_re() -> &'static regex::Regex {
     use std::sync::OnceLock;
     static RE: OnceLock<regex::Regex> = OnceLock::new();
     RE.get_or_init(|| regex::Regex::new(r"https?://\S+").unwrap())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn persisted_status_defaults_to_queued() {
+        let json = r#"{"urls":["http://x"],"output":"C:\\f.bin","connections":4,"connections_auto":false,"sha256":null,"md5":null}"#;
+        let item: PersistedItem = serde_json::from_str(json).unwrap();
+        assert_eq!(item.status, TaskStatus::Queued);
+    }
+
+    #[test]
+    fn persisted_pause_roundtrip() {
+        let item = PersistedItem {
+            urls: vec!["http://x".into()],
+            output: r"C:\f.bin".into(),
+            connections: 4,
+            connections_auto: false,
+            sha256: None,
+            md5: None,
+            status: TaskStatus::Paused,
+        };
+        let json = serde_json::to_string(&item).unwrap();
+        let back: PersistedItem = serde_json::from_str(&json).unwrap();
+        assert_eq!(back.status, TaskStatus::Paused);
+    }
 }
 
 pub async fn run_clipboard_monitor(app: AppHandle) {
