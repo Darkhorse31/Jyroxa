@@ -1,0 +1,9 @@
+[package]
+name = "windows-link"
+version = "0.2.1"
+edition = "2021"
+license = "MIT OR Apache-2.0"
+description = "Local patch of windows-link that links against prebuilt MinGW import libraries instead of raw-dylib (this host has no working dlltool/assembler)."
+
+[lib]
+path = "src/lib.rs"

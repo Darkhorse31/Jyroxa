@@ -1,0 +1,39 @@
+[package]
+name = "swiftget-core"
+description = "SwiftGet core download engine: multi-connection segmented downloads, mirrors, auto-tuning, queue and LinkGrabber."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+
+[features]
+default = []
+# HTTP/3 (QUIC) support is optional and off by default. Enabling it requires a
+# reqwest build with the unstable `http3` feature (RUSTFLAGS="--cfg reqwest_unstable").
+# The flag is wired through so UIs can advertise the capability; the engine falls
+# back to HTTP/2 transparently when it is not compiled in.
+http3 = []
+
+[dependencies]
+tokio = { workspace = true }
+reqwest = { workspace = true }
+futures = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+thiserror = { workspace = true }
+url = { workspace = true }
+regex = { workspace = true }
+rand = { workspace = true }
+sha2 = { workspace = true }
+md-5 = { workspace = true }
+hex = { workspace = true }
+bytes = { workspace = true }
+tracing = { workspace = true }
+
+[dev-dependencies]
+axum = "0.7"
+hyper = { version = "1", features = ["full"] }
+tempfile = "3"
+tokio = { workspace = true, features = ["test-util"] }
