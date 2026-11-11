@@ -19,20 +19,47 @@ use tokio::sync::{Mutex, RwLock};
 #[serde(default)]
 pub struct AppSettings {
     pub max_concurrent: usize,
+    pub max_connections_per_download: usize,
+    pub per_host_cap: usize,
     pub global_speed_limit: Option<u64>,
-    pub default_folder: String,
+    #[serde(alias = "default_folder")]
+    pub download_dir: String,
+    pub category_dirs: std::collections::HashMap<String, String>,
     pub clipboard_monitor: bool,
     pub autotune: bool,
+    pub start_minimized: bool,
+    pub notifications: bool,
+    pub close_to_tray: bool,
+    pub start_with_windows: bool,
+    pub prevent_sleep: bool,
+    pub auto_resume: bool,
+    pub theme: String,
+    pub scheduler_start: Option<String>,
+    pub scheduler_stop: Option<String>,
+    pub scheduler_days: Vec<u8>,
 }
 
 impl Default for AppSettings {
     fn default() -> Self {
         AppSettings {
             max_concurrent: 3,
+            max_connections_per_download: 8,
+            per_host_cap: 16,
             global_speed_limit: None,
-            default_folder: default_download_dir(),
+            download_dir: default_download_dir(),
+            category_dirs: std::collections::HashMap::new(),
             clipboard_monitor: true,
             autotune: true,
+            start_minimized: false,
+            notifications: true,
+            close_to_tray: true,
+            start_with_windows: false,
+            prevent_sleep: true,
+            auto_resume: true,
+            theme: "system".into(),
+            scheduler_start: None,
+            scheduler_stop: None,
+            scheduler_days: vec![0, 1, 2, 3, 4, 5, 6],
         }
     }
 }
@@ -192,17 +219,218 @@ impl DesktopEngine {
         self.settings.lock().await.clone()
     }
 
-    pub async fn set_settings(&self, s: AppSettings) -> CoreResult<()> {
+    pub async fn set_settings(
+        &self,
+        s: AppSettings,
+        app_name: &str,
+        exe: Option<&Path>,
+    ) -> CoreResult<()> {
         {
             let mut settings = self.settings.lock().await;
             *settings = s.clone();
         }
-        self.downloader
-            .write()
-            .await
-            .set_global_limit(s.global_speed_limit);
+        {
+            let mut dl = self.downloader.write().await;
+            dl.set_global_limit(s.global_speed_limit);
+            let mut cfg = dl.config().clone();
+            cfg.max_connections = s.per_host_cap.min(swiftget_core::MAX_CONNECTIONS);
+            cfg.autotune = s.autotune;
+            dl.set_config(cfg);
+        }
+        if let Some(exe) = exe {
+            crate::platform::set_run_at_startup(
+                app_name,
+                exe,
+                s.start_with_windows,
+                s.start_minimized,
+            );
+        }
         self.save_settings(&s)?;
         Ok(())
+    }
+
+    pub async fn default_category_dirs(
+        &self,
+        product_label: &str,
+    ) -> std::collections::HashMap<String, String> {
+        let download_dir = self.settings.lock().await.download_dir.clone();
+        let base = PathBuf::from(download_dir);
+        let root = base.join(product_label);
+        let mut map = std::collections::HashMap::new();
+        for (key, folder) in [
+            ("Video", "Video"),
+            ("Music", "Music"),
+            ("Documents", "Documents"),
+            ("Compressed", "Compressed"),
+            ("Programs", "Programs"),
+            ("Other", "Other"),
+        ] {
+            map.insert(key.into(), root.join(folder).to_string_lossy().into_owned());
+        }
+        map
+    }
+
+    pub fn suggest_save_path(&self, dir: &str, name: &str) -> String {
+        swiftget_core::dedupe_path(dir, name)
+            .to_string_lossy()
+            .into_owned()
+    }
+
+    pub async fn probe_url(&self, url: &str) -> CoreResult<swiftget_core::ProbeInfo> {
+        let client = build_client()?;
+        swiftget_core::probe_url(&client, url, std::time::Duration::from_secs(10)).await
+    }
+
+    pub async fn pause_many(&self, app: AppHandle, ids: &[u64]) -> usize {
+        let mut n = 0usize;
+        for &id in ids {
+            if self.pause_and_mark(app.clone(), id).await {
+                n += 1;
+            }
+        }
+        n
+    }
+
+    pub async fn resume_many(&self, app: AppHandle, ids: &[u64]) -> usize {
+        let mut n = 0usize;
+        for &id in ids {
+            if self.resume(app.clone(), id).await {
+                n += 1;
+            }
+        }
+        n
+    }
+
+    pub async fn cancel_many(&self, app: AppHandle, ids: &[u64]) -> usize {
+        let mut n = 0usize;
+        for &id in ids {
+            if self.cancel(app.clone(), id).await {
+                n += 1;
+            }
+        }
+        n
+    }
+
+    pub async fn remove_download(&self, app: AppHandle, id: u64, delete_file: bool) -> bool {
+        let _ = self.cancel(app.clone(), id).await;
+        let output = {
+            let mut items = self.items.lock().await;
+            let Some(inner) = items.remove(&id) else {
+                return false;
+            };
+            inner.view.output.clone()
+        };
+        if delete_file {
+            let path = PathBuf::from(&output);
+            let _ = std::fs::remove_file(&path);
+            let _ = std::fs::remove_file(path.with_extension("part"));
+            let state = path.with_extension("state.json");
+            let _ = std::fs::remove_file(state);
+        }
+        let _ = app.emit("downloads-changed", ());
+        let _ = self.save_queue_snapshot().await;
+        true
+    }
+
+    pub async fn remove_many(&self, app: AppHandle, ids: &[u64], delete_file: bool) -> usize {
+        let mut n = 0usize;
+        for &id in ids {
+            if self.remove_download(app.clone(), id, delete_file).await {
+                n += 1;
+            }
+        }
+        n
+    }
+
+    pub async fn retry_download(&self, app: AppHandle, id: u64) -> bool {
+        let args = {
+            let mut items = self.items.lock().await;
+            let Some(inner) = items.get_mut(&id) else {
+                return false;
+            };
+            if !matches!(
+                inner.view.status,
+                TaskStatus::Failed | TaskStatus::Cancelled
+            ) {
+                return false;
+            }
+            inner.view.status = TaskStatus::Queued;
+            inner.view.error = None;
+            inner.view.downloaded = 0;
+            inner.view.speed_bps = 0.0;
+            inner.control = None;
+            AddDownloadArgs {
+                urls: inner.view.urls.clone(),
+                output_dir: PathBuf::from(&inner.view.output)
+                    .parent()
+                    .and_then(|p| p.to_str())
+                    .unwrap_or(&inner.view.output)
+                    .to_string(),
+                filename: inner.view.filename.clone(),
+                connections: inner.view.connections,
+                connections_auto: inner.view.connections_auto,
+                sha256: inner.view.sha256.clone(),
+                md5: inner.view.md5.clone(),
+            }
+        };
+        let settings = self.settings.lock().await.clone();
+        self.enqueue(id).await;
+        self.pump_queue(app.clone(), settings.max_concurrent).await;
+        let _ = self.save_queue_snapshot().await;
+        let _ = app.emit("downloads-changed", ());
+        let _ = args; // fields already applied on existing row
+        true
+    }
+
+    pub async fn pause_all(&self, app: AppHandle) -> usize {
+        let ids: Vec<u64> = {
+            let items = self.items.lock().await;
+            items
+                .values()
+                .filter(|i| matches!(i.view.status, TaskStatus::Running | TaskStatus::Starting))
+                .map(|i| i.view.id)
+                .collect()
+        };
+        self.pause_many(app, &ids).await
+    }
+
+    pub async fn resume_all(&self, app: AppHandle) -> usize {
+        let ids: Vec<u64> = {
+            let items = self.items.lock().await;
+            items
+                .values()
+                .filter(|i| i.view.status == TaskStatus::Paused)
+                .map(|i| i.view.id)
+                .collect()
+        };
+        self.resume_many(app, &ids).await
+    }
+
+    pub async fn tray_snapshot(&self) -> (usize, f64, f64) {
+        let items = self.items.lock().await;
+        let mut active = 0usize;
+        let mut pct_sum = 0.0f64;
+        let mut pct_count = 0usize;
+        let mut speed = 0.0f64;
+        for inner in items.values() {
+            if matches!(
+                inner.view.status,
+                TaskStatus::Running | TaskStatus::Starting
+            ) {
+                active += 1;
+                speed += inner.view.speed_bps;
+                if let Some(total) = inner.view.total.filter(|&t| t > 0) {
+                    pct_sum += (inner.view.downloaded as f64 / total as f64) * 100.0;
+                    pct_count += 1;
+                }
+            }
+        }
+        let pct = if pct_count > 0 {
+            pct_sum / pct_count as f64
+        } else {
+            0.0
+        };
+        (active, pct, speed)
     }
 
     fn settings_path(&self) -> PathBuf {
@@ -453,6 +681,13 @@ impl DesktopEngine {
                             inner.view.downloaded = out.total_size;
                             inner.view.total = Some(out.total_size);
                             inner.view.speed_bps = 0.0;
+                            let finished = DownloadFinishedPayload {
+                                id,
+                                path: inner.view.output.clone(),
+                                filename: inner.view.filename.clone(),
+                                total: out.total_size,
+                            };
+                            let _ = app.emit("download-finished", finished);
                         }
                         Err(swiftget_core::Error::Cancelled) => {
                             inner.view.status = TaskStatus::Cancelled;
@@ -634,6 +869,14 @@ pub struct ProgressPayload {
     pub event: ProgressEvent,
 }
 
+#[derive(Clone, Serialize)]
+pub struct DownloadFinishedPayload {
+    pub id: u64,
+    pub path: String,
+    pub filename: String,
+    pub total: u64,
+}
+
 async fn apply_event(items: &Mutex<HashMap<u64, InnerItem>>, id: u64, ev: &ProgressEvent) {
     let mut guard = items.lock().await;
     let Some(inner) = guard.get_mut(&id) else {
@@ -703,7 +946,9 @@ pub async fn init_engine(app: &AppHandle) -> CoreResult<()> {
         .await
         .set_global_limit(settings.global_speed_limit);
     app.manage(EngineState(engine.clone()));
-    engine.restore_queue(app.clone()).await?;
+    if engine.get_settings().await.auto_resume {
+        engine.restore_queue(app.clone()).await?;
+    }
     Ok(())
 }
 
