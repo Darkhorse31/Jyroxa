@@ -1,5 +1,6 @@
 //! Throughput-driven auto-tuner state machine.
 
+use std::collections::HashMap;
 use std::time::Duration;
 
 /// Input provided to the tuner on each tick.
@@ -46,6 +47,8 @@ pub struct Tuner {
     max_connections: usize,
     host_cap: usize,
     best: Sample,
+    /// Best post-warmup smoothed throughput per configured target connection count.
+    per_count_best: HashMap<usize, f64>,
     smoothed: f64,
     alpha: f64,
     phase: Phase,
@@ -72,6 +75,7 @@ impl Tuner {
                 connections: target,
                 throughput: 0.0,
             },
+            per_count_best: HashMap::new(),
             smoothed: 0.0,
             alpha: 0.3,
             phase: Phase::Probing,
@@ -112,6 +116,48 @@ impl Tuner {
         floor
     }
 
+    fn record_post_warmup_sample(&mut self) {
+        if self.ticks_at_current < self.warmup_ticks || self.smoothed <= 0.0 {
+            return;
+        }
+        let count = self.target;
+        let entry = self.per_count_best.entry(count).or_insert(0.0);
+        if self.smoothed > *entry {
+            *entry = self.smoothed;
+        }
+        if self.smoothed > self.best.throughput {
+            self.best.throughput = self.smoothed;
+            self.best.connections = count;
+        }
+    }
+
+    fn best_measured_count(&self) -> usize {
+        self.per_count_best
+            .iter()
+            .filter(|(c, tp)| **c <= self.host_cap && **tp > 0.0)
+            .max_by(|a, b| a.1.partial_cmp(b.1).unwrap_or(std::cmp::Ordering::Equal))
+            .map(|(c, _)| *c)
+            .unwrap_or(self.best.connections.max(1))
+            .clamp(1, self.host_cap)
+    }
+
+    fn maybe_fallback(&mut self, best_tp: f64) -> bool {
+        if self.ticks_at_current < self.warmup_ticks || best_tp <= 0.0 {
+            return false;
+        }
+        if self.smoothed < best_tp * 0.85 {
+            let fallback = self.best_measured_count();
+            if fallback != self.target {
+                self.target = fallback;
+                self.ticks_at_current = 0;
+                self.phase = Phase::Holding;
+                self.hold_ticks = 0;
+                return true;
+            }
+        }
+        false
+    }
+
     pub fn tick(&mut self, input: &TunerInput) -> TunerOutput {
         if self.smoothed <= 0.0 {
             self.smoothed = input.throughput;
@@ -119,7 +165,7 @@ impl Tuner {
             self.smoothed = self.alpha * input.throughput + (1.0 - self.alpha) * self.smoothed;
         }
 
-        if input.active_connections <= 1 && input.throughput > 0.0 {
+        if self.target == 1 && input.active_connections <= 1 && input.throughput > 0.0 {
             self.one_conn_floor = Some(
                 self.one_conn_floor
                     .map(|v| v.max(input.throughput))
@@ -128,6 +174,7 @@ impl Tuner {
         }
 
         self.ticks_at_current += 1;
+        self.record_post_warmup_sample();
 
         if input.throttle_events > 0 {
             self.handle_throttle();
@@ -139,23 +186,11 @@ impl Tuner {
         // Generic transport errors must not collapse the target.
         let _ = input.error_events;
 
-        if self.smoothed > self.best.throughput {
-            self.best.throughput = self.smoothed;
-            self.best.connections = input.active_connections.max(1);
-        }
-
         let best_tp = self.effective_best_throughput();
-        if best_tp > 0.0 && self.smoothed < best_tp * 0.85 {
-            let fallback = self.best.connections.clamp(1, self.host_cap);
-            if fallback != self.target {
-                self.target = fallback;
-                self.ticks_at_current = 0;
-                self.phase = Phase::Holding;
-                self.hold_ticks = 0;
-                return TunerOutput {
-                    target: self.target,
-                };
-            }
+        if self.maybe_fallback(best_tp) {
+            return TunerOutput {
+                target: self.target,
+            };
         }
 
         match self.phase {
@@ -170,7 +205,7 @@ impl Tuner {
 
     fn handle_throttle(&mut self) {
         let new_target = (self.target / 2).max(1);
-        let cap_at = self.target.saturating_sub(1).max(2);
+        let cap_at = self.target.saturating_sub(1).max(1);
         self.host_cap = self.host_cap.min(cap_at);
         self.target = new_target.min(self.host_cap);
         self.was_throttled = true;
@@ -208,7 +243,7 @@ impl Tuner {
                 && (self.smoothed - self.throughput_before_change) / self.throughput_before_change
                     >= IMPROVEMENT;
             if !improved {
-                self.target = self.best.connections.clamp(1, self.host_cap);
+                self.target = self.best_measured_count();
                 self.phase = Phase::Holding;
                 self.hold_ticks = 0;
                 self.ticks_at_current = 0;
@@ -238,12 +273,8 @@ impl Tuner {
         self.hold_ticks += 1;
 
         let best_tp = self.effective_best_throughput();
-        if best_tp > 0.0 && self.smoothed < best_tp * 0.85 {
-            let fallback = self.best.connections.clamp(1, self.host_cap);
-            if fallback != self.target {
-                self.target = fallback;
-                self.ticks_at_current = 0;
-            }
+        if self.maybe_fallback(best_tp) {
+            return;
         }
 
         if self.hold_ticks >= self.re_probe_interval {
@@ -344,6 +375,13 @@ mod tests {
         }
     }
 
+    fn warm_tick(tuner: &mut Tuner, tp: f64, active: usize) {
+        for _ in 0..4 {
+            tuner.tick(&input(tp, active, 0, 0));
+        }
+        tuner.tick(&input(tp, active, 0, 0));
+    }
+
     #[test]
     fn ramps_up_while_throughput_rises() {
         let mut tuner = Tuner::new(4, 16, None);
@@ -376,6 +414,52 @@ mod tests {
     }
 
     #[test]
+    fn no_premature_fallback_during_warmup_after_ramp() {
+        let mut tuner = Tuner::new(8, 16, None);
+        tuner.best.throughput = 8_000_000.0;
+        tuner.best.connections = 8;
+        tuner.per_count_best.insert(8, 8_000_000.0);
+        tuner.smoothed = 8_000_000.0;
+        tuner.phase = Phase::Holding;
+        tuner.ticks_at_current = 1;
+
+        for tp in [400_000.0, 350_000.0, 300_000.0] {
+            let out = tuner.tick(&input(tp, 8, 0, 0));
+            assert_eq!(
+                out.target, 8,
+                "smoothed<best fallback must not run during post-change warm-up"
+            );
+        }
+    }
+
+    #[test]
+    fn fallback_picks_best_measured_count() {
+        let mut tuner = Tuner::new(8, 16, None);
+        tuner.per_count_best.insert(4, 9_000_000.0);
+        tuner.per_count_best.insert(8, 4_000_000.0);
+        tuner.best.throughput = 9_000_000.0;
+        tuner.best.connections = 4;
+        tuner.smoothed = 500_000.0;
+        tuner.ticks_at_current = tuner.warmup_ticks;
+
+        let out = tuner.tick(&input(500_000.0, 8, 0, 0));
+        assert_eq!(out.target, 4, "expected fallback to faster 4-conn sample");
+    }
+
+    #[test]
+    fn one_conn_floor_only_when_target_is_one() {
+        let mut tuner = Tuner::new(8, 16, None);
+        for _ in 0..10 {
+            tuner.tick(&input(500_000.0, 1, 0, 0));
+        }
+        assert!(tuner.one_conn_floor.is_none());
+
+        let mut tuner = Tuner::new(1, 16, None);
+        warm_tick(&mut tuner, 900_000.0, 1);
+        assert!(tuner.one_conn_floor.is_some());
+    }
+
+    #[test]
     fn halves_on_throttle_and_respects_cap() {
         let mut tuner = Tuner::new(8, 16, None);
         assert_eq!(tuner.target(), 8);
@@ -386,12 +470,20 @@ mod tests {
 
         let out = tuner.tick(&input(3_000_000.0, 4, 1, 0));
         assert_eq!(out.target, 2);
-        assert!(tuner.host_cap() <= 6);
+        assert!(tuner.host_cap() <= 3);
 
         for _ in 0..50 {
             tuner.tick(&input(10_000_000.0, 2, 0, 0));
         }
         assert!(tuner.target() <= tuner.host_cap());
+    }
+
+    #[test]
+    fn throttle_cap_can_be_one() {
+        let mut tuner = Tuner::new(2, 16, None);
+        let out = tuner.tick(&input(1_000_000.0, 2, 1, 0));
+        assert_eq!(out.target, 1);
+        assert_eq!(tuner.host_cap(), 1);
     }
 
     #[test]
