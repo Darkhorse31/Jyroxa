@@ -20,6 +20,7 @@ pub mod probe;
 pub mod queue;
 pub mod segment;
 pub mod state;
+pub mod trace;
 pub mod tuner;
 
 pub use download::{Control, DownloadConfig, DownloadOutcome, DownloadRequest, Downloader, RefreshFn};
