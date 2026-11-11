@@ -11,12 +11,12 @@ enum class DarkThemeConfig {
 
 @Serializable
 data class AppSettings(
-    val downloadDirectory: String = "/storage/emulated/0/Download/SwiftGet",
+    val downloadDirectory: String = "/storage/emulated/0/Download/Jyroxa",
     val defaultConnections: Int = 8,
     val speedLimitKbps: Int = 0, // 0 = unlimited
     val wifiOnly: Boolean = false,
     val clipboardAutoCapture: Boolean = true,
     val darkThemeConfig: DarkThemeConfig = DarkThemeConfig.FOLLOW_SYSTEM,
-    val dynamicColors: Boolean = true,
+    val dynamicColors: Boolean = false,
     val autoCategorizeFolders: Boolean = true
 )

@@ -68,7 +68,7 @@ import java.io.File
 fun AddDownloadScreen(
     downloadRepository: DownloadRepository,
     initialUrl: String? = null,
-    defaultDirectory: String = "/storage/emulated/0/Download/SwiftGet",
+    defaultDirectory: String = "/storage/emulated/0/Download/Jyroxa",
     onDownloadStarted: () -> Unit = {},
     modifier: Modifier = Modifier
 ) {
