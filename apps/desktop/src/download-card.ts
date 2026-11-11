@@ -2,8 +2,10 @@ import {
   api,
   copyToClipboard,
   openFolder,
+  openDownloadedFile,
   type BackendProgressEvent,
   type DownloadView,
+  type FileCategory,
   type TaskStatus,
 } from "./api";
 import {
@@ -14,15 +16,23 @@ import {
   fmtDuration,
   fmtEta,
   fmtSpeed,
+  getCategoryIcon,
   getFileCategory,
 } from "./formatters";
 import { icons } from "./icons";
 import { showToast } from "./toast";
 
+export interface DownloadCardCallbacks {
+  onSelect: (id: number, selected: boolean, shiftKey: boolean) => void;
+  onContextMenu: (e: MouseEvent, view: DownloadView) => void;
+  onChanged: () => void;
+}
+
 export class DownloadCard {
   public readonly id: number;
   public root: HTMLElement;
   private view: DownloadView;
+  private callbacks: DownloadCardCallbacks;
 
   // Smoothing & Metrics
   private smoothedSpeed = 0;
@@ -35,18 +45,24 @@ export class DownloadCard {
   private serverHost = "—";
   private protocol = "—";
 
+  // Selection state
+  private isSelected = false;
+
   // Optimistic UI states
   private isPausing = false;
   private isResuming = false;
   private isCancelling = false;
+  private isRetrying = false;
 
   // UI state
   private isExpanded = false;
 
   // DOM node references
+  private checkbox!: HTMLInputElement;
   private iconContainer!: HTMLElement;
   private filenameEl!: HTMLElement;
   private statusPill!: HTMLElement;
+  private categoryPill!: HTMLElement;
   private progressFill!: HTMLElement;
   private pctText!: HTMLElement;
   private sizeText!: HTMLElement;
@@ -58,6 +74,7 @@ export class DownloadCard {
   private btnPause!: HTMLButtonElement;
   private btnResume!: HTMLButtonElement;
   private btnCancel!: HTMLButtonElement;
+  private btnRetry!: HTMLButtonElement;
   private btnToggleDetails!: HTMLButtonElement;
   private detailsPanel!: HTMLElement;
   private segBarsContainer!: HTMLElement;
@@ -70,9 +87,10 @@ export class DownloadCard {
   private errorBox!: HTMLElement;
   private pathTextEl!: HTMLElement;
 
-  constructor(view: DownloadView) {
+  constructor(view: DownloadView, callbacks: DownloadCardCallbacks) {
     this.id = view.id;
     this.view = { ...view };
+    this.callbacks = callbacks;
     this.activeConnections = view.connections;
     this.smoothedSpeed = view.speed_bps;
 
@@ -92,12 +110,19 @@ export class DownloadCard {
   private buildDom() {
     this.root.innerHTML = `
       <div class="dl-main-row">
+        <div class="dl-check-col">
+          <input type="checkbox" class="form-checkbox dl-select-checkbox" data-slot="checkbox" aria-label="Select download item" />
+        </div>
+
         <div class="dl-icon-col" data-slot="icon"></div>
 
         <div class="dl-content-col">
           <div class="dl-title-row">
             <span class="dl-name" data-slot="name" title="${this.escapeHtml(this.view.filename)}"></span>
-            <span class="status-pill" data-slot="status"></span>
+            <div class="dl-pills-wrap">
+              <span class="category-pill" data-slot="category"></span>
+              <span class="status-pill" data-slot="status"></span>
+            </div>
           </div>
 
           <div class="dl-progress-row">
@@ -128,6 +153,9 @@ export class DownloadCard {
           </button>
           <button type="button" class="btn-icon btn-resume" data-slot="btn-resume" title="Resume download" aria-label="Resume download">
             ${icons.play(16)}
+          </button>
+          <button type="button" class="btn-icon btn-retry" data-slot="btn-retry" title="Retry download" aria-label="Retry download">
+            ${icons.retry(16)}
           </button>
           <button type="button" class="btn-icon btn-cancel" data-slot="btn-cancel" title="Cancel download" aria-label="Cancel download">
             ${icons.cancel(16)}
@@ -169,6 +197,7 @@ export class DownloadCard {
             <div class="meta-value-row">
               <span class="meta-value code path-text" data-slot="path-val"></span>
               <div class="meta-actions">
+                <button type="button" class="btn-mini btn-open-file" title="Open file">${icons.play(13)} Open file</button>
                 <button type="button" class="btn-mini btn-open-folder" title="Open containing folder">
                   ${icons.folder(13)} Open folder
                 </button>
@@ -188,14 +217,17 @@ export class DownloadCard {
           <div class="meta-error-box hidden" data-slot="error-box">
             ${icons.alertCircle(15)}
             <span class="error-text"></span>
+            <button type="button" class="btn-mini btn-retry-error" title="Retry download">${icons.retry(13)} Retry</button>
           </div>
         </div>
       </div>
     `;
 
     // Cache element references
+    this.checkbox = this.root.querySelector('[data-slot="checkbox"]')!;
     this.iconContainer = this.root.querySelector('[data-slot="icon"]')!;
     this.filenameEl = this.root.querySelector('[data-slot="name"]')!;
+    this.categoryPill = this.root.querySelector('[data-slot="category"]')!;
     this.statusPill = this.root.querySelector('[data-slot="status"]')!;
     this.progressFill = this.root.querySelector('[data-slot="progress-fill"]')!;
     this.pctText = this.root.querySelector('[data-slot="pct"]')!;
@@ -207,6 +239,7 @@ export class DownloadCard {
     this.resumableBadge = this.root.querySelector('[data-slot="resumable"]')!;
     this.btnPause = this.root.querySelector('[data-slot="btn-pause"]')!;
     this.btnResume = this.root.querySelector('[data-slot="btn-resume"]')!;
+    this.btnRetry = this.root.querySelector('[data-slot="btn-retry"]')!;
     this.btnCancel = this.root.querySelector('[data-slot="btn-cancel"]')!;
     this.btnToggleDetails = this.root.querySelector('[data-slot="btn-toggle"]')!;
     this.detailsPanel = this.root.querySelector('[data-slot="details-panel"]')!;
@@ -224,6 +257,21 @@ export class DownloadCard {
   }
 
   private wireListeners() {
+    // Checkbox selection
+    this.checkbox.addEventListener("click", (e) => {
+      e.stopPropagation();
+      const shift = (e as MouseEvent).shiftKey;
+      this.isSelected = this.checkbox.checked;
+      this.root.classList.toggle("selected", this.isSelected);
+      this.callbacks.onSelect(this.id, this.isSelected, shift);
+    });
+
+    // Right-click context menu
+    this.root.addEventListener("contextmenu", (e) => {
+      e.preventDefault();
+      this.callbacks.onContextMenu(e, this.view);
+    });
+
     // Optimistic Pause
     this.btnPause.addEventListener("click", async () => {
       if (this.isPausing) return;
@@ -256,6 +304,31 @@ export class DownloadCard {
       }
     });
 
+    // Optimistic Retry
+    const handleRetry = async () => {
+      if (this.isRetrying) return;
+      this.isRetrying = true;
+      this.btnRetry.disabled = true;
+      this.btnRetry.title = "Retrying...";
+      this.updateStatusPill("connecting", "Retrying...");
+      try {
+        await api.retryDownload(this.id);
+        this.callbacks.onChanged();
+      } catch (e) {
+        console.error("Retry failed:", e);
+        showToast(`Retry failed: ${e}`);
+      } finally {
+        this.isRetrying = false;
+      }
+    };
+
+    this.btnRetry.addEventListener("click", handleRetry);
+
+    const btnRetryError = this.root.querySelector(".btn-retry-error") as HTMLButtonElement;
+    if (btnRetryError) {
+      btnRetryError.addEventListener("click", handleRetry);
+    }
+
     // Optimistic Cancel
     this.btnCancel.addEventListener("click", async () => {
       if (this.isCancelling) return;
@@ -285,6 +358,17 @@ export class DownloadCard {
         if (!ok) {
           await copyToClipboard(this.view.output);
           showToast("Saved path copied to clipboard");
+        }
+      });
+    }
+
+    // Open File
+    const btnOpenFile = this.root.querySelector(".btn-open-file") as HTMLButtonElement;
+    if (btnOpenFile) {
+      btnOpenFile.addEventListener("click", async () => {
+        const ok = await openDownloadedFile(this.view.output);
+        if (!ok) {
+          showToast("Could not open file (may still be downloading)");
         }
       });
     }
@@ -321,6 +405,16 @@ export class DownloadCard {
         }
       });
     }
+  }
+
+  public setSelected(selected: boolean) {
+    this.isSelected = selected;
+    this.checkbox.checked = selected;
+    this.root.classList.toggle("selected", selected);
+  }
+
+  public getIsSelected(): boolean {
+    return this.isSelected;
   }
 
   public setExpanded(expanded: boolean) {
@@ -382,7 +476,6 @@ export class DownloadCard {
           this.smoothedEta = 0.25 * ev.eta_secs + 0.75 * this.smoothedEta;
         }
       } else {
-        // Fallback EMA ETA calculation
         const total = this.view.total ?? 0;
         const remaining = Math.max(0, total - this.view.downloaded);
         if (total > 0 && this.smoothedSpeed > 500 && remaining > 0) {
@@ -481,11 +574,14 @@ export class DownloadCard {
   public updateDom() {
     const d = this.view;
 
-    // File icon
+    // File category and icon
     const cat = getFileCategory(d.filename);
-    const iconFn = (icons as Record<string, (size?: number) => string>)[cat] || icons.other;
-    this.iconContainer.innerHTML = iconFn(22);
-    this.iconContainer.className = `dl-icon-col cat-${cat}`;
+    this.iconContainer.innerHTML = getCategoryIcon(cat, 22);
+    this.iconContainer.className = `dl-icon-col cat-${cat.toLowerCase()}`;
+
+    // Category pill
+    this.categoryPill.textContent = cat;
+    this.categoryPill.className = `category-pill cat-${cat.toLowerCase()}`;
 
     // Filename
     this.filenameEl.textContent = d.filename || basenameFromUrl(d.urls[0] || "");
@@ -511,7 +607,12 @@ export class DownloadCard {
     this.sizeText.textContent = `${fmtBytes(downloaded)}${total > 0 ? ` / ${fmtBytes(total)}` : ""}`;
 
     // Speed stats (current + average)
-    const isRunning = d.status === "running" || d.status === "downloading" || d.status === "starting" || d.status === "connecting";
+    const isRunning =
+      d.status === "running" ||
+      d.status === "downloading" ||
+      d.status === "starting" ||
+      d.status === "connecting";
+
     if (isRunning && this.smoothedSpeed > 0) {
       const avgPart = this.avgSpeedBps && this.avgSpeedBps > 0 ? ` · avg ${fmtSpeed(this.avgSpeedBps)}` : "";
       this.speedText.textContent = `${fmtSpeed(this.smoothedSpeed)}${avgPart}`;
@@ -549,16 +650,20 @@ export class DownloadCard {
     this.pathTextEl.title = d.output;
 
     // Action button states (respecting optimistic locks)
-    if (!this.isPausing && !this.isResuming && !this.isCancelling) {
+    if (!this.isPausing && !this.isResuming && !this.isCancelling && !this.isRetrying) {
       const canPause = isRunning;
       const canResume = d.status === "paused";
+      const canRetry = d.status === "failed" || d.status === "cancelled";
       const canCancel = d.status !== "completed" && d.status !== "done" && d.status !== "cancelled";
 
+      this.btnPause.classList.toggle("hidden", !canPause);
       this.btnPause.disabled = !canPause;
-      this.btnPause.title = canPause ? "Pause download" : "Cannot pause";
 
+      this.btnResume.classList.toggle("hidden", !canResume);
       this.btnResume.disabled = !canResume;
-      this.btnResume.title = canResume ? "Resume download" : "Cannot resume";
+
+      this.btnRetry.classList.toggle("hidden", !canRetry);
+      this.btnRetry.disabled = !canRetry;
 
       this.btnCancel.disabled = !canCancel;
       this.btnCancel.title = canCancel ? "Cancel download" : "Already finished";
@@ -599,105 +704,143 @@ export class DownloadCard {
     let display = rawStatus;
     let colorClass = "queued";
 
-    if (rawStatus === "downloading" || rawStatus === "running") {
-      display = "Downloading";
-      colorClass = "downloading";
-    } else if (rawStatus === "connecting" || rawStatus === "starting") {
-      display = "Connecting";
-      colorClass = "connecting";
-    } else if (rawStatus === "paused") {
-      display = "Paused";
-      colorClass = "paused";
-    } else if (rawStatus === "retrying") {
-      display = "Retrying";
-      colorClass = "retrying";
-    } else if (rawStatus === "verifying") {
-      display = "Verifying";
-      colorClass = "verifying";
-    } else if (rawStatus === "completed" || rawStatus === "done") {
-      display = "Done";
-      colorClass = "completed";
-    } else if (rawStatus === "failed") {
-      display = "Failed";
-      colorClass = "failed";
-    } else if (rawStatus === "cancelled") {
-      display = "Cancelled";
-      colorClass = "cancelled";
-    } else if (rawStatus === "queued") {
-      display = "Queued";
-      colorClass = "queued";
+    switch (rawStatus) {
+      case "running":
+      case "downloading":
+        display = "Downloading";
+        colorClass = "downloading";
+        break;
+      case "connecting":
+      case "starting":
+        display = "Connecting";
+        colorClass = "connecting";
+        break;
+      case "paused":
+        display = "Paused";
+        colorClass = "paused";
+        break;
+      case "retrying":
+        display = "Retrying";
+        colorClass = "retrying";
+        break;
+      case "verifying":
+        display = "Verifying";
+        colorClass = "verifying";
+        break;
+      case "completed":
+      case "done":
+        display = "Completed";
+        colorClass = "completed";
+        break;
+      case "failed":
+        display = "Failed";
+        colorClass = "failed";
+        break;
+      case "cancelled":
+        display = "Cancelled";
+        colorClass = "cancelled";
+        break;
+      default:
+        display = "Queued";
+        colorClass = "queued";
     }
 
     this.updateStatusPill(colorClass, display);
   }
 
   private updateStatusPill(colorClass: string, text: string) {
-    this.statusPill.className = `status-pill status-${colorClass}`;
+    this.statusPill.className = `status-pill ${colorClass}`;
     this.statusPill.textContent = text;
   }
 
   private renderSegments() {
     const segs = this.view.segments;
-    const segCountEl = this.root.querySelector('[data-slot="seg-count"]');
-    if (segCountEl) {
-      segCountEl.textContent = `${segs.length} active segments`;
+    const countBadge = this.root.querySelector('[data-slot="seg-count"]');
+    if (countBadge) {
+      countBadge.textContent = `${segs.length} segment${segs.length === 1 ? "" : "s"}`;
     }
 
-    if (segs.length === 0) {
-      this.segBarsContainer.innerHTML = `<span class="seg-empty">Single stream or waiting for segment initialization...</span>`;
+    if (!segs || segs.length === 0) {
+      this.segBarsContainer.innerHTML = `
+        <div class="seg-empty-hint">Segment data available when download starts with active workers</div>
+      `;
       this.segListContainer.innerHTML = "";
       return;
     }
 
-    // Render continuous segmented progress bar
-    const barsHtml = segs
-      .map((s) => {
-        const span = Math.max(1, s.end - s.start + 1);
-        const pct = Math.min(100, Math.max(0, (s.downloaded / span) * 100));
-        return `<div class="seg-chunk" title="Segment #${s.index + 1}: ${pct.toFixed(0)}% (${fmtBytes(s.downloaded)} / ${fmtBytes(span)})">
-          <span class="seg-chunk-fill" style="width: ${pct.toFixed(1)}%"></span>
-        </div>`;
-      })
-      .join("");
-    this.segBarsContainer.innerHTML = barsHtml;
+    const total = this.view.total ?? 0;
+    let barHtml = "";
+    let gridHtml = "";
 
-    // Render detailed segment cards
-    const listHtml = segs
-      .map((s) => {
-        const span = Math.max(1, s.end - s.start + 1);
-        const pct = Math.min(100, Math.max(0, (s.downloaded / span) * 100));
-        return `
-          <div class="seg-card">
-            <div class="seg-card-head">
-              <span class="seg-num">#${s.index + 1}</span>
-              <span class="seg-pct">${pct.toFixed(1)}%</span>
-            </div>
-            <div class="seg-mini-track">
-              <span class="seg-mini-fill" style="width: ${pct.toFixed(1)}%"></span>
-            </div>
-            <div class="seg-card-foot">
-              <span>${fmtBytes(s.downloaded)} / ${fmtBytes(span)}</span>
-              <span class="seg-range">${fmtBytes(s.start)}–${fmtBytes(s.end)}</span>
-            </div>
-          </div>`;
-      })
-      .join("");
-    this.segListContainer.innerHTML = listHtml;
+    segs.forEach((seg) => {
+      const segLen = Math.max(1, seg.end - seg.start);
+      const segPct = Math.min(100, Math.max(0, (seg.downloaded / segLen) * 100));
+      const widthPct = total > 0 ? Math.max(1, (segLen / total) * 100) : 100 / segs.length;
+
+      barHtml += `
+        <div class="seg-bar-track" style="width: ${widthPct}%" title="Segment #${seg.index + 1}: ${segPct.toFixed(1)}% (${fmtBytes(seg.downloaded)} / ${fmtBytes(segLen)})">
+          <span class="seg-bar-fill" style="width: ${segPct}%"></span>
+        </div>
+      `;
+
+      gridHtml += `
+        <div class="seg-card">
+          <div class="seg-card-header">
+            <span class="seg-title">Seg #${seg.index + 1}</span>
+            <span class="seg-pct">${segPct.toFixed(1)}%</span>
+          </div>
+          <div class="seg-track-mini">
+            <span class="seg-fill-mini" style="width: ${segPct}%"></span>
+          </div>
+          <div class="seg-range">
+            ${fmtBytes(seg.downloaded)} / ${fmtBytes(segLen)}
+          </div>
+        </div>
+      `;
+    });
+
+    this.segBarsContainer.innerHTML = barHtml;
+    this.segListContainer.innerHTML = gridHtml;
   }
 
   public getRawSpeed(): number {
-    return this.view.status === "running" || this.view.status === "downloading"
-      ? this.view.speed_bps
-      : 0;
+    return this.smoothedSpeed;
   }
 
   public getStatus(): TaskStatus {
     return this.view.status;
   }
 
-  private escapeHtml(text: string): string {
-    const div = document.createElement("div");
-    div.textContent = text;
-    return div.innerHTML;
+  public getCategory(): FileCategory {
+    return getFileCategory(this.view.filename);
+  }
+
+  public getView(): DownloadView {
+    return this.view;
+  }
+
+  public getFilename(): string {
+    return this.view.filename || basenameFromUrl(this.view.urls[0] || "");
+  }
+
+  public getTotalSize(): number {
+    return this.view.total ?? 0;
+  }
+
+  public getProgressPct(): number {
+    const total = this.view.total ?? 0;
+    if (total <= 0) {
+      return this.view.status === "completed" || this.view.status === "done" ? 100 : 0;
+    }
+    return (this.view.downloaded / total) * 100;
+  }
+
+  private escapeHtml(str: string): string {
+    return (str || "")
+      .replace(/&/g, "&amp;")
+      .replace(/</g, "&lt;")
+      .replace(/>/g, "&gt;")
+      .replace(/"/g, "&quot;")
+      .replace(/'/g, "&#039;");
   }
 }

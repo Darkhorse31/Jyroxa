@@ -7,17 +7,54 @@
     <link rel="stylesheet" href="/src/styles.css" />
   </head>
   <body data-theme="dark">
+    <!-- Drag & Drop Overlay -->
+    <div id="drag-overlay" class="drag-overlay hidden">
+      <div class="drag-overlay-box">
+        <svg width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+          <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path>
+          <polyline points="7 10 12 15 17 10"></polyline>
+          <line x1="12" y1="15" x2="12" y2="3"></line>
+        </svg>
+        <h3>Drop links or text here</h3>
+        <p>Drop URL to start downloading immediately</p>
+      </div>
+    </div>
+
     <div id="app" class="app-container">
+      <!-- Topbar Header -->
       <header class="topbar">
         <div class="brand-group">
-          <div class="brand-icon">
-            <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
-              <polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"></polygon>
-            </svg>
-          </div>
+          <img src="/src/assets/logo.svg" alt="App Logo" class="brand-logo" width="28" height="28" />
           <div class="brand-text">
-            <h1 class="logo">SwiftGet</h1>
-            <span class="tagline">fast segmented downloads</span>
+            <h1 class="logo" id="brand-title">SwiftGet</h1>
+            <span class="tagline">accelerated segmented downloads</span>
+          </div>
+        </div>
+
+        <div class="topbar-search-sort">
+          <div class="search-box">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+              <circle cx="11" cy="11" r="8"></circle>
+              <line x1="21" y1="21" x2="16.65" y2="16.65"></line>
+            </svg>
+            <input type="text" id="downloads-search" class="form-input search-input" placeholder="Search downloads (Ctrl+F)..." aria-label="Search downloads" />
+          </div>
+
+          <div class="sort-group">
+            <label for="sort-select" class="sort-label">Sort:</label>
+            <select id="sort-select" class="form-select sort-select" aria-label="Sort by">
+              <option value="date">Date added</option>
+              <option value="name">Name</option>
+              <option value="size">Size</option>
+              <option value="progress">Progress</option>
+              <option value="speed">Speed</option>
+            </select>
+            <button type="button" id="btn-sort-dir" class="btn-icon btn-sort-dir" title="Sort descending" aria-label="Toggle sort order">
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                <line x1="12" y1="5" x2="12" y2="19"></line>
+                <polyline points="19 12 12 19 5 12"></polyline>
+              </svg>
+            </button>
           </div>
         </div>
 
@@ -32,20 +69,37 @@
           <div class="metric-pill" title="Completed downloads">
             <span id="stat-done" class="metric-text">0 completed</span>
           </div>
+          <div class="graph-card-header">
+            <canvas id="speed-graph" width="140" height="32" aria-label="Speed graph"></canvas>
+          </div>
         </div>
 
         <div class="toolbar">
-          <button type="button" id="btn-add" class="btn primary" title="Add a new download URL (Ctrl+N)">
+          <button type="button" id="btn-add" class="btn primary" title="Add new download (Ctrl+N)">
             <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><line x1="12" y1="5" x2="12" y2="19"></line><line x1="5" y1="12" x2="19" y2="12"></line></svg>
             <span>Add download</span>
           </button>
-          <button type="button" id="btn-grabber" class="btn secondary" title="Open LinkGrabber panel to crawl and batch import">
+          <button type="button" id="btn-grabber" class="btn secondary" title="Open LinkGrabber panel">
             <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71"></path><path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71"></path></svg>
             <span>LinkGrabber</span>
           </button>
-          <button type="button" id="btn-settings" class="btn secondary" title="Configure engine and connection settings">
+          <button type="button" id="btn-settings" class="btn secondary" title="Settings (Ctrl+,)">
             <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"></circle><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z"></path></svg>
             <span>Settings</span>
+          </button>
+          <button type="button" id="btn-shortcuts" class="btn-icon" title="Keyboard shortcuts (?)" aria-label="Shortcuts">
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+              <circle cx="12" cy="12" r="10"></circle>
+              <path d="M9.09 9a3 3 0 0 1 5.83 1c0 2-3 3-3 3"></path>
+              <line x1="12" y1="17" x2="12.01" y2="17"></line>
+            </svg>
+          </button>
+          <button type="button" id="btn-about" class="btn-icon" title="About" aria-label="About">
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+              <circle cx="12" cy="12" r="10"></circle>
+              <line x1="12" y1="16" x2="12" y2="12"></line>
+              <line x1="12" y1="8" x2="12.01" y2="8"></line>
+            </svg>
           </button>
           <button type="button" id="btn-theme" class="btn-icon theme-toggle" title="Toggle Light / Dark theme" aria-label="Toggle theme">
             <span class="icon-sun">
@@ -58,59 +112,199 @@
         </div>
       </header>
 
-      <main class="layout">
-        <section class="panel downloads-panel">
-          <div class="panel-head">
-            <div class="panel-title-area">
-              <h2>Downloads</h2>
+      <!-- Main Workspace -->
+      <div class="workspace">
+        <!-- Sidebar Navigation: Categories & Status filters -->
+        <aside class="sidebar-nav" aria-label="Filters and categories">
+          <!-- Status Group -->
+          <div class="sidebar-group">
+            <div class="sidebar-group-title">Status</div>
+            <ul class="sidebar-items-list" role="tablist">
+              <li>
+                <button type="button" class="sidebar-item active" data-status="all" role="tab" aria-selected="true">
+                  <span class="sidebar-item-label">All</span>
+                  <span class="sidebar-count" id="badge-status-all">0</span>
+                </button>
+              </li>
+              <li>
+                <button type="button" class="sidebar-item" data-status="downloading" role="tab" aria-selected="false">
+                  <span class="sidebar-item-label">Downloading</span>
+                  <span class="sidebar-count" id="badge-status-downloading">0</span>
+                </button>
+              </li>
+              <li>
+                <button type="button" class="sidebar-item" data-status="completed" role="tab" aria-selected="false">
+                  <span class="sidebar-item-label">Completed</span>
+                  <span class="sidebar-count" id="badge-status-completed">0</span>
+                </button>
+              </li>
+              <li>
+                <button type="button" class="sidebar-item" data-status="queued" role="tab" aria-selected="false">
+                  <span class="sidebar-item-label">Queued</span>
+                  <span class="sidebar-count" id="badge-status-queued">0</span>
+                </button>
+              </li>
+              <li>
+                <button type="button" class="sidebar-item" data-status="failed" role="tab" aria-selected="false">
+                  <span class="sidebar-item-label">Failed</span>
+                  <span class="sidebar-count" id="badge-status-failed">0</span>
+                </button>
+              </li>
+            </ul>
+          </div>
+
+          <!-- Categories Group -->
+          <div class="sidebar-group">
+            <div class="sidebar-group-title">Categories</div>
+            <ul class="sidebar-items-list" role="tablist">
+              <li>
+                <button type="button" class="sidebar-item active" data-category="all" role="tab" aria-selected="true">
+                  <span class="sidebar-item-label">All Categories</span>
+                  <span class="sidebar-count" id="badge-cat-all">0</span>
+                </button>
+              </li>
+              <li>
+                <button type="button" class="sidebar-item" data-category="Video" role="tab" aria-selected="false">
+                  <span class="sidebar-item-label">Video</span>
+                  <span class="sidebar-count" id="badge-cat-video">0</span>
+                </button>
+              </li>
+              <li>
+                <button type="button" class="sidebar-item" data-category="Music" role="tab" aria-selected="false">
+                  <span class="sidebar-item-label">Music</span>
+                  <span class="sidebar-count" id="badge-cat-music">0</span>
+                </button>
+              </li>
+              <li>
+                <button type="button" class="sidebar-item" data-category="Documents" role="tab" aria-selected="false">
+                  <span class="sidebar-item-label">Documents</span>
+                  <span class="sidebar-count" id="badge-cat-documents">0</span>
+                </button>
+              </li>
+              <li>
+                <button type="button" class="sidebar-item" data-category="Compressed" role="tab" aria-selected="false">
+                  <span class="sidebar-item-label">Compressed</span>
+                  <span class="sidebar-count" id="badge-cat-compressed">0</span>
+                </button>
+              </li>
+              <li>
+                <button type="button" class="sidebar-item" data-category="Programs" role="tab" aria-selected="false">
+                  <span class="sidebar-item-label">Programs</span>
+                  <span class="sidebar-count" id="badge-cat-programs">0</span>
+                </button>
+              </li>
+              <li>
+                <button type="button" class="sidebar-item" data-category="Other" role="tab" aria-selected="false">
+                  <span class="sidebar-item-label">Other</span>
+                  <span class="sidebar-count" id="badge-cat-other">0</span>
+                </button>
+              </li>
+            </ul>
+          </div>
+        </aside>
+
+        <!-- Main Downloads Panel -->
+        <main class="downloads-panel">
+          <!-- Bulk Action Bar (visible when items selected) -->
+          <div id="bulk-bar" class="bulk-action-bar hidden" role="region" aria-label="Bulk actions">
+            <div class="bulk-info">
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                <polyline points="20 6 9 17 4 12"></polyline>
+              </svg>
+              <span id="bulk-count-label" class="bulk-count">0 selected</span>
             </div>
-            <div class="graph-card">
-              <canvas id="speed-graph" width="560" height="74" aria-label="Bandwidth speed graph"></canvas>
+            <div class="bulk-actions">
+              <button type="button" id="bulk-pause" class="btn-bulk" title="Pause selected">
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor"><rect x="6" y="4" width="4" height="16" rx="1"></rect><rect x="14" y="4" width="4" height="16" rx="1"></rect></svg>
+                <span>Pause</span>
+              </button>
+              <button type="button" id="bulk-resume" class="btn-bulk" title="Resume selected">
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor"><polygon points="5 3 19 12 5 21 5 3"></polygon></svg>
+                <span>Resume</span>
+              </button>
+              <button type="button" id="bulk-cancel" class="btn-bulk" title="Cancel selected">
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="18" y1="6" x2="6" y2="18"></line><line x1="6" y1="6" x2="18" y2="18"></line></svg>
+                <span>Cancel</span>
+              </button>
+              <button type="button" id="bulk-open" class="btn-bulk" title="Open containing folder">
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"></path></svg>
+                <span>Open folder</span>
+              </button>
+              <button type="button" id="bulk-remove" class="btn-bulk danger" title="Remove selected">
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="3 6 5 6 21 6"></polyline><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"></path></svg>
+                <span>Remove</span>
+              </button>
+              <button type="button" id="bulk-deselect" class="btn-icon" title="Clear selection (Esc)" aria-label="Clear selection">
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="18" y1="6" x2="6" y2="18"></line><line x1="6" y1="6" x2="18" y2="18"></line></svg>
+              </button>
             </div>
           </div>
 
-          <div class="downloads-filter-bar">
-            <div class="filter-tabs" role="tablist">
-              <button type="button" class="tab-btn active" data-tab="all" role="tab" aria-selected="true">
-                <span>All</span>
-                <span class="tab-badge" id="badge-tab-all">0</span>
-              </button>
-              <button type="button" class="tab-btn" data-tab="active" role="tab" aria-selected="false">
-                <span>Active</span>
-                <span class="tab-badge" id="badge-tab-active">0</span>
-              </button>
-              <button type="button" class="tab-btn" data-tab="paused" role="tab" aria-selected="false">
-                <span>Paused</span>
-                <span class="tab-badge" id="badge-tab-paused">0</span>
-              </button>
-              <button type="button" class="tab-btn" data-tab="completed" role="tab" aria-selected="false">
-                <span>Completed</span>
-                <span class="tab-badge" id="badge-tab-completed">0</span>
-              </button>
-            </div>
+          <!-- Download Cards List -->
+          <div id="download-list" class="download-list" role="list"></div>
+          <div id="download-empty" class="empty-state hidden"></div>
+        </main>
 
-            <div class="search-box">
-              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="8"></circle><line x1="21" y1="21" x2="16.65" y2="16.65"></line></svg>
-              <input type="text" id="downloads-search" class="form-input search-input" placeholder="Search downloads..." aria-label="Search downloads" />
-            </div>
-          </div>
-
-          <div id="download-list" class="download-list"></div>
-          <div id="download-empty" class="empty hidden">No downloads yet. Add a URL or use LinkGrabber.</div>
-        </section>
-
-        <aside id="sidebar" class="panel sidebar hidden">
+        <!-- Slide-over Drawer for LinkGrabber & Settings -->
+        <aside id="sidebar" class="drawer-panel hidden">
           <div class="sidebar-header">
             <span id="sidebar-title" class="sidebar-title">Panel</span>
-            <button type="button" id="sidebar-close" class="btn-icon" title="Close sidebar" aria-label="Close sidebar">
+            <button type="button" id="sidebar-close" class="btn-icon" title="Close panel (Esc)" aria-label="Close panel">
               <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="6" x2="6" y2="18"></line><line x1="6" y1="6" x2="18" y2="18"></line></svg>
             </button>
           </div>
           <div id="grabber-panel" class="sidebar-content hidden"></div>
           <div id="settings-panel" class="sidebar-content hidden"></div>
         </aside>
-      </main>
+      </div>
     </div>
+
+    <!-- Right-Click Context Menu -->
+    <menu id="context-menu" class="context-menu hidden">
+      <li data-action="open-file">
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor"><polygon points="5 3 19 12 5 21 5 3"></polygon></svg>
+        <span>Open file</span>
+      </li>
+      <li data-action="open-folder">
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"></path></svg>
+        <span>Open folder</span>
+      </li>
+      <hr class="context-sep" />
+      <li data-action="pause">
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor"><rect x="6" y="4" width="4" height="16" rx="1"></rect><rect x="14" y="4" width="4" height="16" rx="1"></rect></svg>
+        <span>Pause</span>
+      </li>
+      <li data-action="resume">
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor"><polygon points="5 3 19 12 5 21 5 3"></polygon></svg>
+        <span>Resume</span>
+      </li>
+      <li data-action="retry">
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="1 4 1 10 7 10"></polyline><path d="M3.51 15a9 9 0 1 0 2.13-9.36L1 10"></path></svg>
+        <span>Retry</span>
+      </li>
+      <li data-action="cancel">
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="18" y1="6" x2="6" y2="18"></line><line x1="6" y1="6" x2="18" y2="18"></line></svg>
+        <span>Cancel</span>
+      </li>
+      <hr class="context-sep" />
+      <li data-action="copy-url">
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="9" y="9" width="13" height="13" rx="2"></rect><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path></svg>
+        <span>Copy URL</span>
+      </li>
+      <li data-action="copy-path">
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="9" y="9" width="13" height="13" rx="2"></rect><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path></svg>
+        <span>Copy file path</span>
+      </li>
+      <hr class="context-sep" />
+      <li data-action="remove-list" class="danger">
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="3 6 5 6 21 6"></polyline><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"></path></svg>
+        <span>Remove from list</span>
+      </li>
+      <li data-action="remove-file" class="danger">
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="3 6 5 6 21 6"></polyline><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"></path><line x1="10" y1="11" x2="10" y2="17"></line><line x1="14" y1="11" x2="14" y2="17"></line></svg>
+        <span>Remove and delete file</span>
+      </li>
+    </menu>
 
     <!-- Add Download Modal Dialog -->
     <dialog id="dlg-add" class="app-dialog">
@@ -127,12 +321,33 @@
 
         <div class="dialog-body">
           <div class="form-group">
-            <label class="form-label" for="add-urls">Download URLs (one per line for mirror/fallback)</label>
-            <textarea id="add-urls" class="form-textarea" rows="3" placeholder="https://example.com/archive.zip" required></textarea>
+            <label class="form-label" for="add-urls">Download URL</label>
+            <textarea id="add-urls" class="form-textarea" rows="2" placeholder="https://example.com/archive.zip" required></textarea>
+          </div>
+
+          <!-- Live URL Probe Status Card -->
+          <div id="add-probe-card" class="add-probe-card hidden">
+            <div id="probe-loading" class="probe-loading hidden">
+              <svg class="spinner-icon" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="12" y1="2" x2="12" y2="6"></line><line x1="12" y1="18" x2="12" y2="22"></line><line x1="4.93" y1="4.93" x2="7.76" y2="7.76"></line><line x1="16.24" y1="16.24" x2="19.07" y2="19.07"></line><line x1="2" y1="12" x2="6" y2="12"></line><line x1="18" y1="12" x2="22" y2="12"></line><line x1="4.93" y1="19.07" x2="7.76" y2="16.24"></line><line x1="16.24" y1="7.76" x2="19.07" y2="4.93"></line></svg>
+              <span>Probing URL metadata...</span>
+            </div>
+            <div id="probe-details" class="probe-details hidden">
+              <div class="probe-row">
+                <span class="probe-metric-chip" id="probe-size">Size: —</span>
+                <span class="probe-metric-chip" id="probe-mime">Type: —</span>
+                <span class="probe-badge" id="probe-resumable">Resumable</span>
+                <span class="probe-badge cat" id="probe-category">Category</span>
+              </div>
+            </div>
+            <div id="probe-error" class="probe-error-row hidden">
+              <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"></circle><line x1="12" y1="8" x2="12" y2="12"></line><line x1="12" y1="16" x2="12.01" y2="16"></line></svg>
+              <span id="probe-error-msg" class="probe-error-msg">Probe failed</span>
+              <button type="button" id="btn-retry-probe" class="btn-mini">Retry</button>
+            </div>
           </div>
 
           <div class="form-group">
-            <label class="form-label" for="add-filename">File name</label>
+            <label class="form-label" for="add-filename">Save as</label>
             <input id="add-filename" type="text" class="form-input" placeholder="filename.ext" required />
           </div>
 
@@ -147,31 +362,47 @@
             </div>
           </div>
 
-          <div class="form-row-split">
-            <div class="form-group">
-              <label class="check-label">
-                <input id="add-auto-conn" type="checkbox" class="form-checkbox" checked />
-                <span>Auto connections</span>
-              </label>
-              <span class="form-hint">Calibrates active connections automatically (1–32).</span>
-            </div>
-
-            <div class="form-group">
-              <label class="form-label" for="add-connections">Connections</label>
-              <input id="add-connections" type="number" class="form-input" min="1" max="32" value="8" disabled />
-            </div>
+          <!-- Quick category folders shortcuts -->
+          <div class="cat-quick-chips" id="cat-quick-chips">
+            <span class="cat-quick-label">Folder shortcuts:</span>
+            <button type="button" class="btn-quick-cat" data-cat="Video">Video</button>
+            <button type="button" class="btn-quick-cat" data-cat="Music">Music</button>
+            <button type="button" class="btn-quick-cat" data-cat="Documents">Documents</button>
+            <button type="button" class="btn-quick-cat" data-cat="Compressed">Compressed</button>
+            <button type="button" class="btn-quick-cat" data-cat="Programs">Programs</button>
           </div>
 
-          <div class="form-row-split">
-            <div class="form-group">
-              <label class="form-label" for="add-sha256">SHA-256 (optional)</label>
-              <input id="add-sha256" type="text" class="form-input code" placeholder="Optional checksum" autocomplete="off" />
+          <!-- Collapsible advanced settings -->
+          <details class="advanced-details">
+            <summary class="advanced-summary">Advanced connection & checksum options</summary>
+            <div class="advanced-body">
+              <div class="form-row-split">
+                <div class="form-group">
+                  <label class="check-label">
+                    <input id="add-auto-conn" type="checkbox" class="form-checkbox" checked />
+                    <span>Auto connections</span>
+                  </label>
+                  <span class="form-hint">Calibrate streams per host (1–32).</span>
+                </div>
+
+                <div class="form-group">
+                  <label class="form-label" for="add-connections">Connections</label>
+                  <input id="add-connections" type="number" class="form-input" min="1" max="32" value="8" disabled />
+                </div>
+              </div>
+
+              <div class="form-row-split">
+                <div class="form-group">
+                  <label class="form-label" for="add-sha256">SHA-256 (optional)</label>
+                  <input id="add-sha256" type="text" class="form-input code" placeholder="Optional checksum" autocomplete="off" />
+                </div>
+                <div class="form-group">
+                  <label class="form-label" for="add-md5">MD5 (optional)</label>
+                  <input id="add-md5" type="text" class="form-input code" placeholder="Optional checksum" autocomplete="off" />
+                </div>
+              </div>
             </div>
-            <div class="form-group">
-              <label class="form-label" for="add-md5">MD5 (optional)</label>
-              <input id="add-md5" type="text" class="form-input code" placeholder="Optional checksum" autocomplete="off" />
-            </div>
-          </div>
+          </details>
         </div>
 
         <div class="dialog-actions">
@@ -199,9 +430,6 @@
 
         <div class="dialog-body">
           <div class="clipboard-box">
-            <span class="clipboard-icon">
-              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"></circle><line x1="12" y1="16" x2="12" y2="12"></line><line x1="12" y1="8" x2="12.01" y2="8"></line></svg>
-            </span>
             <p id="clipboard-url-text" class="clipboard-url-text code"></p>
           </div>
           <p class="form-hint">Would you like to open LinkGrabber to probe this link, or queue it directly?</p>
@@ -210,13 +438,118 @@
         <div class="dialog-actions">
           <button type="button" id="clipboard-dismiss" class="btn secondary">Dismiss</button>
           <button type="button" id="clipboard-grab" class="btn secondary">
-            <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71"></path><path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71"></path></svg>
             LinkGrabber
           </button>
           <button type="button" id="clipboard-queue" class="btn primary">
-            <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path><polyline points="7 10 12 15 17 10"></polyline><line x1="12" y1="15" x2="12" y2="3"></line></svg>
             Queue URL
           </button>
+        </div>
+      </form>
+    </dialog>
+
+    <!-- Keyboard Shortcuts Help Modal Dialog -->
+    <dialog id="dlg-shortcuts" class="app-dialog">
+      <form method="dialog" class="dialog-card shortcuts-dialog-card">
+        <div class="dialog-header">
+          <div class="dialog-title-group">
+            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+              <circle cx="12" cy="12" r="10"></circle>
+              <path d="M9.09 9a3 3 0 0 1 5.83 1c0 2-3 3-3 3"></path>
+              <line x1="12" y1="17" x2="12.01" y2="17"></line>
+            </svg>
+            <h3>Keyboard Shortcuts</h3>
+          </div>
+          <button type="button" id="shortcuts-close-btn" class="btn-icon" aria-label="Close dialog">
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="18" y1="6" x2="6" y2="18"></line><line x1="6" y1="6" x2="18" y2="18"></line></svg>
+          </button>
+        </div>
+
+        <div class="dialog-body">
+          <div class="shortcuts-grid">
+            <div class="shortcut-row">
+              <span class="shortcut-desc">New download</span>
+              <div class="shortcut-keys"><kbd>Ctrl</kbd> + <kbd>N</kbd></div>
+            </div>
+            <div class="shortcut-row">
+              <span class="shortcut-desc">Paste URL and open dialog</span>
+              <div class="shortcut-keys"><kbd>Ctrl</kbd> + <kbd>V</kbd></div>
+            </div>
+            <div class="shortcut-row">
+              <span class="shortcut-desc">Search downloads</span>
+              <div class="shortcut-keys"><kbd>Ctrl</kbd> + <kbd>F</kbd></div>
+            </div>
+            <div class="shortcut-row">
+              <span class="shortcut-desc">Open Settings</span>
+              <div class="shortcut-keys"><kbd>Ctrl</kbd> + <kbd>,</kbd></div>
+            </div>
+            <div class="shortcut-row">
+              <span class="shortcut-desc">Select all downloads</span>
+              <div class="shortcut-keys"><kbd>Ctrl</kbd> + <kbd>A</kbd></div>
+            </div>
+            <div class="shortcut-row">
+              <span class="shortcut-desc">Pause / Resume selected</span>
+              <div class="shortcut-keys"><kbd>Space</kbd></div>
+            </div>
+            <div class="shortcut-row">
+              <span class="shortcut-desc">Remove selected download</span>
+              <div class="shortcut-keys"><kbd>Delete</kbd></div>
+            </div>
+            <div class="shortcut-row">
+              <span class="shortcut-desc">Close dialog / panel / menu</span>
+              <div class="shortcut-keys"><kbd>Esc</kbd></div>
+            </div>
+            <div class="shortcut-row">
+              <span class="shortcut-desc">Show keyboard shortcuts</span>
+              <div class="shortcut-keys"><kbd>?</kbd></div>
+            </div>
+          </div>
+        </div>
+
+        <div class="dialog-actions">
+          <button type="button" id="shortcuts-ok-btn" class="btn primary">Got it</button>
+        </div>
+      </form>
+    </dialog>
+
+    <!-- About Dialog -->
+    <dialog id="dlg-about" class="app-dialog">
+      <form method="dialog" class="dialog-card about-dialog-card">
+        <div class="dialog-header">
+          <div class="dialog-title-group">
+            <img src="/src/assets/logo.svg" alt="App Logo" width="24" height="24" />
+            <h3 id="about-title">About</h3>
+          </div>
+          <button type="button" id="about-close-btn" class="btn-icon" aria-label="Close dialog">
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="18" y1="6" x2="6" y2="18"></line><line x1="6" y1="6" x2="18" y2="18"></line></svg>
+          </button>
+        </div>
+
+        <div class="dialog-body about-body">
+          <div class="about-hero">
+            <img src="/src/assets/logo.svg" alt="App Logo" width="56" height="56" />
+            <h2 id="about-app-name" class="about-app-name">SwiftGet</h2>
+            <span id="about-version" class="about-version-badge">v0.1.1</span>
+            <p class="about-tagline">High-performance multi-segment accelerated download manager.</p>
+          </div>
+
+          <div class="about-meta-list">
+            <div class="about-meta-row">
+              <span class="about-meta-label">License</span>
+              <span class="about-meta-val">MIT License</span>
+            </div>
+            <div class="about-meta-row">
+              <span class="about-meta-label">Engine</span>
+              <span class="about-meta-val">Rust (tokio + reqwest) & Tauri v2</span>
+            </div>
+            <div class="about-meta-row">
+              <span class="about-meta-label">Repository</span>
+              <span class="about-meta-val code">github.com/swiftget/swiftget</span>
+            </div>
+          </div>
+        </div>
+
+        <div class="dialog-actions">
+          <button type="button" id="about-ok-btn" class="btn primary">Close</button>
         </div>
       </form>
     </dialog>

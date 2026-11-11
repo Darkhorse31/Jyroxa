@@ -16,6 +16,14 @@ export type TaskStatus =
   | "failed"
   | "cancelled";
 
+export type FileCategory =
+  | "Video"
+  | "Music"
+  | "Documents"
+  | "Compressed"
+  | "Programs"
+  | "Other";
+
 export interface SegmentState {
   index: number;
   start: number;
@@ -42,10 +50,24 @@ export interface DownloadView {
 
 export interface AppSettings {
   max_concurrent: number;
-  global_speed_limit?: number;
-  default_folder: string;
+  max_connections_per_download: number;
+  per_host_cap: number;
+  global_speed_limit?: number | null;
+  download_dir: string;
+  default_folder?: string;
+  category_dirs: Record<string, string>;
   clipboard_monitor: boolean;
   autotune: boolean;
+  start_minimized: boolean;
+  notifications: boolean;
+  close_to_tray: boolean;
+  start_with_windows: boolean;
+  prevent_sleep: boolean;
+  auto_resume: boolean;
+  theme: string;
+  scheduler_start?: string | null;
+  scheduler_stop?: string | null;
+  scheduler_days: number[];
 }
 
 export interface AddDownloadArgs {
@@ -78,6 +100,24 @@ export interface LinkInfo {
 export interface Package {
   name: string;
   links: LinkInfo[];
+}
+
+export interface ProbeInfo {
+  final_url: string;
+  suggested_name: string;
+  size?: number | null;
+  mime?: string | null;
+  resumable: boolean;
+  category: FileCategory;
+  server: string;
+  protocol: string;
+}
+
+export interface DownloadFinishedPayload {
+  id: number;
+  path: string;
+  filename: string;
+  total: number;
 }
 
 export interface BackendProgressEvent {
@@ -122,23 +162,61 @@ export const api = {
   pauseDownload: (id: number) => invoke<boolean>("pause_download", { id }),
   resumeDownload: (id: number) => invoke<boolean>("resume_download", { id }),
   cancelDownload: (id: number) => invoke<boolean>("cancel_download", { id }),
+  pauseMany: (ids: number[]) => invoke<number>("pause_many", { ids }),
+  resumeMany: (ids: number[]) => invoke<number>("resume_many", { ids }),
+  cancelMany: (ids: number[]) => invoke<number>("cancel_many", { ids }),
+  removeDownload: (id: number, deleteFile: boolean = false) =>
+    invoke<boolean>("remove_download", { id, deleteFile }),
+  removeMany: (ids: number[], deleteFile: boolean = false) =>
+    invoke<number>("remove_many", { ids, deleteFile }),
+  retryDownload: (id: number) => invoke<boolean>("retry_download", { id }),
   grabLinks: (input: string, options: GrabOptionsDto) =>
     invoke<Package[]>("grab_links", { input, options }),
   probeLinks: (urls: string[]) =>
     invoke<LinkInfo[]>("probe_links", { urls }),
+  probeUrl: (url: string) =>
+    invoke<ProbeInfo>("probe_url", { url }),
+  suggestSavePath: (dir: string, name: string) =>
+    invoke<string>("suggest_save_path", { dir, name }),
+  defaultCategoryDirs: () =>
+    invoke<Record<string, string>>("default_category_dirs"),
+  openFolderCmd: (path: string) =>
+    invoke<void>("open_folder_cmd", { path }),
+  openFile: (path: string) =>
+    invoke<void>("open_file", { path }),
 };
 
 export async function openFolder(filePath: string): Promise<boolean> {
   try {
-    await revealItemInDir(filePath);
+    await api.openFolderCmd(filePath);
     return true;
   } catch (_e1) {
     try {
-      const parent = filePath.replace(/[/\\][^/\\]+$/, "");
-      await openPath(parent || filePath);
+      await revealItemInDir(filePath);
       return true;
     } catch (_e2) {
-      console.warn("Could not reveal file or open directory:", filePath);
+      try {
+        const parent = filePath.replace(/[/\\][^/\\]+$/, "");
+        await openPath(parent || filePath);
+        return true;
+      } catch (_e3) {
+        console.warn("Could not reveal file or open directory:", filePath);
+        return false;
+      }
+    }
+  }
+}
+
+export async function openDownloadedFile(filePath: string): Promise<boolean> {
+  try {
+    await api.openFile(filePath);
+    return true;
+  } catch (_e1) {
+    try {
+      await openPath(filePath);
+      return true;
+    } catch (_e2) {
+      console.warn("Could not open file:", filePath);
       return false;
     }
   }

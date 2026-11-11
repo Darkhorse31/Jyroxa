@@ -3,6 +3,7 @@ import {
   api,
   type AddDownloadArgs,
   type AppSettings,
+  type FileCategory,
   type GrabOptionsDto,
   type LinkInfo,
 } from "./api";
@@ -10,6 +11,7 @@ import {
   basenameFromUrl,
   extractHost,
   fmtBytes,
+  getCategoryIcon,
   getFileCategory,
 } from "./formatters";
 import { icons } from "./icons";
@@ -20,6 +22,8 @@ interface LinkItemState {
   packageName: string;
   selected: boolean;
   filename: string;
+  category: FileCategory;
+  isDirty: boolean;
 }
 
 export class LinkGrabberView {
@@ -42,7 +46,7 @@ export class LinkGrabberView {
     this.settings = s;
     const folderInput = this.container.querySelector("#grab-folder") as HTMLInputElement;
     if (folderInput && !folderInput.value) {
-      folderInput.value = s.default_folder;
+      folderInput.value = s.download_dir || s.default_folder || "";
     }
   }
 
@@ -120,59 +124,76 @@ export class LinkGrabberView {
           </div>
         </div>
 
-        <div class="results-batch-actions">
-          <div class="batch-select-btns">
-            <button type="button" id="grab-select-all" class="btn-mini">Select all</button>
-            <button type="button" id="grab-deselect-all" class="btn-mini">Deselect all</button>
+        <div class="results-meta-summary">
+          <div class="selection-ctrls">
+            <button type="button" class="btn-mini" id="grab-sel-all">Select all</button>
+            <button type="button" class="btn-mini" id="grab-sel-none">Deselect all</button>
           </div>
-          <span class="batch-selection-count" id="grab-selection-count">0 links selected</span>
+          <span class="selection-count-badge" id="grab-selection-badge">0 links selected</span>
         </div>
 
-        <div id="grab-packages-list" class="grab-packages-list"></div>
+        <div class="packages-list" id="grab-packages-list"></div>
 
-        <div class="grab-queue-bar">
-          <div class="queue-folder-row">
-            <label class="input-label" for="grab-folder">Save to folder</label>
+        <div class="grabber-destination-card">
+          <div class="dest-row">
+            <label class="input-label" for="grab-folder">Download destination</label>
             <div class="input-with-btn">
-              <input type="text" id="grab-folder" class="form-input" value="${this.settings?.default_folder ?? ""}" />
-              <button type="button" id="btn-grab-pick-folder" class="btn secondary">
+              <input type="text" id="grab-folder" class="form-input" value="${this.settings?.download_dir || this.settings?.default_folder || ""}" />
+              <button type="button" id="grab-pick-folder" class="btn secondary">
                 ${icons.folder(15)} Browse
               </button>
             </div>
           </div>
-          <div class="queue-actions-row">
-            <button type="button" id="btn-grab-queue-selected" class="btn primary">
+
+          <div class="dest-actions-row">
+            <button type="button" id="grab-queue-selected" class="btn primary">
               ${icons.download(15)} Add selected to queue
             </button>
-            <button type="button" id="btn-grab-queue-all" class="btn secondary">
-              Add all to queue
-            </button>
+            <button type="button" id="grab-clear-results" class="btn secondary">Clear results</button>
           </div>
         </div>
       </div>
     `;
 
-    this.wireEvents();
+    this.wireListeners();
   }
 
-  private wireEvents() {
+  private wireListeners() {
     const runBtn = this.container.querySelector("#grab-run") as HTMLButtonElement;
     const clearBtn = this.container.querySelector("#grab-clear") as HTMLButtonElement;
-    const browseBtn = this.container.querySelector("#btn-grab-pick-folder") as HTMLButtonElement;
-    const selectAllBtn = this.container.querySelector("#grab-select-all") as HTMLButtonElement;
-    const deselectAllBtn = this.container.querySelector("#grab-deselect-all") as HTMLButtonElement;
-    const queueSelectedBtn = this.container.querySelector("#btn-grab-queue-selected") as HTMLButtonElement;
-    const queueAllBtn = this.container.querySelector("#btn-grab-queue-all") as HTMLButtonElement;
-    const searchInput = this.container.querySelector("#grab-filter-search") as HTMLInputElement;
+    const inputEl = this.container.querySelector("#grab-input") as HTMLTextAreaElement;
 
-    runBtn?.addEventListener("click", () => void this.runProbe());
+    const filterSearch = this.container.querySelector("#grab-filter-search") as HTMLInputElement;
+    const selAllBtn = this.container.querySelector("#grab-sel-all") as HTMLButtonElement;
+    const selNoneBtn = this.container.querySelector("#grab-sel-none") as HTMLButtonElement;
+    const pickFolderBtn = this.container.querySelector("#grab-pick-folder") as HTMLButtonElement;
+    const queueBtn = this.container.querySelector("#grab-queue-selected") as HTMLButtonElement;
+    const clearResultsBtn = this.container.querySelector("#grab-clear-results") as HTMLButtonElement;
+
+    runBtn?.addEventListener("click", () => this.runProbe());
     clearBtn?.addEventListener("click", () => {
-      const inputEl = this.container.querySelector("#grab-input") as HTMLTextAreaElement;
-      if (inputEl) inputEl.value = "";
+      inputEl.value = "";
       this.clearResults();
     });
 
-    browseBtn?.addEventListener("click", async () => {
+    filterSearch?.addEventListener("input", (e) => {
+      this.resultSearchQuery = (e.target as HTMLInputElement).value.toLowerCase().trim();
+      this.renderPackageList();
+    });
+
+    selAllBtn?.addEventListener("click", () => {
+      this.itemStates.forEach((i) => (i.selected = true));
+      this.renderPackageList();
+      this.updateSelectionSummary();
+    });
+
+    selNoneBtn?.addEventListener("click", () => {
+      this.itemStates.forEach((i) => (i.selected = false));
+      this.renderPackageList();
+      this.updateSelectionSummary();
+    });
+
+    pickFolderBtn?.addEventListener("click", async () => {
       const picked = await open({ directory: true, multiple: false });
       if (picked) {
         const folderInput = this.container.querySelector("#grab-folder") as HTMLInputElement;
@@ -180,72 +201,129 @@ export class LinkGrabberView {
       }
     });
 
-    selectAllBtn?.addEventListener("click", () => this.toggleSelectAll(true));
-    deselectAllBtn?.addEventListener("click", () => this.toggleSelectAll(false));
+    clearResultsBtn?.addEventListener("click", () => this.clearResults());
 
-    queueSelectedBtn?.addEventListener("click", () => void this.queueSelected(false));
-    queueAllBtn?.addEventListener("click", () => void this.queueSelected(true));
+    queueBtn?.addEventListener("click", async () => {
+      const selected = this.itemStates.filter((i) => i.selected);
+      if (selected.length === 0) {
+        showToast("No links selected");
+        return;
+      }
 
-    searchInput?.addEventListener("input", (e) => {
-      this.resultSearchQuery = (e.target as HTMLInputElement).value.toLowerCase().trim();
+      const folderInput = this.container.querySelector("#grab-folder") as HTMLInputElement;
+      const folder = folderInput.value.trim() || this.settings?.download_dir || this.settings?.default_folder || ".";
+
+      queueBtn.disabled = true;
+      let queuedCount = 0;
+
+      for (const item of selected) {
+        const args: AddDownloadArgs = {
+          urls: [item.link.url],
+          output_dir: folder,
+          filename: item.filename,
+          connections: 8,
+          connections_auto: true,
+        };
+
+        try {
+          await api.addDownload(args);
+          queuedCount++;
+        } catch (err) {
+          console.error(`Failed to queue ${item.link.url}:`, err);
+        }
+      }
+
+      queueBtn.disabled = false;
+      showToast(`Added ${queuedCount} downloads to queue`);
+      await this.onDownloadsChanged();
+
+      // Remove queued items from results
+      this.itemStates = this.itemStates.filter((i) => !i.selected);
+      this.renderFilterChips();
       this.renderPackageList();
+      this.updateSelectionSummary();
+
+      if (this.itemStates.length === 0) {
+        this.clearResults();
+      }
     });
   }
 
   private async runProbe() {
     if (this.isProbing) return;
-    const input = (this.container.querySelector("#grab-input") as HTMLTextAreaElement).value.trim();
-    if (!input) {
-      showToast("Please enter at least one URL or text to probe");
+    const inputEl = this.container.querySelector("#grab-input") as HTMLTextAreaElement;
+    const deepCb = this.container.querySelector("#grab-deep") as HTMLInputElement;
+    const hostInput = this.container.querySelector("#grab-host") as HTMLInputElement;
+    const extInput = this.container.querySelector("#grab-ext") as HTMLInputElement;
+    const minInput = this.container.querySelector("#grab-min") as HTMLInputElement;
+    const maxInput = this.container.querySelector("#grab-max") as HTMLInputElement;
+    const runBtn = this.container.querySelector("#grab-run") as HTMLButtonElement;
+
+    const text = inputEl.value.trim();
+    if (!text) {
+      showToast("Please enter URLs or webpage content to probe");
       return;
     }
 
-    const runBtn = this.container.querySelector("#grab-run") as HTMLButtonElement;
+    const exts = extInput.value
+      .split(",")
+      .map((s) => s.trim())
+      .filter(Boolean);
+
+    const options: GrabOptionsDto = {
+      deep: deepCb.checked,
+      include_ext: exts.length > 0 ? exts : undefined,
+      min_size: minInput.value ? Number(minInput.value) : undefined,
+      max_size: maxInput.value ? Number(maxInput.value) : undefined,
+      host_filter: hostInput.value.trim() || undefined,
+      no_probe: false,
+    };
+
     this.isProbing = true;
     runBtn.disabled = true;
     runBtn.innerHTML = `${icons.refresh(15)} Probing links...`;
 
-    const deep = (this.container.querySelector("#grab-deep") as HTMLInputElement).checked;
-    const host = (this.container.querySelector("#grab-host") as HTMLInputElement).value.trim();
-    const extRaw = (this.container.querySelector("#grab-ext") as HTMLInputElement).value.trim();
-    const min = Number((this.container.querySelector("#grab-min") as HTMLInputElement).value) || undefined;
-    const max = Number((this.container.querySelector("#grab-max") as HTMLInputElement).value) || undefined;
-
-    const options: GrabOptionsDto = {
-      deep,
-      host_filter: host || undefined,
-      include_ext: extRaw
-        ? extRaw.split(",").map((s) => s.trim().toLowerCase().replace(/^\./, "")).filter(Boolean)
-        : undefined,
-      min_size: min,
-      max_size: max,
-      no_probe: false,
-    };
-
     const resultsArea = this.container.querySelector("#grab-results-area") as HTMLElement;
-    resultsArea.classList.remove("hidden");
-
     const packagesList = this.container.querySelector("#grab-packages-list") as HTMLElement;
-    packagesList.innerHTML = `<div class="probe-loading">${icons.refresh(20)} Probing and extracting metadata...</div>`;
+    resultsArea.classList.remove("hidden");
+    packagesList.innerHTML = `<div class="grab-loading-state">${icons.spinner(24)}<span>Probing and analyzing links...</span></div>`;
 
     try {
-      const packages = await api.grabLinks(input, options);
+      const packages = await api.grabLinks(text, options);
+      const folderInput = this.container.querySelector("#grab-folder") as HTMLInputElement;
+      const destDir = folderInput?.value.trim() || this.settings?.download_dir || this.settings?.default_folder || ".";
+
       this.itemStates = [];
 
       for (const pkg of packages) {
         for (const link of pkg.links) {
+          const rawName = link.filename || basenameFromUrl(link.url);
+          const cat = getFileCategory(rawName, link.mime);
+
+          // Auto-dedupe with backend suggest_save_path if available
+          let dedupedName = rawName;
+          try {
+            const suggested = await api.suggestSavePath(destDir, rawName);
+            const base = suggested.replace(/^.*[\\\/]/, "");
+            if (base) dedupedName = base;
+          } catch {
+            // graceful fallback
+          }
+
           this.itemStates.push({
             link,
-            packageName: pkg.name || "Default Package",
+            packageName: pkg.name || "Default",
             selected: true,
-            filename: link.filename || basenameFromUrl(link.url),
+            filename: dedupedName,
+            category: cat,
+            isDirty: false,
           });
         }
       }
 
       this.renderFilterChips();
       this.renderPackageList();
-      this.updateSelectionStats();
+      this.updateSelectionSummary();
     } catch (e) {
       packagesList.innerHTML = `<div class="probe-error">${icons.alertCircle(18)} Failed to probe links: ${e}</div>`;
     } finally {
@@ -265,36 +343,32 @@ export class LinkGrabberView {
     const chipsRow = this.container.querySelector("#grab-chips-row") as HTMLElement;
     if (!chipsRow) return;
 
-    // Count categories
     const counts: Record<string, number> = {
       all: this.itemStates.length,
-      video: 0,
-      audio: 0,
-      archive: 0,
-      image: 0,
-      document: 0,
-      executable: 0,
-      other: 0,
+      Video: 0,
+      Music: 0,
+      Documents: 0,
+      Compressed: 0,
+      Programs: 0,
+      Other: 0,
     };
 
     for (const item of this.itemStates) {
-      const cat = getFileCategory(item.filename);
-      if (counts[cat] !== undefined) {
-        counts[cat]++;
+      if (counts[item.category] !== undefined) {
+        counts[item.category]++;
       } else {
-        counts.other++;
+        counts.Other++;
       }
     }
 
     const categories: { id: string; label: string }[] = [
       { id: "all", label: "All" },
-      { id: "video", label: "Video" },
-      { id: "audio", label: "Audio" },
-      { id: "archive", label: "Archive" },
-      { id: "document", label: "Docs" },
-      { id: "image", label: "Image" },
-      { id: "executable", label: "Apps" },
-      { id: "other", label: "Other" },
+      { id: "Video", label: "Video" },
+      { id: "Music", label: "Music" },
+      { id: "Documents", label: "Documents" },
+      { id: "Compressed", label: "Compressed" },
+      { id: "Programs", label: "Programs" },
+      { id: "Other", label: "Other" },
     ];
 
     chipsRow.innerHTML = categories
@@ -309,7 +383,7 @@ export class LinkGrabberView {
           <span>${c.label}</span>
           <span class="chip-count">${counts[c.id]}</span>
         </button>
-      `,
+      `
       )
       .join("");
 
@@ -328,19 +402,15 @@ export class LinkGrabberView {
     if (!listEl) return;
 
     if (this.itemStates.length === 0) {
-      listEl.innerHTML = `<div class="empty">No links found matching your filters.</div>`;
+      listEl.innerHTML = `<div class="empty">No links found matching your criteria.</div>`;
       return;
     }
 
-    // Group items by package name
     const grouped = new Map<string, LinkItemState[]>();
     for (const item of this.itemStates) {
-      // Apply category filter
-      if (this.activeCategoryFilter !== "all") {
-        const cat = getFileCategory(item.filename);
-        if (cat !== this.activeCategoryFilter) continue;
+      if (this.activeCategoryFilter !== "all" && item.category !== this.activeCategoryFilter) {
+        continue;
       }
-      // Apply search filter
       if (this.resultSearchQuery) {
         const match =
           item.filename.toLowerCase().includes(this.resultSearchQuery) ||
@@ -362,73 +432,54 @@ export class LinkGrabberView {
     let html = "";
     for (const [pkgName, items] of grouped.entries()) {
       const allSelected = items.every((i) => i.selected);
-      const someSelected = items.some((i) => i.selected) && !allSelected;
       const totalPkgSize = items.reduce((sum, i) => sum + (i.link.size ?? 0), 0);
 
       const rowsHtml = items
-        .map((item, idx) => {
-          const cat = getFileCategory(item.filename);
-          const iconFn = (icons as Record<string, (size?: number) => string>)[cat] || icons.other;
+        .map((item) => {
+          const cat = item.category;
           const host = extractHost(item.link.url);
           const sz = item.link.size != null ? fmtBytes(item.link.size) : "—";
           const resumablePill = item.link.resumable
             ? `<span class="pill-mini yes" title="Resume supported">${icons.check(11)} Resumable</span>`
-            : `<span class="pill-mini no" title="Resume unknown or unsupported">Non-resumable</span>`;
+            : `<span class="pill-mini no" title="Resume unsupported">Non-resumable</span>`;
 
           return `
             <tr class="grab-row ${item.selected ? "selected" : ""}" data-url="${this.escapeHtml(item.link.url)}">
               <td class="col-check">
-                <input type="checkbox" class="form-checkbox link-cb" ${item.selected ? "checked" : ""} data-idx="${idx}" />
+                <input type="checkbox" class="form-checkbox item-checkbox" ${item.selected ? "checked" : ""} />
               </td>
               <td class="col-icon">
-                <div class="grab-item-icon cat-${cat}">${iconFn(16)}</div>
+                ${getCategoryIcon(cat, 18)}
               </td>
-              <td class="col-name">
-                <div class="editable-name-wrap">
-                  <input type="text" class="form-input input-inline link-name-input" value="${this.escapeHtml(item.filename)}" title="Edit filename" />
-                </div>
+              <td class="col-filename">
+                <input type="text" class="form-input input-filename-edit" value="${this.escapeHtml(item.filename)}" title="${this.escapeHtml(item.filename)}" />
+                <span class="category-pill-mini cat-${cat.toLowerCase()}">${cat}</span>
               </td>
-              <td class="col-host"><span class="host-pill">${this.escapeHtml(host)}</span></td>
-              <td class="col-mime"><span class="mime-text">${this.escapeHtml(item.link.mime || "—")}</span></td>
-              <td class="col-size"><span class="size-text">${sz}</span></td>
+              <td class="col-size">${sz}</td>
               <td class="col-resumable">${resumablePill}</td>
+              <td class="col-host code" title="${this.escapeHtml(item.link.url)}">${this.escapeHtml(host)}</td>
+              <td class="col-actions">
+                <button type="button" class="btn-icon btn-remove-item" title="Remove link">${icons.x(14)}</button>
+              </td>
             </tr>
           `;
         })
         .join("");
 
       html += `
-        <div class="grab-package-card" data-package="${this.escapeHtml(pkgName)}">
-          <div class="package-card-header">
-            <div class="package-title-group">
-              <input
-                type="checkbox"
-                class="form-checkbox pkg-cb"
-                ${allSelected ? "checked" : ""}
-                ${someSelected ? 'data-indeterminate="true"' : ""}
-                title="Select / deselect all in this package"
-              />
-              <span class="package-icon">${icons.package(16)}</span>
-              <span class="package-name">${this.escapeHtml(pkgName)}</span>
-              <span class="package-meta">${items.length} files · ${fmtBytes(totalPkgSize)}</span>
+        <div class="package-card">
+          <div class="package-header">
+            <div class="pkg-header-left">
+              <input type="checkbox" class="form-checkbox pkg-checkbox" ${allSelected ? "checked" : ""} />
+              <span class="pkg-title">${this.escapeHtml(pkgName)}</span>
+              <span class="pkg-count">(${items.length} file${items.length === 1 ? "" : "s"})</span>
             </div>
-            <button type="button" class="btn-icon btn-pkg-toggle" title="Toggle package view">
-              ${icons.chevronDown(15)}
-            </button>
+            <div class="pkg-header-right">
+              <span class="pkg-total-size">${fmtBytes(totalPkgSize)}</span>
+            </div>
           </div>
-          <div class="package-card-body">
+          <div class="package-table-wrap">
             <table class="grab-table">
-              <thead>
-                <tr>
-                  <th class="col-check"></th>
-                  <th class="col-icon"></th>
-                  <th class="col-name">File Name</th>
-                  <th class="col-host">Host</th>
-                  <th class="col-mime">Type</th>
-                  <th class="col-size">Size</th>
-                  <th class="col-resumable">Resume</th>
-                </tr>
-              </thead>
               <tbody>${rowsHtml}</tbody>
             </table>
           </div>
@@ -437,147 +488,69 @@ export class LinkGrabberView {
     }
 
     listEl.innerHTML = html;
-    this.wirePackageEvents(listEl);
-  }
 
-  private wirePackageEvents(listEl: HTMLElement) {
-    // Set indeterminate state on checkboxes
-    listEl.querySelectorAll<HTMLInputElement>(".pkg-cb[data-indeterminate]").forEach((cb) => {
-      cb.indeterminate = true;
-    });
-
-    // Package checkbox toggle
-    listEl.querySelectorAll<HTMLInputElement>(".pkg-cb").forEach((cb) => {
-      cb.addEventListener("change", (e) => {
-        const card = (e.target as HTMLElement).closest(".grab-package-card")!;
-        const pkgName = card.getAttribute("data-package")!;
-        const checked = (e.target as HTMLInputElement).checked;
-
-        for (const item of this.itemStates) {
-          if (item.packageName === pkgName) {
-            item.selected = checked;
-          }
-        }
+    // Attach listeners for checkboxes and inputs
+    listEl.querySelectorAll<HTMLInputElement>(".pkg-checkbox").forEach((pkgCb, pkgIdx) => {
+      pkgCb.addEventListener("change", () => {
+        const pkgNames = Array.from(grouped.keys());
+        const pkgName = pkgNames[pkgIdx];
+        const items = grouped.get(pkgName) || [];
+        items.forEach((i) => (i.selected = pkgCb.checked));
         this.renderPackageList();
-        this.updateSelectionStats();
+        this.updateSelectionSummary();
       });
     });
 
-    // Individual link checkbox toggle
-    listEl.querySelectorAll<HTMLInputElement>(".link-cb").forEach((cb) => {
-      cb.addEventListener("change", (e) => {
-        const row = (e.target as HTMLElement).closest("tr")!;
-        const url = row.getAttribute("data-url")!;
-        const checked = (e.target as HTMLInputElement).checked;
+    listEl.querySelectorAll<HTMLTableRowElement>(".grab-row").forEach((row) => {
+      const url = row.dataset.url;
+      const item = this.itemStates.find((i) => i.link.url === url);
+      if (!item) return;
 
-        const found = this.itemStates.find((i) => i.link.url === url);
-        if (found) {
-          found.selected = checked;
-        }
-        this.updateSelectionStats();
-        // Update package checkbox state
-        const card = row.closest(".grab-package-card")!;
-        const pkgName = card.getAttribute("data-package")!;
-        const pkgItems = this.itemStates.filter((i) => i.packageName === pkgName);
-        const pkgCb = card.querySelector(".pkg-cb") as HTMLInputElement;
-        if (pkgCb) {
-          const all = pkgItems.every((i) => i.selected);
-          const some = pkgItems.some((i) => i.selected) && !all;
-          pkgCb.checked = all;
-          pkgCb.indeterminate = some;
-        }
-        row.classList.toggle("selected", checked);
+      const cb = row.querySelector(".item-checkbox") as HTMLInputElement;
+      cb?.addEventListener("change", () => {
+        item.selected = cb.checked;
+        row.classList.toggle("selected", cb.checked);
+        this.updateSelectionSummary();
       });
-    });
 
-    // Editable filename input
-    listEl.querySelectorAll<HTMLInputElement>(".link-name-input").forEach((inp) => {
-      inp.addEventListener("change", (e) => {
-        const row = (e.target as HTMLElement).closest("tr")!;
-        const url = row.getAttribute("data-url")!;
-        const val = (e.target as HTMLInputElement).value.trim();
-        const found = this.itemStates.find((i) => i.link.url === url);
-        if (found && val) {
-          found.filename = val;
-        }
+      const fnInput = row.querySelector(".input-filename-edit") as HTMLInputElement;
+      fnInput?.addEventListener("input", () => {
+        item.filename = fnInput.value.trim() || basenameFromUrl(item.link.url);
+        item.isDirty = true;
       });
-    });
 
-    // Toggle package collapse
-    listEl.querySelectorAll(".btn-pkg-toggle").forEach((btn) => {
-      btn.addEventListener("click", () => {
-        const card = btn.closest(".grab-package-card")!;
-        const body = card.querySelector(".package-card-body")!;
-        body.classList.toggle("hidden");
-        btn.innerHTML = body.classList.contains("hidden")
-          ? icons.chevronDown(15)
-          : icons.chevronUp(15);
+      const removeBtn = row.querySelector(".btn-remove-item");
+      removeBtn?.addEventListener("click", () => {
+        this.itemStates = this.itemStates.filter((i) => i !== item);
+        this.renderFilterChips();
+        this.renderPackageList();
+        this.updateSelectionSummary();
       });
     });
   }
 
-  private toggleSelectAll(select: boolean) {
-    for (const item of this.itemStates) {
-      item.selected = select;
-    }
-    this.renderPackageList();
-    this.updateSelectionStats();
-  }
-
-  private updateSelectionStats() {
+  private updateSelectionSummary() {
     const selected = this.itemStates.filter((i) => i.selected);
-    const totalSize = selected.reduce((sum, i) => sum + (i.link.size ?? 0), 0);
-    const countEl = this.container.querySelector("#grab-selection-count");
-    if (countEl) {
-      countEl.textContent = `${selected.length} of ${this.itemStates.length} links selected (${fmtBytes(totalSize)})`;
+    const badge = this.container.querySelector("#grab-selection-badge");
+    const totalSelectedBytes = selected.reduce((sum, i) => sum + (i.link.size ?? 0), 0);
+
+    if (badge) {
+      badge.textContent = `${selected.length} of ${this.itemStates.length} selected (${fmtBytes(totalSelectedBytes)})`;
     }
 
-    const queueBtn = this.container.querySelector("#btn-grab-queue-selected") as HTMLButtonElement;
+    const queueBtn = this.container.querySelector("#grab-queue-selected") as HTMLButtonElement;
     if (queueBtn) {
       queueBtn.disabled = selected.length === 0;
-      queueBtn.innerHTML = `${icons.download(15)} Add ${selected.length} to queue`;
+      queueBtn.textContent = `Add ${selected.length} download${selected.length === 1 ? "" : "s"} to queue`;
     }
   }
 
-  private async queueSelected(all: boolean) {
-    const folderInput = this.container.querySelector("#grab-folder") as HTMLInputElement;
-    const folder = folderInput.value.trim() || this.settings?.default_folder || ".";
-
-    const targets = all ? this.itemStates : this.itemStates.filter((i) => i.selected);
-    if (targets.length === 0) {
-      showToast("No links selected to queue");
-      return;
-    }
-
-    const queueSelectedBtn = this.container.querySelector("#btn-grab-queue-selected") as HTMLButtonElement;
-    const queueAllBtn = this.container.querySelector("#btn-grab-queue-all") as HTMLButtonElement;
-    if (queueSelectedBtn) queueSelectedBtn.disabled = true;
-    if (queueAllBtn) queueAllBtn.disabled = true;
-
-    try {
-      for (const item of targets) {
-        const args: AddDownloadArgs = {
-          urls: [item.link.url],
-          output_dir: folder,
-          filename: item.filename,
-          connections: 8,
-          connections_auto: true,
-        };
-        await api.addDownload(args);
-      }
-      showToast(`Added ${targets.length} downloads to queue!`);
-      await this.onDownloadsChanged();
-    } catch (e) {
-      showToast(`Failed to add downloads: ${e}`);
-    } finally {
-      if (queueSelectedBtn) queueSelectedBtn.disabled = false;
-      if (queueAllBtn) queueAllBtn.disabled = false;
-    }
-  }
-
-  private escapeHtml(text: string): string {
-    const div = document.createElement("div");
-    div.textContent = text;
-    return div.innerHTML;
+  private escapeHtml(str: string): string {
+    return (str || "")
+      .replace(/&/g, "&amp;")
+      .replace(/</g, "&lt;")
+      .replace(/>/g, "&gt;")
+      .replace(/"/g, "&quot;")
+      .replace(/'/g, "&#039;");
   }
 }
