@@ -1,0 +1,39 @@
+<resources>
+    <string name="app_name">SwiftGet</string>
+    <string name="nav_downloads">Downloads</string>
+    <string name="nav_add">Add</string>
+    <string name="nav_linkgrabber">LinkGrabber</string>
+    <string name="nav_settings">Settings</string>
+
+    <!-- Notification Strings -->
+    <plurals name="active_downloads_count">
+        <item quantity="one">%1$d active download</item>
+        <item quantity="other">%1$d active downloads</item>
+    </plurals>
+    <string name="notification_channel_name">Download Manager</string>
+    <string name="notification_channel_desc">Active download status and speed</string>
+    <string name="notification_downloading">%1$d active download(s)</string>
+    <string name="notification_action_pause">Pause All</string>
+    <string name="notification_action_resume">Resume All</string>
+    <string name="notification_action_cancel">Cancel</string>
+
+    <!-- General Actions -->
+    <string name="action_start">Start</string>
+    <string name="action_pause">Pause</string>
+    <string name="action_resume">Resume</string>
+    <string name="action_cancel">Cancel</string>
+    <string name="action_delete">Delete</string>
+    <string name="action_retry">Retry</string>
+    <string name="action_open">Open</string>
+    <string name="action_share">Share</string>
+    <string name="action_copy_url">Copy URL</string>
+    <string name="action_paste">Paste</string>
+    <string name="action_grab_links">Grab Links</string>
+    <string name="action_add_selected">Add Selected</string>
+    <string name="action_select_all">Select All</string>
+    <string name="action_deselect_all">Deselect All</string>
+
+    <!-- Clipboard Banner -->
+    <string name="clipboard_detected_title">Link detected in clipboard</string>
+    <string name="clipboard_detected_action">Add Download</string>
+</resources>
