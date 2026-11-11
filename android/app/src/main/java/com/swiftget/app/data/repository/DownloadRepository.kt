@@ -157,7 +157,7 @@ class DownloadRepository(
         val ubuntuDownload = createInitialItem(
             id = 1L,
             url = "https://releases.ubuntu.com/24.04/ubuntu-24.04-desktop-amd64.iso",
-            output = "/storage/emulated/0/Download/SwiftGet/ubuntu-24.04-desktop-amd64.iso",
+            output = "/storage/emulated/0/Download/Jyroxa/ubuntu-24.04-desktop-amd64.iso",
             connections = 8,
             totalBytes = 6_012_954_624L, // ~5.6 GB
             downloadedBytes = 2_705_829_580L, // ~45%
@@ -167,7 +167,7 @@ class DownloadRepository(
         val rustDownload = createInitialItem(
             id = 2L,
             url = "https://static.rust-lang.org/dist/rust-1.80.0-x86_64-unknown-linux-gnu.tar.gz",
-            output = "/storage/emulated/0/Download/SwiftGet/rust-1.80.0-x86_64-unknown-linux-gnu.tar.gz",
+            output = "/storage/emulated/0/Download/Jyroxa/rust-1.80.0-x86_64-unknown-linux-gnu.tar.gz",
             connections = 4,
             totalBytes = 345_280_192L,
             downloadedBytes = 172_640_096L,

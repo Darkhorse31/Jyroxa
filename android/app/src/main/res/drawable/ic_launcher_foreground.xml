@@ -4,14 +4,40 @@
     android:height="108dp"
     android:viewportWidth="108"
     android:viewportHeight="108">
-    <!-- Arrow down (download) with swift motion wings -->
-    <path
-        android:fillColor="#00D4FF"
-        android:pathData="M54,28L36,50H48V68H60V50H72L54,28Z"/>
-    <path
-        android:fillColor="#0066FF"
-        android:pathData="M32,74H76V80H32V74Z"/>
-    <path
-        android:fillColor="#38BDF8"
-        android:pathData="M24,42L28,48H36L30,42H24ZM84,42L78,48H72L78,42H84Z"/>
+    <group
+        android:translateX="14.706977"
+        android:translateY="14.706977"
+        android:scaleX="0.15348837"
+        android:scaleY="0.15348837">
+        <!-- 1. Orbit back (coral #FF5A3C stroke 30) -->
+        <path
+            android:strokeColor="#FF5A3C"
+            android:strokeWidth="30"
+            android:pathData="M 88.824,337.537 C 73.814,306.761 136.492,245.306 228.821,200.275 C 321.15,155.243 408.165,143.687 423.176,174.463" />
+        <!-- 2. Ring gap (white stroke 50) -->
+        <path
+            android:strokeColor="#FFFFFF"
+            android:strokeWidth="50"
+            android:pathData="M 368,256 C 368,317.856 317.856,368 256,368 C 194.144,368 144,317.856 144,256 C 144,194.144 194.144,144 256,144 C 317.856,144 368,194.144 368,256 Z" />
+        <!-- 3. Ring (teal #0F766E stroke 30) -->
+        <path
+            android:strokeColor="#0F766E"
+            android:strokeWidth="30"
+            android:pathData="M 368,256 C 368,317.856 317.856,368 256,368 C 194.144,368 144,317.856 144,256 C 144,194.144 194.144,144 256,144 C 317.856,144 368,194.144 368,256 Z" />
+        <!-- 4. Front lower half of orbit: gap white stroke 50 then coral stroke 30 -->
+        <path
+            android:strokeColor="#FFFFFF"
+            android:strokeWidth="50"
+            android:strokeLineCap="butt"
+            android:pathData="M 423.176,174.463 C 438.186,205.239 375.508,266.694 283.179,311.725 C 190.85,356.757 103.835,368.313 88.824,337.537" />
+        <path
+            android:strokeColor="#FF5A3C"
+            android:strokeWidth="30"
+            android:strokeLineCap="butt"
+            android:pathData="M 423.176,174.463 C 438.186,205.239 375.508,266.694 283.179,311.725 C 190.85,356.757 103.835,368.313 88.824,337.537" />
+        <!-- 5. Core dot teal fill -->
+        <path
+            android:fillColor="#0F766E"
+            android:pathData="M 298,256 C 298,279.196 279.196,298 256,298 C 232.804,298 214,279.196 214,256 C 214,232.804 232.804,214 256,214 C 279.196,214 298,232.804 298,256 Z" />
+    </group>
 </vector>

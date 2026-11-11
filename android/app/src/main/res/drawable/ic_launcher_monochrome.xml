@@ -1,0 +1,27 @@
+<?xml version="1.0" encoding="utf-8"?>
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="108dp"
+    android:height="108dp"
+    android:viewportWidth="108"
+    android:viewportHeight="108">
+    <group
+        android:translateX="14.706977"
+        android:translateY="14.706977"
+        android:scaleX="0.15348837"
+        android:scaleY="0.15348837">
+        <!-- Orbit ellipse (full) -->
+        <path
+            android:strokeColor="#000000"
+            android:strokeWidth="30"
+            android:pathData="M 423.176,174.463 C 438.186,205.239 375.508,266.694 283.179,311.725 C 190.85,356.757 103.835,368.313 88.824,337.537 C 73.814,306.761 136.492,245.306 228.821,200.275 C 321.15,155.243 408.165,143.687 423.176,174.463 Z" />
+        <!-- Ring -->
+        <path
+            android:strokeColor="#000000"
+            android:strokeWidth="30"
+            android:pathData="M 368,256 C 368,317.856 317.856,368 256,368 C 194.144,368 144,317.856 144,256 C 144,194.144 194.144,144 256,144 C 317.856,144 368,194.144 368,256 Z" />
+        <!-- Core dot -->
+        <path
+            android:fillColor="#000000"
+            android:pathData="M 298,256 C 298,279.196 279.196,298 256,298 C 232.804,298 214,279.196 214,256 C 214,232.804 232.804,214 256,214 C 279.196,214 298,232.804 298,256 Z" />
+    </group>
+</vector>

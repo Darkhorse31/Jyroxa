@@ -1,16 +1,18 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
-    <color name="primary">#0066FF</color>
-    <color name="primary_variant">#0052CC</color>
-    <color name="secondary">#00D4FF</color>
-    <color name="background_light">#F8F9FA</color>
+    <color name="primary">#0F766E</color>
+    <color name="primary_variant">#0D9488</color>
+    <color name="secondary">#2DD4BF</color>
+    <color name="tertiary">#FF5A3C</color>
+    <color name="accent_coral">#FF5A3C</color>
+    <color name="background_light">#F8FAFC</color>
     <color name="surface_light">#FFFFFF</color>
-    <color name="text_primary_light">#1A1A1A</color>
-    <color name="background_dark">#121212</color>
-    <color name="surface_dark">#1E1E1E</color>
-    <color name="text_primary_dark">#EEEEEE</color>
-    <color name="accent_green">#00C853</color>
-    <color name="accent_amber">#FFB300</color>
-    <color name="accent_red">#D50000</color>
-    <color name="ic_launcher_background">#0F172A</color>
+    <color name="text_primary_light">#0F172A</color>
+    <color name="background_dark">#0B1020</color>
+    <color name="surface_dark">#0F172A</color>
+    <color name="text_primary_dark">#F1F5F9</color>
+    <color name="accent_green">#10B981</color>
+    <color name="accent_amber">#F59E0B</color>
+    <color name="accent_red">#EF4444</color>
+    <color name="ic_launcher_background">#FFFFFF</color>
 </resources>

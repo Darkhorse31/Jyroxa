@@ -67,7 +67,7 @@ fun LinkGrabberScreen(
     linkProbeRepository: LinkProbeRepository,
     downloadRepository: DownloadRepository,
     initialSharedText: String? = null,
-    defaultDownloadDirectory: String = "/storage/emulated/0/Download/SwiftGet",
+    defaultDownloadDirectory: String = "/storage/emulated/0/Download/Jyroxa",
     onBatchAdded: () -> Unit = {},
     modifier: Modifier = Modifier
 ) {
