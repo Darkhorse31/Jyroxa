@@ -21,8 +21,8 @@ cargo build --release
 cargo test
 ```
 
-`cargo build` / `cargo test` use workspace `default-members` (the three Phase 1 crates only).
-Tauri desktop is built separately (below).
+`cargo build` / `cargo test` use workspace `default-members` (core, CLI, FFI only).
+The Tauri crate is a workspace member for `cargo metadata`, but is built separately (below).
 
 ## raw-dylib workaround
 

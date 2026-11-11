@@ -667,7 +667,8 @@ pub fn clipboard_url_re() -> &'static regex::Regex {
 }
 
 pub async fn run_clipboard_monitor(app: AppHandle) {
-    let mut last = String::new();
+    let mut last_clipboard = String::new();
+    let mut last_emitted_url = String::new();
     loop {
         tokio::time::sleep(std::time::Duration::from_millis(1200)).await;
         let state = app.try_state::<EngineState>();
@@ -677,16 +678,16 @@ pub async fn run_clipboard_monitor(app: AppHandle) {
             continue;
         }
         let text = app.clipboard().read_text().unwrap_or_default();
-        if text == last || text.is_empty() {
+        if text == last_clipboard || text.is_empty() {
             continue;
         }
+        last_clipboard = text.clone();
         if let Some(m) = clipboard_url_re().find(&text) {
             let url = m.as_str().to_string();
-            if url != last {
-                last = url.clone();
+            if url != last_emitted_url {
+                last_emitted_url = url.clone();
                 let _ = app.emit("clipboard-url", url);
             }
         }
-        last = text;
     }
 }
