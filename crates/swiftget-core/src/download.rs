@@ -543,6 +543,11 @@ impl Downloader {
         self.global_limiter = Arc::new(RateLimiter::new(bytes_per_sec));
         self
     }
+
+    /// Update the shared global speed cap without rebuilding the client.
+    pub fn set_global_limit(&mut self, bytes_per_sec: Option<u64>) {
+        self.global_limiter = Arc::new(RateLimiter::new(bytes_per_sec));
+    }
     pub fn with_host_stats(mut self, stats: Arc<HostStats>) -> Self {
         self.host_stats = stats;
         self

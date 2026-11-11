@@ -5,7 +5,12 @@ members = [
     "crates/swiftget-cli",
     "crates/swiftget-ffi",
 ]
-# apps/desktop (Tauri) is reserved for a later phase and intentionally not a member yet.
+default-members = [
+    "crates/swiftget-core",
+    "crates/swiftget-cli",
+    "crates/swiftget-ffi",
+]
+# apps/desktop (Tauri) lives under apps/desktop; build separately (see docs/BUILD_WINDOWS_GNU.md).
 
 [workspace.package]
 version = "0.1.0"

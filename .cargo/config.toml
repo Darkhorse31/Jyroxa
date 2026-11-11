@@ -5,27 +5,31 @@
 # (`windows-sys`, `windows-registry`, ...) use `#[link(kind = "raw-dylib")]`,
 # which makes rustc generate import libraries at link time via `dlltool`.
 #
-# Many deps (`windows-sys`, `windows-registry`, ...) use
-# `#[link(kind = "raw-dylib")]`, making rustc synthesise import libraries at
-# link time via `dlltool`. Both available generators are unusable here: GNU
-# `dlltool` cannot run (no bundled `as.exe`), and LLVM's dlltool produces
-# *corrupt* import tables once feature-unified `windows-sys` grows large enough
-# (duplicate import descriptors with null IAT thunks) -> STATUS_ACCESS_VIOLATION
-# (0xC0000005) at process startup.
+# LLVM's dlltool produces corrupt import tables once feature-unified `windows-sys`
+# grows large enough (duplicate import descriptors with null IAT thunks) ->
+# STATUS_ACCESS_VIOLATION (0xC0000005) at process startup.
 #
-# We therefore avoid raw-dylib entirely by patching `windows-link` (the crate
-# every one of those bindings funnels imports through) to link the classic way
-# (`kind = "dylib", modifiers = "+verbatim"`). The `-L` path below holds correct
-# import archives, each named after its verbatim DLL. Generated once by
-# `.toolbin/gen-winlibs.ps1` with `llvm-dlltool` in plain archive mode from the
-# real system DLL export tables. Build stays self-contained and C-compiler-free.
-# A few crates (e.g. `getrandom`) use `raw-dylib` directly rather than through
-# `windows-link`, so they are not covered by the patch and still need a working
-# `dlltool`. For those small, fixed symbol sets LLVM's dlltool is fine *if* it is
-# not handed the GNU-only flags rustc passes; `.toolbin/dlltool-wrap.exe` strips
-# those and forwards the rest to `llvm-dlltool.exe`.
+# We avoid raw-dylib for the windows-link stack via `vendor/windows-link` (see
+# root `Cargo.toml` `[patch.crates-io]`). Prebuilt import archives live under
+# `.toolbin/winlibs/` (generate with `.toolbin/gen-winlibs.ps1`). Crates that
+# still call raw-dylib directly (e.g. `getrandom`) use `.toolbin/dlltool-wrap.exe`
+# as `-Cdlltool`; paths are injected with an absolute path via `.toolbin/rustc-wrap.exe`
+# because rustc resolves `-Cdlltool` relative to each crate output directory.
+#
+# MSVC / non-GNU targets: this file's `[target.x86_64-pc-windows-gnu]` and
+# `[build]` wrapper apply only on that target. See docs/BUILD_WINDOWS_GNU.md.
+
+[env]
+# Workspace-root paths for `.toolbin/rustc-wrap.exe` (dependency crates may not see `.toolbin` when walking from cwd).
+SWIFTGET_DLLTOOL_WRAP = { value = ".toolbin/dlltool-wrap.exe", relative = true }
+SWIFTGET_WINLIBS = { value = ".toolbin/winlibs", relative = true }
+
+[build]
+# MSVC: omit this line, or install helpers via build-dlltool-wrap.ps1 on GNU hosts only.
+rustc-wrapper = ".toolbin/rustc-wrap.exe"
+
+# Only when compiling/linking for x86_64-pc-windows-gnu.
 [target.x86_64-pc-windows-gnu]
 rustflags = [
-    "-Lnative=E:/SwiftGet/.toolbin/winlibs",
-    "-Cdlltool=E:/SwiftGet/.toolbin/dlltool-wrap.exe",
+    "-Lnative=.toolbin/winlibs",
 ]
