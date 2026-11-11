@@ -18,6 +18,12 @@ pub struct HostRecord {
     pub best_connections: usize,
     /// Throughput (bytes/sec) observed at that count.
     pub best_throughput: f64,
+    /// Per-host connection cap from throttle events (0 = no cap).
+    #[serde(default)]
+    pub host_cap: usize,
+    /// Unix timestamp of the last throttle event (0 = never).
+    #[serde(default)]
+    pub last_throttle: u64,
 }
 
 #[derive(Debug, Default, Serialize, Deserialize)]
@@ -63,6 +69,34 @@ impl HostStats {
                 None
             }
         })
+    }
+
+    /// The remembered host cap for a host (from throttle events), if any.
+    pub fn host_cap(&self, host: &str) -> Option<usize> {
+        let s = self.store.lock().unwrap();
+        s.hosts.get(host).and_then(|r| {
+            if r.host_cap > 0 {
+                Some(r.host_cap)
+            } else {
+                None
+            }
+        })
+    }
+
+    /// Record a throttle event: update the per-host cap.
+    pub fn record_throttle(&self, host: &str, cap: usize) {
+        {
+            let mut s = self.store.lock().unwrap();
+            let rec = s.hosts.entry(host.to_string()).or_default();
+            if rec.host_cap == 0 || cap < rec.host_cap {
+                rec.host_cap = cap;
+            }
+            rec.last_throttle = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|d| d.as_secs())
+                .unwrap_or(0);
+        }
+        let _ = self.persist();
     }
 
     /// Record an observed throughput for a host at a given connection count,

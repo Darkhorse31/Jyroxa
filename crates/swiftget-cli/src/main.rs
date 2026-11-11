@@ -161,10 +161,14 @@ async fn real_main() -> Result<()> {
     }
 }
 
-fn make_engine(limit: Option<u64>, autotune: bool) -> Result<Arc<Downloader>> {
+fn make_engine(limit: Option<u64>, autotune: bool, fresh_host_stats: bool) -> Result<Arc<Downloader>> {
     let mut config = DownloadConfig::default();
     config.autotune = autotune;
-    let host_stats = Arc::new(HostStats::with_file(HostStats::default_path()));
+    let host_stats = if fresh_host_stats {
+        Arc::new(HostStats::in_memory())
+    } else {
+        Arc::new(HostStats::with_file(HostStats::default_path()))
+    };
     let engine = Downloader::new(config)?
         .with_global_limit(limit)
         .with_host_stats(host_stats);
@@ -182,7 +186,7 @@ async fn run_get(
     limit: Option<u64>,
     autotune: bool,
 ) -> Result<()> {
-    let engine = make_engine(None, autotune)?;
+    let engine = make_engine(None, autotune, false)?;
     let out = resolve_output(&engine, &url, output.as_deref()).await?;
 
     let mut req = DownloadRequest::new(url, out.clone()).connections(connections);
@@ -228,7 +232,7 @@ async fn run_resume(statefile: PathBuf, connections: usize) -> Result<()> {
         connections
     );
 
-    let engine = make_engine(None, true)?;
+    let engine = make_engine(None, true, false)?;
     let mut req = DownloadRequest::new(state.urls[0].clone(), state.output.clone())
         .connections(connections);
     for m in state.urls.iter().skip(1) {
@@ -307,7 +311,7 @@ async fn run_bench(url: String, connections: usize, dir: PathBuf) -> Result<()> 
 
     // Single-connection run.
     let out1 = dir.join("bench_single.part");
-    let mbps1 = bench_run(&url, 1, false, &out1).await?;
+    let (mbps1, _) = bench_run(&url, 1, false, &out1).await?;
     cleanup(&out1);
     println!("  1 connection    : {mbps1:>8.2} MB/s");
 
@@ -315,7 +319,7 @@ async fn run_bench(url: String, connections: usize, dir: PathBuf) -> Result<()> 
     let outn = dir.join("bench_multi.part");
     let out_auto = dir.join("bench_autotune.part");
     let mbpsn = match bench_run(&url, connections, false, &outn).await {
-        Ok(mbps) => {
+        Ok((mbps, _)) => {
             cleanup(&outn);
             println!("  {connections:>2} connections  : {mbps:>8.2} MB/s", connections = connections);
             Some(mbps)
@@ -328,9 +332,13 @@ async fn run_bench(url: String, connections: usize, dir: PathBuf) -> Result<()> 
     };
 
     match bench_run(&url, connections, true, &out_auto).await {
-        Ok(mbps) => {
+        Ok((mbps, conns)) => {
             cleanup(&out_auto);
-            println!("  autotune ({connections} max) : {mbps:>8.2} MB/s", connections = connections);
+            println!(
+                "  autotune ({connections} max) : {mbps:>8.2} MB/s  (ended {conns} conn, best {conns})",
+                connections = connections,
+                conns = conns,
+            );
         }
         Err(e) => {
             cleanup(&out_auto);
@@ -350,15 +358,31 @@ async fn run_bench(url: String, connections: usize, dir: PathBuf) -> Result<()> 
     Ok(())
 }
 
-async fn bench_run(url: &str, connections: usize, autotune: bool, out: &std::path::Path) -> Result<f64> {
-    let engine = make_engine(None, autotune)?;
+async fn bench_run(
+    url: &str,
+    connections: usize,
+    autotune: bool,
+    out: &std::path::Path,
+) -> Result<(f64, usize)> {
+    let engine = make_engine(None, autotune, true)?;
     let req = DownloadRequest::new(url.to_string(), out.to_path_buf()).connections(connections);
     let control = Control::new();
+    let (tx, mut rx) = events::channel();
     let start = Instant::now();
-    let outcome = engine.download(req, None, control, None).await?;
+    let dl = engine.download(req, Some(tx), control, None);
+    let mut last_conns = connections;
+    let consumer = async {
+        while let Some(ev) = rx.recv().await {
+            if let ProgressEvent::ConnectionsChanged { count, .. } = ev {
+                last_conns = count;
+            }
+        }
+    };
+    let outcome = tokio::join!(dl, consumer).0?;
     let secs = start.elapsed().as_secs_f64().max(1e-9);
     let mbps = outcome.total_size as f64 / secs / 1_000_000.0;
-    Ok(mbps)
+    let conns = outcome.connections_used.max(last_conns);
+    Ok((mbps, conns))
 }
 
 fn cleanup(path: &std::path::Path) {
@@ -388,6 +412,7 @@ async fn render_events(rx: &mut events::EventReceiver) {
                 total,
                 speed_bps,
                 connections,
+                ..
             } => {
                 let pct = total
                     .map(|t| format!("{:>5.1}%", downloaded as f64 / t.max(1) as f64 * 100.0))

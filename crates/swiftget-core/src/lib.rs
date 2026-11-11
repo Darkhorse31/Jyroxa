@@ -18,6 +18,7 @@ pub mod linkgrabber;
 pub mod queue;
 pub mod segment;
 pub mod state;
+pub mod tuner;
 
 pub use download::{Control, DownloadConfig, DownloadOutcome, DownloadRequest, Downloader, RefreshFn};
 pub use error::{Error, Result};
@@ -27,6 +28,7 @@ pub use limiter::RateLimiter;
 pub use linkgrabber::{GrabOptions, LinkGrabber, LinkInfo, Package};
 pub use queue::{QueueConfig, Scheduler, TaskId, TaskPriority, TaskSpec};
 pub use state::{DownloadState, SegmentState};
+pub use tuner::{parse_retry_after, Tuner, TunerInput, TunerOutput};
 
 /// Hard upper bound on the number of simultaneous connections for a single
 /// download, matching the capability advertised to users.
@@ -46,6 +48,24 @@ pub fn build_client() -> Result<reqwest::Client> {
     let client = reqwest::Client::builder()
         .user_agent(USER_AGENT)
         .pool_max_idle_per_host(MAX_CONNECTIONS)
+        .tcp_keepalive(std::time::Duration::from_secs(30))
+        .connect_timeout(std::time::Duration::from_secs(20))
+        .build()?;
+    Ok(client)
+}
+
+/// Build a [`reqwest::Client`] for segment workers that forces HTTP/1.1.
+///
+/// HTTP/2 multiplexes all streams over a single TCP connection, so N "connections"
+/// are really N streams contending for the same pipe. By forcing HTTP/1.1, each
+/// segment worker opens its own TCP connection — like IDM — giving real
+/// parallelism across connections.
+pub fn build_segment_client() -> Result<reqwest::Client> {
+    let client = reqwest::Client::builder()
+        .user_agent(USER_AGENT)
+        .http1_only()
+        .pool_max_idle_per_host(MAX_CONNECTIONS)
+        .tcp_nodelay(true)
         .tcp_keepalive(std::time::Duration::from_secs(30))
         .connect_timeout(std::time::Duration::from_secs(20))
         .build()?;

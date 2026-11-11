@@ -15,6 +15,7 @@ use axum::routing::get;
 use axum::Router;
 
 use swiftget_core::download::{preallocate, Control};
+use swiftget_core::events::{self, ProgressEvent};
 use swiftget_core::{
     DownloadConfig, DownloadRequest, DownloadState, Downloader, Error, SegmentState,
 };
@@ -297,6 +298,135 @@ async fn midstream_disconnects_retry_to_correct_checksum() {
         .await
         .expect("flaky download should eventually complete");
 
+    assert_eq!(outcome.total_size, data.len() as u64);
+    assert_eq!(std::fs::read(&out).unwrap(), data);
+}
+
+#[derive(Clone)]
+struct ThrottleState {
+    data: Arc<Vec<u8>>,
+    hits: Arc<AtomicUsize>,
+}
+
+async fn serve_throttle(State(st): State<ThrottleState>, headers: HeaderMap) -> Response {
+    let n = st.hits.fetch_add(1, Ordering::Relaxed);
+    if n % 3 == 0 {
+        return Response::builder()
+            .status(StatusCode::TOO_MANY_REQUESTS)
+            .header(header::RETRY_AFTER, "1")
+            .body(Body::empty())
+            .unwrap();
+    }
+    let range = headers.get(header::RANGE).and_then(|v| v.to_str().ok());
+    build_response(&st.data, "\"throttle\"", range, true)
+}
+
+async fn spawn_throttle_server(data: Vec<u8>) -> SocketAddr {
+    let st = ThrottleState {
+        data: Arc::new(data),
+        hits: Arc::new(AtomicUsize::new(0)),
+    };
+    let app = Router::new()
+        .route("/throttle", get(serve_throttle))
+        .with_state(st);
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    tokio::spawn(async move {
+        axum::serve(listener, app).await.unwrap();
+    });
+    addr
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn pause_stops_writes_quickly() {
+    let data = make_data(2 * 1024 * 1024);
+    let addr = spawn_server(data.clone()).await;
+    let dir = tempfile::tempdir().unwrap();
+    let out = dir.path().join("pause.bin");
+    let control = Control::new();
+    let mut req = DownloadRequest::new(format!("http://{addr}/file"), out.clone()).connections(4);
+    req.speed_limit = Some(200_000); // 200 KiB/s so pause is observable
+    let engine = test_engine();
+    let (tx, mut rx) = events::channel();
+    let mut dl = Box::pin(engine.download(req, Some(tx), control.clone(), None));
+    let mut last = 0u64;
+    loop {
+        tokio::select! {
+            ev = rx.recv() => {
+                let Some(ev) = ev else { break; };
+                if let ProgressEvent::Progress { downloaded, .. } = ev {
+                    last = downloaded;
+                    if downloaded > 64 * 1024 {
+                        break;
+                    }
+                }
+            }
+            _ = dl.as_mut() => panic!("download finished before pause test"),
+        }
+    }
+    assert!(last > 0, "expected some progress before pause");
+    control.pause();
+    let at_pause = last;
+    tokio::time::sleep(Duration::from_millis(300)).await;
+    while let Ok(Some(ev)) = tokio::time::timeout(Duration::from_millis(50), rx.recv()).await {
+        if let ProgressEvent::Progress { downloaded, .. } = ev {
+            last = downloaded;
+        }
+    }
+    control.cancel();
+    let _ = tokio::time::timeout(Duration::from_secs(10), dl.as_mut()).await;
+    assert!(
+        last.saturating_sub(at_pause) < 32 * 1024,
+        "expected pause to limit growth, grew by {}",
+        last.saturating_sub(at_pause)
+    );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn cancel_removes_partial_and_state() {
+    let data = make_data(4 * 1024 * 1024);
+    let addr = spawn_server(data).await;
+    let dir = tempfile::tempdir().unwrap();
+    let out = dir.path().join("cancel.bin");
+    let control = Control::new();
+    let mut req = DownloadRequest::new(format!("http://{addr}/file"), out.clone()).connections(4);
+    req.speed_limit = Some(150_000);
+    let engine = test_engine();
+    let (tx, mut rx) = events::channel();
+    let mut dl = Box::pin(engine.download(req, Some(tx), control.clone(), None));
+    loop {
+        tokio::select! {
+            ev = rx.recv() => {
+                let Some(ev) = ev else { panic!("channel closed before start"); };
+                if matches!(ev, ProgressEvent::Started { .. }) {
+                    break;
+                }
+            }
+            r = dl.as_mut() => panic!("download finished early: {r:?}"),
+        }
+    }
+    control.cancel();
+    let result = tokio::time::timeout(Duration::from_secs(15), dl.as_mut())
+        .await
+        .expect("cancel should finish")
+        .expect_err("expected cancellation");
+    assert!(matches!(result, Error::Cancelled));
+    assert!(!out.exists());
+    assert!(!DownloadState::state_path(&out).exists());
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn throttle_429_download_completes() {
+    let data = make_data(128 * 1024);
+    let addr = spawn_throttle_server(data.clone()).await;
+    let dir = tempfile::tempdir().unwrap();
+    let out = dir.path().join("throttle.bin");
+    let req = DownloadRequest::new(format!("http://{addr}/throttle"), out.clone())
+        .connections(4);
+    let outcome = test_engine()
+        .download(req, None, Control::new(), None)
+        .await
+        .expect("should complete despite 429s");
     assert_eq!(outcome.total_size, data.len() as u64);
     assert_eq!(std::fs::read(&out).unwrap(), data);
 }
