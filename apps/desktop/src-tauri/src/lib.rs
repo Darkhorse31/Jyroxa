@@ -6,7 +6,7 @@ use std::path::PathBuf;
 use serde::{Deserialize, Serialize};
 use tauri::menu::{Menu, MenuItem};
 use tauri::tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent};
-use tauri::{Manager, PhysicalPosition, PhysicalSize, WindowEvent};
+use tauri::{Emitter, Manager, PhysicalPosition, PhysicalSize, WindowEvent};
 use engine::{init_engine, run_clipboard_monitor, EngineState};
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
@@ -92,7 +92,23 @@ async fn run_tray_updater(app: tauri::AppHandle) {
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
-    let start_minimized = std::env::args().any(|a| a == "--minimized");
+    let args: Vec<String> = std::env::args().collect();
+    let maybe_url = args
+        .iter()
+        .skip(1)
+        .find(|a| a.starts_with("http://") || a.starts_with("https://"))
+        .cloned();
+
+    let _single_instance_guard = match platform::try_acquire_single_instance("SwiftGetSingleInstanceMutex") {
+        Some(g) => g,
+        None => {
+            platform::send_to_first_instance(maybe_url.as_deref());
+            platform::focus_existing_window("SwiftGet");
+            return;
+        }
+    };
+
+    let start_minimized = args.iter().any(|a| a == "--minimized");
 
     tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
@@ -100,6 +116,15 @@ pub fn run() {
         .plugin(tauri_plugin_clipboard_manager::init())
         .setup(move |app| {
             let handle = app.handle().clone();
+            tauri::async_runtime::spawn(platform::run_single_instance_server(handle.clone()));
+            if let Some(url) = maybe_url.clone() {
+                let h = handle.clone();
+                tauri::async_runtime::spawn(async move {
+                    tokio::time::sleep(std::time::Duration::from_millis(600)).await;
+                    let _ = h.emit("external-url", url);
+                });
+            }
+
             if let Some(ws) = load_window_state(&handle) {
                 if let Some(w) = app.get_webview_window("main") {
                     let _ = w.set_size(PhysicalSize::new(ws.width, ws.height));
@@ -123,8 +148,11 @@ pub fn run() {
             let quit_i = MenuItem::with_id(app, "quit", "Quit", true, None::<&str>)?;
             let menu = Menu::with_items(app, &[&show_i, &pause_i, &resume_i, &quit_i])?;
 
+            let tray_icon = tauri::image::Image::from_bytes(include_bytes!("../icons/tray.png"))
+                .unwrap_or_else(|_| app.default_window_icon().unwrap().clone());
+
             let _tray = TrayIconBuilder::with_id("main-tray")
-                .icon(app.default_window_icon().unwrap().clone())
+                .icon(tray_icon)
                 .menu(&menu)
                 .tooltip(&product)
                 .on_menu_event(|app, event| match event.id.as_ref() {
@@ -194,10 +222,7 @@ pub fn run() {
                     }
                 }
                 WindowEvent::CloseRequested { api, .. } => {
-                    let close_to_tray = app
-                        .try_state::<EngineState>()
-                        .map(|s| s.0.close_to_tray())
-                        .unwrap_or(true);
+                    let close_to_tray = platform::close_to_tray();
                     if close_to_tray {
                         api.prevent_close();
                         let _ = window.hide();
