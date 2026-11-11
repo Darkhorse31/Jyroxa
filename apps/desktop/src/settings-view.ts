@@ -1,5 +1,6 @@
 import { open } from "@tauri-apps/plugin-dialog";
 import { api, type AppSettings } from "./api";
+import { APP_NAME } from "./brand";
 import { icons } from "./icons";
 import { requestNotificationPermission, showToast } from "./toast";
 
@@ -133,7 +134,7 @@ export class SettingsView {
             <div class="setting-item">
               <div class="setting-info">
                 <label class="setting-title" for="set-startup">Start with Windows</label>
-                <span class="setting-desc">Launch downloader automatically when logging into Windows.</span>
+                <span class="setting-desc">Launch ${APP_NAME} automatically when logging into Windows.</span>
               </div>
               <div class="setting-control">
                 <label class="switch-toggle">
@@ -185,7 +186,7 @@ export class SettingsView {
             <div class="setting-item">
               <div class="setting-info">
                 <label class="setting-title" for="set-auto-resume">Auto-resume interrupted downloads</label>
-                <span class="setting-desc">Automatically resume uncompleted downloads when the app starts.</span>
+                <span class="setting-desc">Automatically resume uncompleted downloads when ${APP_NAME} starts.</span>
               </div>
               <div class="setting-control">
                 <label class="switch-toggle">

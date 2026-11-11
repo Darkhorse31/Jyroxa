@@ -135,9 +135,10 @@ export function dispatchSystemNotification(
     return;
   }
   try {
+    const isDark = document.body.getAttribute("data-theme") !== "light";
     const notif = new Notification(title, {
       body: options?.body,
-      icon: options?.icon || "/src/assets/logo.svg",
+      icon: options?.icon || (isDark ? "/src/assets/logo-dark.svg" : "/src/assets/logo.svg"),
     });
     if (options?.onClick) {
       notif.onclick = () => {

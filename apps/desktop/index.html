@@ -3,7 +3,8 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>SwiftGet</title>
+    <title>Jyroxa</title>
+    <link rel="icon" type="image/svg+xml" href="/src/assets/logo.svg" />
     <link rel="stylesheet" href="/src/styles.css" />
   </head>
   <body data-theme="dark">
@@ -24,10 +25,11 @@
       <!-- Topbar Header -->
       <header class="topbar">
         <div class="brand-group">
-          <img src="/src/assets/logo.svg" alt="App Logo" class="brand-logo" width="28" height="28" />
+          <img src="/src/assets/logo.svg" alt="Jyroxa Logo" class="brand-logo logo-light" width="28" height="28" />
+          <img src="/src/assets/logo-dark.svg" alt="Jyroxa Logo" class="brand-logo logo-dark" width="28" height="28" />
           <div class="brand-text">
-            <h1 class="logo" id="brand-title">SwiftGet</h1>
-            <span class="tagline">accelerated segmented downloads</span>
+            <h1 class="logo" id="brand-title">Jyroxa</h1>
+            <span class="tagline">Fast, resumable downloads</span>
           </div>
         </div>
 
@@ -59,14 +61,14 @@
         </div>
 
         <div class="topbar-metrics" aria-label="Global download stats">
-          <div class="metric-pill" title="Active downloads">
+          <div class="metric-pill metric-pill-active" title="Active downloads">
             <span class="metric-dot active"></span>
             <span id="stat-active" class="metric-text">0 active</span>
           </div>
-          <div class="metric-pill" title="Combined download speed">
+          <div class="metric-pill metric-pill-speed" title="Combined download speed">
             <span id="stat-speed" class="metric-text highlight">0 B/s</span>
           </div>
-          <div class="metric-pill" title="Completed downloads">
+          <div class="metric-pill metric-pill-done" title="Completed downloads">
             <span id="stat-done" class="metric-text">0 completed</span>
           </div>
           <div class="graph-card-header">
@@ -516,7 +518,8 @@
       <form method="dialog" class="dialog-card about-dialog-card">
         <div class="dialog-header">
           <div class="dialog-title-group">
-            <img src="/src/assets/logo.svg" alt="App Logo" width="24" height="24" />
+            <img src="/src/assets/logo.svg" alt="Jyroxa Logo" class="logo-light" width="24" height="24" />
+            <img src="/src/assets/logo-dark.svg" alt="Jyroxa Logo" class="logo-dark" width="24" height="24" />
             <h3 id="about-title">About</h3>
           </div>
           <button type="button" id="about-close-btn" class="btn-icon" aria-label="Close dialog">
@@ -526,10 +529,11 @@
 
         <div class="dialog-body about-body">
           <div class="about-hero">
-            <img src="/src/assets/logo.svg" alt="App Logo" width="56" height="56" />
-            <h2 id="about-app-name" class="about-app-name">SwiftGet</h2>
+            <img src="/src/assets/logo.svg" alt="Jyroxa Logo" class="about-logo logo-light" width="56" height="56" />
+            <img src="/src/assets/logo-dark.svg" alt="Jyroxa Logo" class="about-logo logo-dark" width="56" height="56" />
+            <h2 id="about-app-name" class="about-app-name">Jyroxa</h2>
             <span id="about-version" class="about-version-badge">v0.1.1</span>
-            <p class="about-tagline">High-performance multi-segment accelerated download manager.</p>
+            <p class="about-tagline">Fast, resumable downloads</p>
           </div>
 
           <div class="about-meta-list">
@@ -543,7 +547,7 @@
             </div>
             <div class="about-meta-row">
               <span class="about-meta-label">Repository</span>
-              <span class="about-meta-val code">github.com/swiftget/swiftget</span>
+              <span class="about-meta-val code">github.com/jyroxa/jyroxa</span>
             </div>
           </div>
         </div>
