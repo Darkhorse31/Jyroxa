@@ -15,6 +15,7 @@ import com.swiftget.app.MainActivity
 import com.swiftget.app.R
 import com.swiftget.app.SwiftGetApp
 import com.swiftget.app.data.model.DownloadItem
+import com.swiftget.app.data.model.DownloadState
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -23,7 +24,8 @@ import kotlinx.coroutines.launch
 
 /**
  * Foreground service of type "dataSync" running downloads reliably in the background
- * with rich notifications and action buttons (Pause All, Resume All, Cancel).
+ * with ongoing rich notifications displaying real-time progress, speed, ETA, and quick
+ * Pause and Cancel PendingIntent action controls.
  */
 class DownloadService : Service() {
 
@@ -95,7 +97,7 @@ class DownloadService : Service() {
     private fun buildInitialNotification(): Notification {
         return NotificationCompat.Builder(this, CHANNEL_ID)
             .setContentTitle(getString(R.string.app_name))
-            .setContentText("Download engine ready")
+            .setContentText(getString(R.string.notification_service_ready))
             .setSmallIcon(R.drawable.ic_notification)
             .setOngoing(true)
             .setOnlyAlertOnce(true)
@@ -110,11 +112,41 @@ class DownloadService : Service() {
         serviceScope.launch {
             repo.downloads.collect { downloads ->
                 val activeDownloads = downloads.filter { it.state.isRunning }
+                val isWifiOnlyActive = app.settings.value.wifiOnly && app.networkMonitor.checkIsUnmetered().not()
+                val isPausedForWifi = isWifiOnlyActive && downloads.any { it.state == DownloadState.PAUSED }
+
                 if (activeDownloads.isEmpty()) {
-                    // Stop foreground service when no tasks are running
-                    val completed = downloads.any { it.state == com.swiftget.app.data.model.DownloadState.COMPLETED }
-                    if (completed) {
-                        notificationManager.notify(NOTIFICATION_ID, buildIdleNotification("All downloads completed"))
+                    if (isPausedForWifi) {
+                        // Show Wi-Fi paused notification with Resume & Cancel
+                        val wifiPausedNotification = NotificationCompat.Builder(this@DownloadService, CHANNEL_ID)
+                            .setContentTitle(getString(R.string.app_name))
+                            .setContentText(getString(R.string.notification_paused_wifi_only))
+                            .setSmallIcon(R.drawable.ic_notification)
+                            .setOngoing(true)
+                            .setOnlyAlertOnce(true)
+                            .setContentIntent(createContentIntent())
+                            .addAction(
+                                R.drawable.ic_play,
+                                getString(R.string.notification_action_resume),
+                                createActionPendingIntent(ACTION_RESUME_ALL)
+                            )
+                            .addAction(
+                                R.drawable.ic_cancel,
+                                getString(R.string.notification_action_cancel),
+                                createActionPendingIntent(ACTION_STOP)
+                            )
+                            .build()
+                        startForegroundInternal(wifiPausedNotification)
+                        return@collect
+                    }
+
+                    // Detach or complete when no tasks running
+                    val hasCompleted = downloads.any { it.state == DownloadState.COMPLETED }
+                    if (hasCompleted) {
+                        notificationManager.notify(
+                            NOTIFICATION_ID,
+                            buildIdleNotification(getString(R.string.notification_all_completed))
+                        )
                     }
                     stopForeground(STOP_FOREGROUND_DETACH)
                     return@collect
@@ -127,14 +159,31 @@ class DownloadService : Service() {
                     ((downloadedBytes.toDouble() / totalBytes) * 100).toInt().coerceIn(0, 100)
                 } else 0
 
-                val title = resources.getQuantityString(
-                    R.plurals.active_downloads_count,
-                    activeDownloads.size,
-                    activeDownloads.size
-                )
-                val text = "${DownloadItem.formatBytesSpeed(totalSpeed)} • ${DownloadItem.formatBytes(downloadedBytes)} / ${DownloadItem.formatBytes(totalBytes)}"
+                val title: String
+                val text: String
 
-                val notification = NotificationCompat.Builder(this@DownloadService, CHANNEL_ID)
+                if (activeDownloads.size == 1) {
+                    val single = activeDownloads.first()
+                    title = single.fileName
+                    text = "$overallProgress% • ${single.formattedSpeedAndAvg} • ${single.formattedEta}"
+                } else {
+                    title = resources.getQuantityString(
+                        R.plurals.active_downloads_count,
+                        activeDownloads.size,
+                        activeDownloads.size
+                    )
+                    val activeEtas = activeDownloads.mapNotNull { it.etaSeconds }.filter { it > 0 }
+                    val maxEta = activeEtas.maxOrNull()
+                    val etaFormatted = if (maxEta != null) {
+                        if (maxEta < 60) "${maxEta}s left"
+                        else if (maxEta < 3600) "${maxEta / 60}m ${maxEta % 60}s left"
+                        else "${maxEta / 3600}h ${(maxEta % 3600) / 60}m left"
+                    } else "--:--"
+
+                    text = "$overallProgress% • ${DownloadItem.formatBytesSpeed(totalSpeed)} • $etaFormatted"
+                }
+
+                val notificationBuilder = NotificationCompat.Builder(this@DownloadService, CHANNEL_ID)
                     .setContentTitle(title)
                     .setContentText(text)
                     .setSmallIcon(R.drawable.ic_notification)
@@ -148,25 +197,19 @@ class DownloadService : Service() {
                         createActionPendingIntent(ACTION_PAUSE_ALL)
                     )
                     .addAction(
-                        R.drawable.ic_play,
-                        getString(R.string.notification_action_resume),
-                        createActionPendingIntent(ACTION_RESUME_ALL)
-                    )
-                    .addAction(
                         R.drawable.ic_cancel,
                         getString(R.string.notification_action_cancel),
                         createActionPendingIntent(ACTION_STOP)
                     )
-                    .build()
 
-                startForegroundInternal(notification)
+                startForegroundInternal(notificationBuilder.build())
             }
         }
     }
 
     private fun buildIdleNotification(message: String): Notification {
         return NotificationCompat.Builder(this, CHANNEL_ID)
-            .setContentTitle(getString(R.string.app_name))
+            .setContentTitle(getString(R.string.notification_completed_title))
             .setContentText(message)
             .setSmallIcon(R.drawable.ic_notification)
             .setAutoCancel(true)

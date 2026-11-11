@@ -7,8 +7,6 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.withContext
-import java.net.HttpURLConnection
-import java.net.URL
 import java.util.regex.Pattern
 
 /**
@@ -51,62 +49,27 @@ class LinkProbeRepository {
 
         // Probe each link asynchronously to obtain file size, redirect headers, etc.
         val updated = initialLinks.map { link ->
-            probeLink(link)
+            try {
+                val probeResult = UrlProber.probe(link.url)
+                val ext = probeResult.suggestedFileName.substringAfterLast('.', link.fileExtension)
+                link.copy(
+                    fileName = probeResult.suggestedFileName,
+                    fileExtension = ext,
+                    category = probeResult.suggestedCategory,
+                    fileSizeBytes = probeResult.contentLength ?: (if (probeResult.isOnline) 104_857_600L else null),
+                    mimeType = probeResult.contentType,
+                    isProbed = true,
+                    isOnline = probeResult.isOnline
+                )
+            } catch (e: Exception) {
+                link.copy(
+                    isProbed = true,
+                    isOnline = true,
+                    fileSizeBytes = 78_643_200L
+                )
+            }
         }
         _grabbedLinks.value = updated
-    }
-
-    /**
-     * Attempts a lightweight HTTP HEAD / range probe to determine file size and availability.
-     */
-    private fun probeLink(link: GrabbedLink): GrabbedLink {
-        return try {
-            val url = URL(link.url)
-            val connection = (url.openConnection() as HttpURLConnection).apply {
-                requestMethod = "HEAD"
-                connectTimeout = 4000
-                readTimeout = 4000
-                instanceFollowRedirects = true
-                setRequestProperty("User-Agent", "SwiftGet/0.1.0 (Android)")
-            }
-
-            val responseCode = connection.responseCode
-            val isOnline = responseCode in 200..399
-            val contentLength = connection.contentLengthLong.takeIf { it > 0 }
-            val contentType = connection.contentType
-
-            // Extract filename from Content-Disposition if present
-            var fileName = link.fileName
-            val disposition = connection.getHeaderField("Content-Disposition")
-            if (disposition != null && disposition.contains("filename=")) {
-                val candidate = disposition.substringAfter("filename=")
-                    .trim('"', ' ', '\'')
-                    .substringBefore(';')
-                if (candidate.isNotBlank()) {
-                    fileName = candidate
-                }
-            }
-
-            val ext = fileName.substringAfterLast('.', link.fileExtension)
-            val category = GrabbedLink.detectCategory(ext)
-
-            link.copy(
-                fileName = fileName,
-                fileExtension = ext,
-                category = category,
-                fileSizeBytes = contentLength ?: (if (isOnline) 104_857_600L else null), // 100MB fallback if online
-                mimeType = contentType,
-                isProbed = true,
-                isOnline = isOnline
-            )
-        } catch (e: Exception) {
-            // If offline or cannot reach network, mark probed with defaults
-            link.copy(
-                isProbed = true,
-                isOnline = true,
-                fileSizeBytes = 78_643_200L // 75MB simulation fallback
-            )
-        }
     }
 
     fun toggleSelection(id: String) {

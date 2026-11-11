@@ -1,6 +1,14 @@
 package com.swiftget.app.ui.screens
 
+import android.Manifest
+import android.app.Activity
+import android.content.Intent
+import android.content.pm.PackageManager
+import android.net.Uri
 import android.os.Build
+import android.provider.Settings
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
@@ -9,27 +17,33 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.ColorLens
+import androidx.compose.material.icons.filled.BatteryAlert
+import androidx.compose.material.icons.filled.CheckCircle
 import androidx.compose.material.icons.filled.Folder
 import androidx.compose.material.icons.filled.Info
 import androidx.compose.material.icons.filled.Memory
 import androidx.compose.material.icons.filled.NetworkCheck
+import androidx.compose.material.icons.filled.Notifications
 import androidx.compose.material.icons.filled.Palette
-import androidx.compose.material.icons.filled.Security
 import androidx.compose.material.icons.filled.Wifi
+import androidx.compose.material3.Button
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.RadioButton
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Slider
+import androidx.compose.material3.Surface
 import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.material3.TopAppBar
@@ -37,14 +51,25 @@ import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
+import androidx.core.app.NotificationManagerCompat
+import androidx.core.content.ContextCompat
 import com.swiftget.SwiftGet
+import com.swiftget.app.R
 import com.swiftget.app.SwiftGetApp
 import com.swiftget.app.data.model.AppSettings
 import com.swiftget.app.data.model.DarkThemeConfig
+import com.swiftget.app.ui.theme.SpeedAmber
+import com.swiftget.app.ui.theme.SpeedGreen
+import com.swiftget.app.util.BatteryOptimizationHelper
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -52,7 +77,22 @@ fun SettingsScreen(
     app: SwiftGetApp,
     modifier: Modifier = Modifier
 ) {
+    val context = LocalContext.current
     val settings by app.settings.collectAsState()
+
+    var isBatteryExempt by remember {
+        mutableStateOf(BatteryOptimizationHelper.isIgnoringBatteryOptimizations(context))
+    }
+
+    var areNotificationsEnabled by remember {
+        mutableStateOf(NotificationManagerCompat.from(context).areNotificationsEnabled())
+    }
+
+    val notificationLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.RequestPermission()
+    ) { granted ->
+        areNotificationsEnabled = granted || NotificationManagerCompat.from(context).areNotificationsEnabled()
+    }
 
     Scaffold(
         modifier = modifier.fillMaxSize(),
@@ -99,7 +139,7 @@ fun SettingsScreen(
                             style = MaterialTheme.typography.titleMedium
                         )
                         Text(
-                            text = "Save files into Videos/, Music/, Archives/ subfolders",
+                            text = "Save files automatically into Videos/, Music/, Archives/ subfolders",
                             style = MaterialTheme.typography.bodyMedium,
                             color = MaterialTheme.colorScheme.onSurfaceVariant
                         )
@@ -112,7 +152,7 @@ fun SettingsScreen(
             }
 
             // Engine & Multi-Connection Settings
-            SettingsSectionCard(title = "Download Engine", icon = Icons.Default.Memory) {
+            SettingsSectionCard(title = "Download Engine & Network", icon = Icons.Default.Memory) {
                 Row(
                     modifier = Modifier.fillMaxWidth(),
                     horizontalArrangement = Arrangement.SpaceBetween,
@@ -138,11 +178,11 @@ fun SettingsScreen(
                 ) {
                     Column(modifier = Modifier.weight(1f)) {
                         Text(
-                            text = "Wi-Fi Only Downloads",
+                            text = stringResource(R.string.settings_wifi_only_title),
                             style = MaterialTheme.typography.titleMedium
                         )
                         Text(
-                            text = "Pause downloads automatically when on cellular data",
+                            text = stringResource(R.string.settings_wifi_only_desc),
                             style = MaterialTheme.typography.bodyMedium,
                             color = MaterialTheme.colorScheme.onSurfaceVariant
                         )
@@ -151,6 +191,104 @@ fun SettingsScreen(
                         checked = settings.wifiOnly,
                         onCheckedChange = { app.updateSettings(settings.copy(wifiOnly = it)) }
                     )
+                }
+            }
+
+            // Background & Battery Optimization
+            SettingsSectionCard(title = "Background Execution & Battery", icon = Icons.Default.BatteryAlert) {
+                Text(
+                    text = stringResource(R.string.settings_battery_opt_desc),
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    if (isBatteryExempt) {
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(6.dp)
+                        ) {
+                            Icon(
+                                Icons.Default.CheckCircle,
+                                contentDescription = null,
+                                tint = SpeedGreen,
+                                modifier = Modifier.size(20.dp)
+                            )
+                            Text(
+                                text = stringResource(R.string.settings_battery_opt_exempt),
+                                style = MaterialTheme.typography.bodyMedium.copy(fontWeight = FontWeight.SemiBold),
+                                color = SpeedGreen
+                            )
+                        }
+                    } else {
+                        Button(
+                            onClick = {
+                                try {
+                                    context.startActivity(BatteryOptimizationHelper.createRequestIntent(context))
+                                } catch (_: Exception) {
+                                    context.startActivity(BatteryOptimizationHelper.createSettingsIntent())
+                                }
+                                isBatteryExempt = BatteryOptimizationHelper.isIgnoringBatteryOptimizations(context)
+                            },
+                            shape = RoundedCornerShape(8.dp)
+                        ) {
+                            Text(stringResource(R.string.settings_battery_opt_button))
+                        }
+                    }
+                }
+            }
+
+            // Notification Permissions (Android 13+)
+            SettingsSectionCard(title = "Notifications & Live Tray", icon = Icons.Default.Notifications) {
+                Text(
+                    text = stringResource(R.string.settings_notifications_desc),
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    if (areNotificationsEnabled) {
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(6.dp)
+                        ) {
+                            Icon(
+                                Icons.Default.CheckCircle,
+                                contentDescription = null,
+                                tint = SpeedGreen,
+                                modifier = Modifier.size(20.dp)
+                            )
+                            Text(
+                                text = stringResource(R.string.settings_notifications_granted),
+                                style = MaterialTheme.typography.bodyMedium.copy(fontWeight = FontWeight.SemiBold),
+                                color = SpeedGreen
+                            )
+                        }
+                    } else {
+                        Button(
+                            onClick = {
+                                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+                                    notificationLauncher.launch(Manifest.permission.POST_NOTIFICATIONS)
+                                } else {
+                                    val intent = Intent(Settings.ACTION_APP_NOTIFICATION_SETTINGS).apply {
+                                        putExtra(Settings.EXTRA_APP_PACKAGE, context.packageName)
+                                    }
+                                    context.startActivity(intent)
+                                }
+                            },
+                            shape = RoundedCornerShape(8.dp)
+                        ) {
+                            Text(stringResource(R.string.settings_notifications_button))
+                        }
+                    }
                 }
             }
 
@@ -232,14 +370,15 @@ fun SettingsScreen(
                 }
             }
 
-            // About & Rust FFI Engine Info
-            SettingsSectionCard(title = "About SwiftGet", icon = Icons.Default.Info) {
+            // About & Rust Engine
+            val appName = stringResource(R.string.app_name)
+            SettingsSectionCard(title = "About $appName", icon = Icons.Default.Info) {
                 Text(
-                    text = "SwiftGet for Android v0.1.0",
+                    text = "$appName for Android v0.1.1",
                     style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.Bold)
                 )
                 Text(
-                    text = "High-performance cross-platform download manager with IDM-style multi-part parallel chunking and JDownloader-style LinkGrabber.",
+                    text = "High-performance cross-platform download manager with multi-part parallel chunking and LinkGrabber.",
                     style = MaterialTheme.typography.bodyMedium,
                     color = MaterialTheme.colorScheme.onSurfaceVariant
                 )

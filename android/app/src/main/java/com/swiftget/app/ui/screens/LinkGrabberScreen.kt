@@ -55,6 +55,7 @@ import androidx.compose.ui.unit.dp
 import com.swiftget.app.data.model.LinkCategory
 import com.swiftget.app.data.repository.DownloadRepository
 import com.swiftget.app.data.repository.LinkProbeRepository
+import com.swiftget.app.data.repository.UrlProber
 import com.swiftget.app.service.DownloadService
 import com.swiftget.app.ui.components.LinkItemCard
 import kotlinx.coroutines.launch
@@ -134,8 +135,13 @@ fun LinkGrabberScreen(
                         Button(
                             onClick = {
                                 val selected = grabbedLinks.filter { it.isSelected }
+                                val baseDirFile = File(defaultDownloadDirectory)
+                                if (!baseDirFile.exists()) baseDirFile.mkdirs()
+
                                 selected.forEach { link ->
-                                    val outPath = File(defaultDownloadDirectory, link.fileName).absolutePath
+                                    val cleanName = UrlProber.sanitizeFileName(link.fileName)
+                                    val dedupedName = UrlProber.deduplicateFileName(baseDirFile, cleanName)
+                                    val outPath = File(baseDirFile, dedupedName).absolutePath
                                     downloadRepository.startDownload(
                                         url = link.url,
                                         outputFilePath = outPath,

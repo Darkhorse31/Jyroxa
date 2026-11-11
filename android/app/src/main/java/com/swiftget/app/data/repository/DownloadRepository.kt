@@ -1,10 +1,12 @@
 package com.swiftget.app.data.repository
 
+import android.util.Log
 import com.swiftget.app.data.model.DownloadItem
 import com.swiftget.app.data.model.DownloadState
 import com.swiftget.app.data.model.SegmentProgress
 import com.swiftget.app.data.model.SpeedSample
 import com.swiftget.app.native.SwiftGetNative
+import com.swiftget.app.util.NetworkMonitor
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -17,14 +19,33 @@ import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
+import kotlinx.serialization.encodeToString
+import kotlinx.serialization.json.Json
 import java.io.File
+import java.util.concurrent.ConcurrentHashMap
 
 /**
- * Central repository managing active and historic downloads.
+ * Central repository managing active and historic downloads with:
+ * - EWMA speed smoothing & ETA calculation
+ * - Average speed tracking
+ * - Wi-Fi only / metered network pause & resume
+ * - State persistence for process death / reboot recovery
  */
 class DownloadRepository(
-    private val scope: CoroutineScope = CoroutineScope(Dispatchers.Default + Job())
+    private val scope: CoroutineScope = CoroutineScope(Dispatchers.Default + Job()),
+    private val storageFile: File? = null,
+    private val networkMonitor: NetworkMonitor? = null
 ) {
+    companion object {
+        private const val TAG = "DownloadRepository"
+        private const val EWMA_ALPHA = 0.25
+    }
+
+    private val json = Json {
+        ignoreUnknownKeys = true
+        prettyPrint = false
+    }
+
     private val _downloads = MutableStateFlow<List<DownloadItem>>(emptyList())
     val downloads: StateFlow<List<DownloadItem>> = _downloads.asStateFlow()
 
@@ -36,12 +57,100 @@ class DownloadRepository(
         list.filter { it.state.isRunning }.sumOf { it.speedBps }
     }.stateIn(scope, SharingStarted.Eagerly, 0.0)
 
+    private val ewmaSpeedMap = ConcurrentHashMap<Long, Double>()
+    private val pausedByWifiOnly = ConcurrentHashMap.newKeySet<Long>()
+    private var isWifiOnlyEnforced = false
     private var pollingJob: Job? = null
 
     init {
-        // Seed with sample initial downloads if empty (to showcase per-segment and speed graph in preview)
-        seedInitialDownloads()
+        loadPersistedDownloads()
+        observeNetwork()
         startPollingLoop()
+    }
+
+    fun setWifiOnlyEnforced(enforced: Boolean) {
+        isWifiOnlyEnforced = enforced
+        checkWifiConstraints()
+    }
+
+    fun isCurrentlyMetered(): Boolean {
+        return networkMonitor?.checkIsUnmetered() == false
+    }
+
+    private fun observeNetwork() {
+        if (networkMonitor == null) return
+        scope.launch {
+            networkMonitor.isUnmetered.collect { isUnmetered ->
+                if (isWifiOnlyEnforced) {
+                    if (!isUnmetered) {
+                        // Pause running downloads due to metered network
+                        val running = _downloads.value.filter { it.state.isRunning }
+                        running.forEach { item ->
+                            pausedByWifiOnly.add(item.id)
+                            pauseDownload(item.id)
+                            Log.i(TAG, "Paused download ${item.id} because network is metered (Wi-Fi only)")
+                        }
+                    } else if (pausedByWifiOnly.isNotEmpty()) {
+                        // Resume downloads paused for Wi-Fi only
+                        val toResume = pausedByWifiOnly.toList()
+                        pausedByWifiOnly.clear()
+                        toResume.forEach { id ->
+                            resumeDownload(id)
+                            Log.i(TAG, "Resumed download $id because unmetered network reconnected")
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    private fun checkWifiConstraints() {
+        if (isWifiOnlyEnforced && isCurrentlyMetered()) {
+            val running = _downloads.value.filter { it.state.isRunning }
+            running.forEach { item ->
+                pausedByWifiOnly.add(item.id)
+                pauseDownload(item.id)
+            }
+        }
+    }
+
+    private fun loadPersistedDownloads() {
+        if (storageFile != null && storageFile.exists()) {
+            try {
+                val raw = storageFile.readText()
+                if (raw.isNotBlank()) {
+                    val loaded = json.decodeFromString<List<DownloadItem>>(raw)
+                    if (loaded.isNotEmpty()) {
+                        // Any downloads that were RUNNING/STARTING when killed are set to PAUSED
+                        val adjusted = loaded.map {
+                            if (it.state.isRunning) it.copy(state = DownloadState.PAUSED, speedBps = 0.0) else it
+                        }
+                        _downloads.value = adjusted
+                        Log.i(TAG, "Loaded ${loaded.size} downloads from cache")
+                        return
+                    }
+                }
+            } catch (e: Exception) {
+                Log.w(TAG, "Failed loading cached downloads: ${e.message}")
+            }
+        }
+
+        seedInitialDownloads()
+    }
+
+    private fun persistDownloads() {
+        val file = storageFile ?: return
+        scope.launch(Dispatchers.IO) {
+            try {
+                val list = _downloads.value
+                val data = json.encodeToString(list)
+                val tempFile = File(file.parentFile, "${file.name}.tmp")
+                tempFile.writeText(data)
+                tempFile.renameTo(file)
+            } catch (e: Exception) {
+                Log.w(TAG, "Failed persisting downloads: ${e.message}")
+            }
+        }
     }
 
     private fun seedInitialDownloads() {
@@ -66,6 +175,7 @@ class DownloadRepository(
         )
 
         _downloads.value = listOf(ubuntuDownload, rustDownload)
+        persistDownloads()
     }
 
     private fun createInitialItem(
@@ -81,6 +191,7 @@ class DownloadRepository(
         val progress = if (totalBytes > 0) ((downloadedBytes.toDouble() / totalBytes) * 100).toFloat() else 0f
         val segments = generateSegments(totalBytes, downloadedBytes, connections)
         val history = generateInitialSpeedHistory(speedBps)
+        val avgSpeed = history.map { it.speedBps }.average()
 
         return DownloadItem(
             id = id,
@@ -91,6 +202,7 @@ class DownloadRepository(
             downloadedBytes = downloadedBytes,
             totalBytes = totalBytes,
             speedBps = speedBps,
+            averageSpeedBps = avgSpeed,
             progressPercent = progress,
             connections = connections,
             etaSeconds = if (speedBps > 0) ((totalBytes - downloadedBytes) / speedBps).toLong() else 0L,
@@ -141,7 +253,13 @@ class DownloadRepository(
             } else 0f
 
             val remainingBytes = (total - downloaded).coerceAtLeast(0L)
-            val eta = if (speed > 0) (remainingBytes / speed).toLong() else null
+
+            // EWMA Speed Smoothing
+            val prevEwma = ewmaSpeedMap[item.id] ?: speed
+            val smoothedSpeed = (EWMA_ALPHA * speed) + ((1.0 - EWMA_ALPHA) * prevEwma)
+            ewmaSpeedMap[item.id] = smoothedSpeed
+
+            val eta = if (smoothedSpeed > 1024.0) (remainingBytes / smoothedSpeed).toLong() else null
 
             // Per-segment progress distribution
             val segments = generateSegments(total, downloaded, item.connections)
@@ -150,19 +268,31 @@ class DownloadRepository(
             val newSample = SpeedSample(timestampMs = now, speedBps = speed)
             val history = (item.speedHistory + newSample).takeLast(40)
 
+            // Calculate average speed
+            val validSamples = history.filter { it.speedBps > 0.0 }
+            val avgSpeed = if (validSamples.isNotEmpty()) {
+                validSamples.map { it.speedBps }.average()
+            } else {
+                speed
+            }
+
+            val isDone = downloaded >= total && total > 0
+
             item.copy(
-                state = if (downloaded >= total && total > 0) DownloadState.COMPLETED else newState,
+                state = if (isDone) DownloadState.COMPLETED else newState,
                 downloadedBytes = downloaded,
                 totalBytes = total,
-                speedBps = if (downloaded >= total && total > 0) 0.0 else speed,
+                speedBps = if (isDone) 0.0 else speed,
+                averageSpeedBps = if (isDone) 0.0 else avgSpeed,
                 progressPercent = progress,
-                etaSeconds = eta,
+                etaSeconds = if (isDone) null else eta,
                 segments = segments,
                 speedHistory = history,
-                completedAt = if (downloaded >= total && total > 0) now else item.completedAt
+                completedAt = if (isDone) now else item.completedAt
             )
         }
         _downloads.value = updated
+        persistDownloads()
     }
 
     private fun generateSegments(
@@ -185,8 +315,6 @@ class DownloadRepository(
 
         val chunkSize = totalBytes / count
         val list = mutableListOf<SegmentProgress>()
-
-        // Simulate realistic multi-chunk progress
         val overallRatio = (downloadedBytes.toDouble() / totalBytes.toDouble()).coerceIn(0.0, 1.0)
 
         for (i in 0 until count) {
@@ -194,9 +322,8 @@ class DownloadRepository(
             val end = if (i == count - 1) totalBytes else (i + 1) * chunkSize
             val segmentSize = end - start
 
-            // Give slightly staggered progress to each segment like real parallel downloads
             val staggeredRatio = (overallRatio + (Math.sin(i.toDouble()) * 0.1)).coerceIn(0.0, 1.0)
-            val segDownloaded = (segmentSize * staggeredRatio).toLong()
+            val segDownloaded = (segmentSize * staggeredRatio).toLong().coerceAtMost(segmentSize)
             val isCompleted = segDownloaded >= segmentSize
 
             list.add(
@@ -231,6 +358,7 @@ class DownloadRepository(
             downloadedBytes = 0L,
             totalBytes = 0L,
             speedBps = 0.0,
+            averageSpeedBps = 0.0,
             progressPercent = 0f,
             connections = connections,
             segments = generateSegments(0L, 0L, connections),
@@ -238,6 +366,7 @@ class DownloadRepository(
         )
 
         _downloads.value = listOf(newItem) + _downloads.value
+        persistDownloads()
         return effectiveId
     }
 
@@ -248,24 +377,36 @@ class DownloadRepository(
                 item.copy(state = DownloadState.PAUSED, speedBps = 0.0)
             } else item
         }
+        persistDownloads()
     }
 
     fun resumeDownload(id: Long) {
+        if (isWifiOnlyEnforced && isCurrentlyMetered()) {
+            pausedByWifiOnly.add(id)
+            Log.w(TAG, "Cannot resume download $id: Wi-Fi only constraint active on metered network")
+            return
+        }
+
+        pausedByWifiOnly.remove(id)
         SwiftGetNative.resume(id)
         _downloads.value = _downloads.value.map { item ->
             if (item.id == id) {
                 item.copy(state = DownloadState.RUNNING)
             } else item
         }
+        persistDownloads()
     }
 
     fun cancelDownload(id: Long) {
+        pausedByWifiOnly.remove(id)
+        ewmaSpeedMap.remove(id)
         SwiftGetNative.cancel(id)
         _downloads.value = _downloads.value.map { item ->
             if (item.id == id) {
                 item.copy(state = DownloadState.CANCELLED, speedBps = 0.0)
             } else item
         }
+        persistDownloads()
     }
 
     fun retryDownload(id: Long) {
@@ -275,8 +416,11 @@ class DownloadRepository(
     }
 
     fun deleteDownload(id: Long) {
+        pausedByWifiOnly.remove(id)
+        ewmaSpeedMap.remove(id)
         SwiftGetNative.cancel(id)
         _downloads.value = _downloads.value.filterNot { it.id == id }
+        persistDownloads()
     }
 
     fun pauseAll() {
@@ -284,6 +428,10 @@ class DownloadRepository(
     }
 
     fun resumeAll() {
+        if (isWifiOnlyEnforced && isCurrentlyMetered()) {
+            Log.w(TAG, "Cannot resume all: Wi-Fi only constraint active on metered network")
+            return
+        }
         _downloads.value.filter { it.state == DownloadState.PAUSED }.forEach { resumeDownload(it.id) }
     }
 }

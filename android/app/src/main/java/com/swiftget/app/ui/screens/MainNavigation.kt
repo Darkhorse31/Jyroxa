@@ -25,6 +25,7 @@ import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -63,6 +64,7 @@ fun MainNavigation(
 
     var passedUrlToAdd by remember { mutableStateOf<String?>(null) }
     var passedTextToGrabber by remember { mutableStateOf<String?>(sharedText) }
+    val settings by app.settings.collectAsState()
 
     Scaffold(
         modifier = modifier.fillMaxSize(),
@@ -94,6 +96,7 @@ fun MainNavigation(
                     AddDownloadScreen(
                         downloadRepository = app.downloadRepository,
                         initialUrl = passedUrlToAdd ?: (if (sharedText != null && !sharedText.contains("\n")) sharedText else null),
+                        defaultDirectory = settings.downloadDirectory,
                         onDownloadStarted = {
                             passedUrlToAdd = null
                             currentTab = ScreenTab.DOWNLOADS
@@ -105,6 +108,7 @@ fun MainNavigation(
                         linkProbeRepository = app.linkProbeRepository,
                         downloadRepository = app.downloadRepository,
                         initialSharedText = passedTextToGrabber,
+                        defaultDownloadDirectory = settings.downloadDirectory,
                         onBatchAdded = {
                             passedTextToGrabber = null
                             currentTab = ScreenTab.DOWNLOADS

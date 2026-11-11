@@ -2,6 +2,7 @@ package com.swiftget.app.ui.screens
 
 import android.content.ClipboardManager
 import android.content.Context
+import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
@@ -16,13 +17,17 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.CheckCircle
 import androidx.compose.material.icons.filled.ContentPaste
 import androidx.compose.material.icons.filled.Download
 import androidx.compose.material.icons.filled.Folder
+import androidx.compose.material.icons.filled.Info
 import androidx.compose.material.icons.filled.Speed
+import androidx.compose.material3.AssistChip
 import androidx.compose.material3.Button
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
+import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
@@ -30,6 +35,7 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Slider
+import androidx.compose.material3.SuggestionChip
 import androidx.compose.material3.Text
 import androidx.compose.material3.TopAppBar
 import androidx.compose.material3.TopAppBarDefaults
@@ -43,12 +49,19 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
+import com.swiftget.app.R
+import com.swiftget.app.data.model.DownloadItem
 import com.swiftget.app.data.repository.DownloadRepository
+import com.swiftget.app.data.repository.ProbeResult
+import com.swiftget.app.data.repository.UrlProber
 import com.swiftget.app.service.DownloadService
+import com.swiftget.app.ui.theme.SpeedAmber
+import com.swiftget.app.ui.theme.SpeedGreen
+import kotlinx.coroutines.delay
 import java.io.File
-import java.net.URI
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -67,18 +80,39 @@ fun AddDownloadScreen(
     var speedLimitKb by remember { mutableStateOf("") }
     var sha256Checksum by remember { mutableStateOf("") }
 
-    // Derive filename automatically from URL changes
+    var isProbing by remember { mutableStateOf(false) }
+    var probeResult by remember { mutableStateOf<ProbeResult?>(null) }
+    var hasUserEditedFileName by remember { mutableStateOf(false) }
+    var hasUserEditedFolder by remember { mutableStateOf(false) }
+
+    // Debounce URL input by 500ms, then probe HEAD -> GET Range 0-0
     LaunchedEffect(url) {
-        if (url.isNotBlank()) {
-            val derived = try {
-                val cleanPath = URI(url.trim()).path ?: ""
-                val raw = cleanPath.substringAfterLast('/').substringBefore('?')
-                if (raw.isNotBlank()) raw else "download_${System.currentTimeMillis()}"
-            } catch (e: Exception) {
-                "download_${System.currentTimeMillis()}"
-            }
-            if (fileName.isBlank() || fileName.startsWith("download_")) {
-                fileName = derived
+        val trimmed = url.trim()
+        if (trimmed.startsWith("http://", ignoreCase = true) ||
+            trimmed.startsWith("https://", ignoreCase = true)
+        ) {
+            delay(500) // Debounce
+            isProbing = true
+            try {
+                val result = UrlProber.probe(trimmed, outputDir)
+                probeResult = result
+
+                // Auto-fill filename from RFC 5987 / Content-Disposition / URL heuristics if user hasn't edited
+                if (!hasUserEditedFileName) {
+                    fileName = result.suggestedFileName
+                }
+
+                // Category folder suggestion if user hasn't manually edited folder
+                if (!hasUserEditedFolder && result.suggestedSubfolder.isNotEmpty()) {
+                    val suggestedDir = File(defaultDirectory, result.suggestedSubfolder).absolutePath
+                    outputDir = suggestedDir
+                }
+            } catch (_: Exception) {
+                if (!hasUserEditedFileName && fileName.isBlank()) {
+                    fileName = UrlProber.extractFileNameFromUrl(trimmed)
+                }
+            } finally {
+                isProbing = false
             }
         }
     }
@@ -107,45 +141,168 @@ fun AddDownloadScreen(
                 .padding(16.dp),
             verticalArrangement = Arrangement.spacedBy(16.dp)
         ) {
-            // URL Input Field with Paste Icon
+            // URL Input Field with Paste & Probing Indicator
             OutlinedTextField(
                 value = url,
-                onValueChange = { url = it },
+                onValueChange = {
+                    url = it
+                    probeResult = null
+                },
                 label = { Text("Download URL (HTTP / HTTPS)") },
                 placeholder = { Text("https://example.com/file.zip") },
                 modifier = Modifier.fillMaxWidth(),
                 singleLine = false,
                 maxLines = 3,
                 trailingIcon = {
-                    IconButton(onClick = {
-                        val clipboard = context.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
-                        val clip = clipboard.primaryClip
-                        if (clip != null && clip.itemCount > 0) {
-                            val text = clip.getItemAt(0).text?.toString() ?: ""
-                            if (text.startsWith("http://") || text.startsWith("https://")) {
-                                url = text
-                            }
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        if (isProbing) {
+                            CircularProgressIndicator(
+                                modifier = Modifier
+                                    .size(20.dp)
+                                    .padding(end = 4.dp),
+                                strokeWidth = 2.dp
+                            )
                         }
-                    }) {
-                        Icon(Icons.Default.ContentPaste, contentDescription = "Paste from clipboard")
+                        IconButton(onClick = {
+                            val clipboard = context.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
+                            val clip = clipboard.primaryClip
+                            if (clip != null && clip.itemCount > 0) {
+                                val text = clip.getItemAt(0).text?.toString()?.trim() ?: ""
+                                if (text.startsWith("http://", ignoreCase = true) ||
+                                    text.startsWith("https://", ignoreCase = true)
+                                ) {
+                                    url = text
+                                }
+                            }
+                        }) {
+                            Icon(Icons.Default.ContentPaste, contentDescription = "Paste from clipboard")
+                        }
                     }
                 }
             )
 
+            // Probing Summary Badge
+            AnimatedVisibility(visible = probeResult != null || isProbing) {
+                if (isProbing) {
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(8.dp),
+                        modifier = Modifier.padding(horizontal = 4.dp)
+                    ) {
+                        Text(
+                            text = stringResource(R.string.probe_status_probing),
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.primary
+                        )
+                    }
+                } else if (probeResult != null) {
+                    val res = probeResult!!
+                    Card(
+                        modifier = Modifier.fillMaxWidth(),
+                        colors = CardDefaults.cardColors(
+                            containerColor = MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.4f)
+                        ),
+                        shape = RoundedCornerShape(12.dp)
+                    ) {
+                        Column(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(12.dp),
+                            verticalArrangement = Arrangement.spacedBy(6.dp)
+                        ) {
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                horizontalArrangement = Arrangement.SpaceBetween,
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                Row(
+                                    verticalAlignment = Alignment.CenterVertically,
+                                    horizontalArrangement = Arrangement.spacedBy(6.dp)
+                                ) {
+                                    Icon(
+                                        Icons.Default.CheckCircle,
+                                        contentDescription = null,
+                                        tint = SpeedGreen,
+                                        modifier = Modifier.size(16.dp)
+                                    )
+                                    Text(
+                                        text = if (res.contentLength != null && res.contentLength > 0L) {
+                                            "Size: ${DownloadItem.formatBytes(res.contentLength)}"
+                                        } else "Size: Unknown (chunked)",
+                                        style = MaterialTheme.typography.labelMedium.copy(fontWeight = FontWeight.Bold)
+                                    )
+                                }
+
+                                Text(
+                                    text = if (res.isRangeSupported) {
+                                        stringResource(R.string.probe_range_supported)
+                                    } else {
+                                        stringResource(R.string.probe_range_not_supported)
+                                    },
+                                    style = MaterialTheme.typography.labelSmall,
+                                    color = if (res.isRangeSupported) SpeedGreen else SpeedAmber,
+                                    fontWeight = FontWeight.SemiBold
+                                )
+                            }
+
+                            if (res.contentType != null) {
+                                Text(
+                                    text = "Type: ${res.contentType} • Category: ${res.suggestedCategory.displayName}",
+                                    style = MaterialTheme.typography.labelSmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                                )
+                            }
+
+                            if (res.suggestedSubfolder.isNotEmpty()) {
+                                Row(
+                                    verticalAlignment = Alignment.CenterVertically,
+                                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                                ) {
+                                    Text(
+                                        text = "Suggested folder: ${res.suggestedSubfolder}/",
+                                        style = MaterialTheme.typography.labelSmall,
+                                        color = MaterialTheme.colorScheme.primary
+                                    )
+                                    SuggestionChip(
+                                        onClick = {
+                                            outputDir = File(defaultDirectory, res.suggestedSubfolder).absolutePath
+                                            hasUserEditedFolder = true
+                                        },
+                                        label = { Text("Apply") },
+                                        modifier = Modifier.height(28.dp)
+                                    )
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+
             // Filename Input Field
             OutlinedTextField(
                 value = fileName,
-                onValueChange = { fileName = it },
+                onValueChange = {
+                    fileName = it
+                    hasUserEditedFileName = true
+                },
                 label = { Text("Save As File Name") },
-                placeholder = { Text("file.zip") },
+                placeholder = { Text("archive.zip") },
                 modifier = Modifier.fillMaxWidth(),
-                singleLine = true
+                singleLine = true,
+                supportingText = {
+                    if (hasUserEditedFileName) {
+                        Text("Custom user filename (auto-fill will not overwrite)")
+                    }
+                }
             )
 
             // Save Location Field
             OutlinedTextField(
                 value = outputDir,
-                onValueChange = { outputDir = it },
+                onValueChange = {
+                    outputDir = it
+                    hasUserEditedFolder = true
+                },
                 label = { Text("Download Folder") },
                 modifier = Modifier.fillMaxWidth(),
                 singleLine = true,
@@ -154,7 +311,7 @@ fun AddDownloadScreen(
                 }
             )
 
-            // Parallel Connections Card (Segmented multi-thread configuration)
+            // Parallel Connections Card
             Card(
                 modifier = Modifier.fillMaxWidth(),
                 colors = CardDefaults.cardColors(
@@ -185,7 +342,7 @@ fun AddDownloadScreen(
                     }
 
                     Text(
-                        text = "Splits the file into multiple parallel segments to saturate connection speed, IDM/ADM style.",
+                        text = "Splits the transfer into multi-part parallel segments to saturate connection throughput.",
                         style = MaterialTheme.typography.bodyMedium,
                         color = MaterialTheme.colorScheme.onSurfaceVariant
                     )
@@ -246,7 +403,16 @@ fun AddDownloadScreen(
             Button(
                 onClick = {
                     if (url.isNotBlank()) {
-                        val fullPath = File(outputDir, fileName.ifBlank { "download_${System.currentTimeMillis()}" }).absolutePath
+                        val finalCleanName = UrlProber.sanitizeFileName(
+                            fileName.ifBlank { UrlProber.extractFileNameFromUrl(url) }
+                        )
+                        val targetDirFile = File(outputDir)
+                        if (!targetDirFile.exists()) {
+                            targetDirFile.mkdirs()
+                        }
+                        val dedupedName = UrlProber.deduplicateFileName(targetDirFile, finalCleanName)
+                        val fullPath = File(targetDirFile, dedupedName).absolutePath
+
                         downloadRepository.startDownload(
                             url = url.trim(),
                             outputFilePath = fullPath,
