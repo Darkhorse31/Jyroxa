@@ -2,7 +2,7 @@
 
 use std::path::PathBuf;
 use std::sync::Arc;
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
 use anyhow::{anyhow, Context, Result};
 use clap::{Parser, Subcommand};
@@ -93,6 +93,15 @@ enum Command {
         /// Connection count for the multi-connection run.
         #[arg(short = 'c', long, default_value_t = 16)]
         connections: usize,
+        /// Comma-separated modes to run: auto, 1, N (default: auto,1,N).
+        #[arg(long, value_delimiter = ',', default_value = "auto,1")]
+        modes: Vec<String>,
+        /// Seconds to sleep between mode runs.
+        #[arg(long, default_value_t = 10)]
+        cooldown: u64,
+        /// Repeat each selected mode this many times (prints min/median/max).
+        #[arg(long, default_value_t = 1)]
+        repeat: usize,
         /// Directory for temporary benchmark files (kept inside the project).
         #[arg(long, default_value = ".swiftget-bench")]
         dir: PathBuf,
@@ -156,8 +165,16 @@ async fn real_main() -> Result<()> {
         Command::Bench {
             url,
             connections,
+            mut modes,
+            cooldown,
+            repeat,
             dir,
-        } => run_bench(url, connections, dir).await,
+        } => {
+            if !modes.iter().any(|m| m.eq_ignore_ascii_case("16") || m == &connections.to_string()) {
+                modes.push(connections.to_string());
+            }
+            run_bench(url, connections, modes, cooldown, repeat, dir).await
+        }
     }
 }
 
@@ -208,11 +225,11 @@ async fn run_get(
     render_events(&mut rx).await;
 
     let outcome = handle.await.context("download task panicked")??;
+    let mbps = outcome.total_size as f64 / outcome.elapsed.as_secs_f64().max(1e-9) / 1_000_000.0;
     println!(
-        "\n✓ done: {} in {:.1}s  (avg {}/s, {} connections)",
+        "\n✓ done: {} in {:.1}s  ({mbps:.2} MB/s, {} connections)",
         human_bytes(outcome.total_size),
         outcome.elapsed.as_secs_f64(),
-        human_bytes(outcome.average_bps as u64),
         outcome.connections_used
     );
     Ok(())
@@ -304,56 +321,152 @@ async fn run_grab(input: String, json: bool, opts: GrabOptions) -> Result<()> {
     Ok(())
 }
 
-async fn run_bench(url: String, connections: usize, dir: PathBuf) -> Result<()> {
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum BenchMode {
+    Auto,
+    Fixed(usize),
+}
+
+fn parse_bench_modes(specs: &[String], default_multi: usize) -> Vec<BenchMode> {
+    let mut out = Vec::new();
+    for s in specs {
+        let t = s.trim();
+        if t.is_empty() {
+            continue;
+        }
+        if t.eq_ignore_ascii_case("auto") {
+            if !out.contains(&BenchMode::Auto) {
+                out.push(BenchMode::Auto);
+            }
+        } else if let Ok(n) = t.parse::<usize>() {
+            let m = BenchMode::Fixed(n.max(1));
+            if !out.contains(&m) {
+                out.push(m);
+            }
+        }
+    }
+    if out.is_empty() {
+        out = vec![BenchMode::Auto, BenchMode::Fixed(1), BenchMode::Fixed(default_multi)];
+    }
+    out
+}
+
+fn bench_order(modes: &[BenchMode]) -> Vec<BenchMode> {
+    let mut ordered = Vec::new();
+    for preferred in [BenchMode::Auto, BenchMode::Fixed(1)] {
+        if modes.contains(&preferred) {
+            ordered.push(preferred);
+        }
+    }
+    for m in modes {
+        if !ordered.contains(m) {
+            ordered.push(*m);
+        }
+    }
+    ordered
+}
+
+fn median(mut v: Vec<f64>) -> f64 {
+    if v.is_empty() {
+        return 0.0;
+    }
+    v.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+    let mid = v.len() / 2;
+    if v.len() % 2 == 0 {
+        (v[mid - 1] + v[mid]) / 2.0
+    } else {
+        v[mid]
+    }
+}
+
+async fn run_bench(
+    url: String,
+    connections: usize,
+    mode_specs: Vec<String>,
+    cooldown: u64,
+    repeat: usize,
+    dir: PathBuf,
+) -> Result<()> {
     std::fs::create_dir_all(&dir).context("creating bench dir")?;
+
+    let modes = parse_bench_modes(&mode_specs, connections);
+    let order = bench_order(&modes);
+    let repeat = repeat.max(1);
 
     println!("SwiftGet benchmark for {url}\n");
 
-    // Single-connection run.
-    let out1 = dir.join("bench_single.part");
-    let (mbps1, _) = bench_run(&url, 1, false, &out1).await?;
-    cleanup(&out1);
-    println!("  1 connection    : {mbps1:>8.2} MB/s");
+    let mut mbps_one: Option<f64> = None;
 
-    // Multi-connection run.
-    let outn = dir.join("bench_multi.part");
-    let out_auto = dir.join("bench_autotune.part");
-    let mbpsn = match bench_run(&url, connections, false, &outn).await {
-        Ok((mbps, _)) => {
-            cleanup(&outn);
-            println!("  {connections:>2} connections  : {mbps:>8.2} MB/s", connections = connections);
-            Some(mbps)
+    for (i, mode) in order.iter().enumerate() {
+        if i > 0 && cooldown > 0 {
+            tokio::time::sleep(Duration::from_secs(cooldown)).await;
         }
-        Err(e) => {
-            cleanup(&outn);
-            eprintln!("  {connections:>2} connections  : FAILED — {e:#}", connections = connections);
-            None
-        }
-    };
 
-    match bench_run(&url, connections, true, &out_auto).await {
-        Ok((mbps, conns)) => {
-            cleanup(&out_auto);
+        let (label, conns, autotune, out) = match mode {
+            BenchMode::Auto => (
+                format!("autotune ({connections} max)"),
+                connections,
+                true,
+                dir.join("bench_autotune.part"),
+            ),
+            BenchMode::Fixed(n) => (
+                format!("{n} connection(s)"),
+                *n,
+                false,
+                dir.join(format!("bench_{n}.part")),
+            ),
+        };
+
+        let mut samples = Vec::new();
+        let mut last_used = conns;
+        for r in 0..repeat {
+            if r > 0 && cooldown > 0 {
+                tokio::time::sleep(Duration::from_secs(cooldown)).await;
+            }
+            match bench_run(&url, conns, autotune, &out).await {
+                Ok((mbps, used)) => {
+                    samples.push(mbps);
+                    last_used = used;
+                    cleanup(&out);
+                }
+                Err(e) => {
+                    cleanup(&out);
+                    eprintln!("  {label} : FAILED — {e:#}");
+                    samples.clear();
+                    break;
+                }
+            }
+        }
+
+        if samples.is_empty() {
+            continue;
+        }
+
+        let min = samples.iter().copied().fold(f64::INFINITY, f64::min);
+        let max = samples.iter().copied().fold(f64::NEG_INFINITY, f64::max);
+        let med = median(samples.clone());
+
+        if *mode == BenchMode::Fixed(1) {
+            mbps_one = Some(med);
+        }
+
+        if repeat > 1 {
             println!(
-                "  autotune ({connections} max) : {mbps:>8.2} MB/s  (ended {conns} conn, best {conns})",
-                connections = connections,
-                conns = conns,
+                "  {label:<22}: min {min:>8.2}  median {med:>8.2}  max {max:>8.2} MB/s  (ended {last_used} conn)"
             );
-        }
-        Err(e) => {
-            cleanup(&out_auto);
-            eprintln!("  autotune ({connections} max) : FAILED — {e:#}", connections = connections);
+        } else if autotune {
+            println!(
+                "  {label:<22}: {med:>8.2} MB/s  (ended {last_used} conn)"
+            );
+        } else {
+            println!("  {label:<22}: {med:>8.2} MB/s");
         }
     }
 
-    if let Some(mbpsn) = mbpsn {
-        let speedup = if mbps1 > 0.0 { mbpsn / mbps1 } else { 0.0 };
-        println!("\n  speedup         : {speedup:>8.2}x");
-    } else {
-        println!("\n  speedup         :     n/a (multi-connection run failed)");
+    if let Some(one) = mbps_one {
+        println!("\n  reference 1-conn median: {one:.2} MB/s");
     }
 
-    // Best-effort cleanup of the bench dir if empty.
     let _ = std::fs::remove_dir(&dir);
     Ok(())
 }

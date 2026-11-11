@@ -196,7 +196,7 @@ pub fn run() {
                 WindowEvent::CloseRequested { api, .. } => {
                     let close_to_tray = app
                         .try_state::<EngineState>()
-                        .map(|s| tauri::async_runtime::block_on(async { s.0.get_settings().await.close_to_tray }))
+                        .map(|s| s.0.close_to_tray())
                         .unwrap_or(true);
                     if close_to_tray {
                         api.prevent_close();

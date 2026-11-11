@@ -12,6 +12,9 @@ use serde::{Deserialize, Serialize};
 
 use crate::error::Result;
 
+/// Per-host throttle caps expire after this many seconds.
+pub const HOST_CAP_DECAY_SECS: u64 = 24 * 60 * 60;
+
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct HostRecord {
     /// Best observed connection count.
@@ -71,30 +74,47 @@ impl HostStats {
         })
     }
 
-    /// The remembered host cap for a host (from throttle events), if any.
-    pub fn host_cap(&self, host: &str) -> Option<usize> {
-        let s = self.store.lock().unwrap();
-        s.hosts.get(host).and_then(|r| {
-            if r.host_cap > 0 {
-                Some(r.host_cap)
-            } else {
-                None
-            }
-        })
+    fn now_secs() -> u64 {
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_secs())
+            .unwrap_or(0)
     }
 
-    /// Record a throttle event: update the per-host cap.
+    fn cap_still_valid(rec: &HostRecord) -> bool {
+        if rec.host_cap == 0 {
+            return false;
+        }
+        if rec.last_throttle == 0 {
+            return true;
+        }
+        Self::now_secs().saturating_sub(rec.last_throttle) <= HOST_CAP_DECAY_SECS
+    }
+
+    /// The remembered host cap for a host (from throttle events), if any.
+    pub fn host_cap(&self, host: &str) -> Option<usize> {
+        let mut s = self.store.lock().unwrap();
+        let rec = s.hosts.get_mut(host)?;
+        if !Self::cap_still_valid(rec) {
+            rec.host_cap = 0;
+            rec.last_throttle = 0;
+            return None;
+        }
+        Some(rec.host_cap)
+    }
+
+    /// Record a throttle event: update the per-host cap (429/503 only; never persist cap < 2).
     pub fn record_throttle(&self, host: &str, cap: usize) {
+        if cap < 2 {
+            return;
+        }
         {
             let mut s = self.store.lock().unwrap();
             let rec = s.hosts.entry(host.to_string()).or_default();
             if rec.host_cap == 0 || cap < rec.host_cap {
                 rec.host_cap = cap;
             }
-            rec.last_throttle = std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .map(|d| d.as_secs())
-                .unwrap_or(0);
+            rec.last_throttle = Self::now_secs();
         }
         let _ = self.persist();
     }
