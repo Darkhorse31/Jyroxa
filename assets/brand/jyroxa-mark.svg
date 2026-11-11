@@ -1,0 +1,33 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" width="512" height="512">
+  <defs>
+    <linearGradient id="jyroxaGradient" x1="12%" y1="12%" x2="88%" y2="88%">
+      <stop offset="0%" stop-color="#7C3AED"/>
+      <stop offset="50%" stop-color="#2563EB"/>
+      <stop offset="100%" stop-color="#06B6D4"/>
+    </linearGradient>
+  </defs>
+  <!-- Background rounded squircle -->
+  <rect width="512" height="512" rx="112" fill="#0B1020"/>
+  
+  <!-- Central core rotor dot -->
+  <circle cx="256" cy="256" r="30" fill="url(#jyroxaGradient)"/>
+
+  <!-- Orbit 1: Stabilizer gimbal ring, tilted -34 deg -->
+  <g transform="rotate(-34 256 256)">
+    <ellipse cx="256" cy="256" rx="178" ry="90" fill="none" stroke="url(#jyroxaGradient)" stroke-width="40"/>
+  </g>
+
+  <!-- Orbit 2: Dynamic high-velocity ring with integrated supersonic chevron, tilted +34 deg -->
+  <g transform="rotate(34 256 256)">
+    <!-- Main orbital ring -->
+    <ellipse cx="256" cy="256" rx="178" ry="90" fill="none" stroke="url(#jyroxaGradient)" stroke-width="40"/>
+    
+    <!-- Forward-motion chevron notch cut behind arrowhead -->
+    <path d="M 396 238 L 468 238" stroke="#0B1020" stroke-width="14" stroke-linecap="round"/>
+    
+    <!-- Supersonic delta chevron arrowhead -->
+    <polygon points="432,306 396,246 468,246" fill="url(#jyroxaGradient)"/>
+    <!-- Specular forward-velocity highlight -->
+    <polygon points="432,284 412,246 452,246" fill="#FFFFFF" opacity="0.4"/>
+  </g>
+</svg>
