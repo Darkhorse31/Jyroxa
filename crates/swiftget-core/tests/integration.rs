@@ -596,6 +596,134 @@ async fn throttle_429_autotune_stays_at_least_one_connection() {
     assert_eq!(outcome.total_size, data.len() as u64);
 }
 
+/// Per-connection rate cap with one randomly stalled connection; multi-conn
+/// must beat single-conn by a wide margin and recover from stalls quickly.
+#[derive(Clone)]
+struct RateStallState {
+    data: Arc<Vec<u8>>,
+    conns: Arc<AtomicUsize>,
+}
+
+async fn serve_rate_stall(State(st): State<RateStallState>, headers: HeaderMap) -> Response {
+    let conn = st.conns.fetch_add(1, Ordering::Relaxed);
+    // Exactly one bad connection (the first) simulates a randomly stalled link.
+    let stall = conn == 0;
+    let range = headers.get(header::RANGE).and_then(|v| v.to_str().ok());
+    let total = st.data.len() as u64;
+    let slice = if let Some(r) = range {
+        let Some((s, e)) = parse_range(r, total) else {
+            return Response::builder()
+                .status(StatusCode::RANGE_NOT_SATISFIABLE)
+                .body(Body::empty())
+                .unwrap();
+        };
+        st.data[s as usize..=e as usize].to_vec()
+    } else {
+        st.data.to_vec()
+    };
+
+    // ~2 MiB/s per connection: 256 KiB every 125 ms.
+    let body_len = slice.len();
+    let stream = unfold((slice, 0usize, stall), move |(data, off, stall)| async move {
+        let pace = Duration::from_millis(125);
+        let chunk = 256 * 1024usize;
+        if off >= data.len() {
+            return None;
+        }
+        if stall && off > data.len() / 4 {
+            // Stall mid-body indefinitely until the client gives up and re-steals.
+            tokio::time::sleep(Duration::from_secs(60)).await;
+            return None;
+        }
+        tokio::time::sleep(pace).await;
+        let end = (off + chunk).min(data.len());
+        let piece = Bytes::copy_from_slice(&data[off..end]);
+        Some((Ok::<Bytes, std::convert::Infallible>(piece), (data, end, stall)))
+    });
+    let body = Body::from_stream(stream);
+
+    if let Some(r) = range {
+        if let Some((s, e)) = parse_range(r, total) {
+            return Response::builder()
+                .status(StatusCode::PARTIAL_CONTENT)
+                .header(header::CONTENT_RANGE, format!("bytes {s}-{e}/{total}"))
+                .header(header::ACCEPT_RANGES, "bytes")
+                .header(header::CONTENT_LENGTH, body_len.to_string())
+                .header(header::ETAG, "\"rate-stall\"")
+                .body(body)
+                .unwrap();
+        }
+    }
+
+    Response::builder()
+        .status(StatusCode::OK)
+        .header(header::CONTENT_LENGTH, body_len.to_string())
+        .header(header::ETAG, "\"rate-stall\"")
+        .body(body)
+        .unwrap()
+}
+
+async fn spawn_rate_stall_server(data: Vec<u8>) -> SocketAddr {
+    let st = RateStallState {
+        data: Arc::new(data),
+        conns: Arc::new(AtomicUsize::new(0)),
+    };
+    let app = Router::new()
+        .route("/rate-stall", get(serve_rate_stall))
+        .with_state(st);
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    tokio::spawn(async move {
+        axum::serve(listener, app).await.unwrap();
+    });
+    addr
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn multi_connection_beats_one_under_per_conn_rate_limit_and_stall() {
+    let data = make_data(8 * 1024 * 1024);
+    let addr = spawn_rate_stall_server(data.clone()).await;
+    let url = format!("http://{addr}/rate-stall");
+    let dir = tempfile::tempdir().unwrap();
+
+    let config = DownloadConfig {
+        min_segment_size: 64 * 1024,
+        max_connections: 8,
+        tune_interval: Duration::from_millis(50),
+        read_timeout: Duration::from_secs(30),
+        ..DownloadConfig::default()
+    };
+
+    let one = dir.path().join("one.bin");
+    let t0 = std::time::Instant::now();
+    let eng = Downloader::new(config.clone()).unwrap();
+    let req1 = DownloadRequest::new(url.clone(), one.clone()).connections(1);
+    eng.download(req1, None, Control::new(), None)
+        .await
+        .expect("1-conn");
+    let t1 = t0.elapsed();
+
+    let eight = dir.path().join("eight.bin");
+    let t0 = std::time::Instant::now();
+    let eng = Downloader::new(config).unwrap();
+    let mut req8 = DownloadRequest::new(url, eight.clone()).connections(8);
+    req8.autotune = false;
+    eng.download(req8, None, Control::new(), None)
+        .await
+        .expect("8-conn");
+    let t8 = t0.elapsed();
+
+    assert_eq!(std::fs::read(&eight).unwrap(), data);
+    assert_eq!(std::fs::read(&one).unwrap(), data);
+  // 8 connections on ~2 MiB/s per link should finish much faster than 1.
+    assert!(
+        t8 < t1 / 2,
+        "8-conn {:?} should be < half of 1-conn {:?}",
+        t8,
+        t1
+    );
+}
+
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn checksum_mismatch_is_reported() {
     let data = make_data(64 * 1024);
