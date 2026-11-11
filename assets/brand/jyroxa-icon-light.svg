@@ -1,0 +1,9 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="512" height="512" viewBox="0 0 512 512"><rect width="512" height="512" rx="112" fill="#FFFFFF"/><defs>
+<clipPath id="lo3"><rect x="-200" y="256" width="912" height="400"/></clipPath>
+<mask id="mb3" maskUnits="userSpaceOnUse" x="0" y="0" width="512" height="512"><rect width="512" height="512" fill="#fff"/><circle cx="256" cy="256" r="112" fill="none" stroke="#000" stroke-width="50"/></mask>
+<mask id="mr3" maskUnits="userSpaceOnUse" x="0" y="0" width="512" height="512"><rect width="512" height="512" fill="#fff"/><g transform="rotate(-26 256 256)"><g clip-path="url(#lo3)"><ellipse cx="256" cy="256" rx="186" ry="62" fill="none" stroke="#000" stroke-width="50"/></g></g></mask>
+</defs>
+<g mask="url(#mb3)"><g transform="rotate(-26 256 256)"><ellipse cx="256" cy="256" rx="186" ry="62" fill="none" stroke="#FF5A3C" stroke-width="30"/></g></g>
+<g mask="url(#mr3)"><circle cx="256" cy="256" r="112" fill="none" stroke="#0F766E" stroke-width="30"/></g>
+<g transform="rotate(-26 256 256)"><g clip-path="url(#lo3)"><ellipse cx="256" cy="256" rx="186" ry="62" fill="none" stroke="#FF5A3C" stroke-width="30"/></g></g>
+<circle cx="256" cy="256" r="42" fill="#0F766E"/></svg>
