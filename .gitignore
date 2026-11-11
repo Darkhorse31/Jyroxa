@@ -20,8 +20,13 @@ android/local.properties
 .swiftget-bench/
 .logs/
 
-# Local toolchain helpers (host-specific, not portable)
-.toolbin/
+# GNU toolchain helpers: track scripts under .toolbin/, ignore generated artifacts
+.toolbin/winlibs/
+.toolbin/defs/
+.toolbin/*.exe
+.toolbin/*.dll
+.toolbin/*.a
+.toolbin/*.7z
 
 # Task specs (local only)
 .tasks/
