@@ -36,4 +36,31 @@
     <!-- Clipboard Banner -->
     <string name="clipboard_detected_title">Link detected in clipboard</string>
     <string name="clipboard_detected_action">Add Download</string>
+
+    <!-- Detailed Status & Background Strings -->
+    <string name="notification_action_pause_single">Pause</string>
+    <string name="notification_action_resume_single">Resume</string>
+    <string name="notification_action_cancel_single">Cancel</string>
+    <string name="notification_paused_wifi_only">Downloads paused (waiting for unmetered Wi-Fi)</string>
+    <string name="notification_service_ready">Download engine ready</string>
+    <string name="notification_completed_title">Downloads Completed</string>
+    <string name="notification_all_completed">All queued transfers finished successfully</string>
+
+    <!-- Permissions & Battery Optimization -->
+    <string name="settings_battery_opt_title">Battery Optimization Exemption</string>
+    <string name="settings_battery_opt_desc">Allow background transfers to proceed without interruption when screen is locked or during Doze mode.</string>
+    <string name="settings_battery_opt_button">Request Exemption</string>
+    <string name="settings_battery_opt_exempt">Unrestricted background downloads enabled</string>
+    <string name="settings_notifications_title">Notification Permission</string>
+    <string name="settings_notifications_desc">Show real-time speed, progress percentage, ETA, and quick controls in the notification tray.</string>
+    <string name="settings_notifications_button">Grant Permission</string>
+    <string name="settings_notifications_granted">Notifications active</string>
+
+    <!-- Network & Probing -->
+    <string name="settings_wifi_only_title">Wi-Fi Only Downloads</string>
+    <string name="settings_wifi_only_desc">Pause downloads automatically when on cellular data and resume when unmetered Wi-Fi reconnects.</string>
+    <string name="probe_status_probing">Probing server...</string>
+    <string name="probe_range_supported">Multi-part parallel supported</string>
+    <string name="probe_range_not_supported">Single stream only</string>
+    <string name="eta_left">%1$s left</string>
 </resources>

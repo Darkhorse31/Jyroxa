@@ -11,11 +11,12 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.InsertDriveFile
+import androidx.compose.material.icons.filled.Android
 import androidx.compose.material.icons.filled.AudioFile
 import androidx.compose.material.icons.filled.Description
 import androidx.compose.material.icons.filled.FolderZip
 import androidx.compose.material.icons.filled.Image
-import androidx.compose.material.icons.filled.InsertDriveFile
 import androidx.compose.material.icons.filled.Link
 import androidx.compose.material.icons.filled.VideoFile
 import androidx.compose.material3.Card
@@ -144,6 +145,7 @@ private fun getCategoryIcon(category: LinkCategory): ImageVector {
         LinkCategory.ARCHIVE -> Icons.Default.FolderZip
         LinkCategory.DOCUMENT -> Icons.Default.Description
         LinkCategory.IMAGE -> Icons.Default.Image
-        LinkCategory.EXECUTABLE, LinkCategory.OTHER, LinkCategory.ALL -> Icons.Default.InsertDriveFile
+        LinkCategory.EXECUTABLE -> Icons.Default.Android
+        LinkCategory.OTHER, LinkCategory.ALL -> Icons.AutoMirrored.Filled.InsertDriveFile
     }
 }
