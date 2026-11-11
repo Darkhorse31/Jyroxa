@@ -24,11 +24,11 @@ import { SettingsView } from "./settings-view";
 import { SpeedGraph } from "./speed-graph";
 import { dispatchSystemNotification, showToast } from "./toast";
 
-const THEME_KEY = "swiftget-theme";
+const THEME_KEY = "jyroxa-theme";
 
 // Theme Controller
 function getInitialTheme(): "dark" | "light" {
-  const saved = localStorage.getItem(THEME_KEY);
+  const saved = localStorage.getItem(THEME_KEY) || localStorage.getItem("swiftget-theme");
   if (saved === "light" || saved === "dark") return saved;
   if (window.matchMedia && window.matchMedia("(prefers-color-scheme: light)").matches) {
     return "light";

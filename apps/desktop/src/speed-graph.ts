@@ -67,8 +67,8 @@ export class SpeedGraph {
     if (w <= 0 || h <= 0) return;
 
     const style = getComputedStyle(document.body);
-    const lineColor = style.getPropertyValue("--graph-line").trim() || "#3b82f6";
-    const fillColor = style.getPropertyValue("--graph-fill").trim() || "rgba(59, 130, 246, 0.15)";
+    const lineColor = style.getPropertyValue("--graph-line").trim() || "#2DD4BF";
+    const fillColor = style.getPropertyValue("--graph-fill").trim() || "rgba(45, 212, 191, 0.18)";
     const gridColor = style.getPropertyValue("--graph-grid").trim() || "rgba(148, 163, 184, 0.15)";
     const textColor = style.getPropertyValue("--text-muted").trim() || "#64748b";
 
