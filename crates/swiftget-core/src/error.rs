@@ -48,6 +48,9 @@ pub enum Error {
     #[error("remote file changed since the saved state (validator mismatch)")]
     ValidatorChanged,
 
+    #[error("server ignored byte ranges; falling back to single-connection download")]
+    RangeIgnored,
+
     #[error("{0}")]
     Other(String),
 }

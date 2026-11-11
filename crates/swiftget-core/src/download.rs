@@ -1,7 +1,7 @@
 //! The multi-connection, multi-mirror, auto-tuning download engine.
 
 use std::path::PathBuf;
-use std::sync::atomic::{AtomicI64, AtomicU64, AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicI64, AtomicU64, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
@@ -108,10 +108,7 @@ async fn interruptible_sleep(rx: &mut watch::Receiver<Cmd>, dur: Duration) -> Re
 
 const SEGMENT_WRITE_BUF: usize = 512 * 1024;
 const RETRY_AFTER_CAP: Duration = Duration::from_secs(30);
-
-fn is_throttle_error(err: &reqwest::Error) -> bool {
-    err.is_connect() || err.is_timeout()
-}
+const PROGRESS_EMIT_INTERVAL: Duration = Duration::from_millis(250);
 
 // ---------------------------------------------------------------------------
 // Configuration and request/outcome types
@@ -134,8 +131,10 @@ pub struct DownloadConfig {
     pub autotune: bool,
     /// How often to sample throughput / tune / persist state.
     pub tune_interval: Duration,
-    /// Request timeout per segment connection.
+    /// Total timeout for small metadata probes (HEAD / tiny ranged GET).
     pub request_timeout: Duration,
+    /// Idle timeout while waiting for the next chunk on an open response body.
+    pub read_timeout: Duration,
 }
 
 impl Default for DownloadConfig {
@@ -149,6 +148,7 @@ impl Default for DownloadConfig {
             autotune: true,
             tune_interval: Duration::from_millis(500),
             request_timeout: Duration::from_secs(60),
+            read_timeout: crate::DEFAULT_READ_TIMEOUT,
         }
     }
 }
@@ -237,6 +237,13 @@ pub fn filename_from_url(u: &url::Url) -> Option<String> {
 }
 
 async fn probe(client: &reqwest::Client, url: &str, timeout: Duration) -> Result<Meta> {
+    match probe_metadata(client, url, timeout).await {
+        Ok(m) => Ok(m),
+        Err(_) => probe_streaming_fallback(client, url, timeout).await,
+    }
+}
+
+async fn probe_metadata(client: &reqwest::Client, url: &str, timeout: Duration) -> Result<Meta> {
     use reqwest::header as h;
     let mut meta = Meta {
         final_url: url.to_string(),
@@ -304,6 +311,34 @@ async fn probe(client: &reqwest::Client, url: &str, timeout: Duration) -> Result
         }
     }
 
+    Ok(meta)
+}
+
+/// Last-resort probe: plain GET (no Range) for hosts that reject HEAD/Range checks.
+async fn probe_streaming_fallback(
+    client: &reqwest::Client,
+    url: &str,
+    timeout: Duration,
+) -> Result<Meta> {
+    use reqwest::header as h;
+    let resp = client.get(url).timeout(timeout).send().await?;
+    if !resp.status().is_success() {
+        return Err(Error::Status(resp.status().as_u16()));
+    }
+    let headers = resp.headers().clone();
+    let mut meta = Meta {
+        final_url: resp.url().to_string(),
+        supports_ranges: false,
+        size: resp.content_length().filter(|&n| n > 0),
+        etag: header_str(&headers, h::ETAG),
+        last_modified: header_str(&headers, h::LAST_MODIFIED),
+        filename: header_str(&headers, h::CONTENT_DISPOSITION).and_then(|cd| filename_from_disposition(&cd)),
+    };
+    if meta.size.is_none() {
+        if let Some(accept) = header_str(&headers, h::ACCEPT_RANGES) {
+            meta.supports_ranges = accept.to_ascii_lowercase().contains("bytes");
+        }
+    }
     Ok(meta)
 }
 
@@ -471,6 +506,9 @@ struct Ctx {
     fatal: Mutex<Option<Error>>,
     notify: Notify,
     final_connections: AtomicUsize,
+    busy_workers: AtomicUsize,
+    range_fallback: AtomicBool,
+    last_progress_emit: Mutex<Instant>,
 }
 
 impl Ctx {
@@ -511,8 +549,8 @@ impl Downloader {
     /// Build an engine with a fresh client and the given config.
     pub fn new(config: DownloadConfig) -> Result<Self> {
         Ok(Downloader {
-            client: crate::build_client()?,
-            segment_client: crate::build_segment_client()?,
+            client: crate::build_client_with(config.read_timeout)?,
+            segment_client: crate::build_segment_client_with(config.read_timeout)?,
             global_limiter: Arc::new(RateLimiter::unlimited()),
             host_stats: Arc::new(HostStats::in_memory()),
             config,
@@ -601,12 +639,13 @@ impl Downloader {
         // Starting connection count: remembered best for the host, clamped by cap.
         let host_cap = self.host_stats.host_cap(&host);
         let initial_conn = if req.autotune {
+            let cap = host_cap.unwrap_or(max_conn).min(max_conn);
+            let default_start = 4.min(cap);
             let remember = self
                 .host_stats
                 .best_connections(&host)
-                .unwrap_or(self.config.initial_connections);
-            let cap = host_cap.unwrap_or(max_conn);
-            remember.clamp(1, cap.min(max_conn))
+                .unwrap_or(default_start);
+            remember.clamp(1, cap)
         } else {
             max_conn
         };
@@ -671,6 +710,9 @@ impl Downloader {
             fatal: Mutex::new(None),
             notify: Notify::new(),
             final_connections: AtomicUsize::new(initial_conn),
+            busy_workers: AtomicUsize::new(0),
+            range_fallback: AtomicBool::new(false),
+            last_progress_emit: Mutex::new(Instant::now()),
         });
 
         ctx.emit(ProgressEvent::Started {
@@ -709,6 +751,9 @@ impl Downloader {
             if ctx.table.all_done() {
                 break;
             }
+            if ctx.range_fallback.load(Ordering::Acquire) {
+                break;
+            }
             if ctx.fatal.lock().unwrap().is_some() || ctx.control.is_cancelled() {
                 break;
             }
@@ -718,6 +763,22 @@ impl Downloader {
             let _ = tokio::time::timeout(Duration::from_millis(150), ctx.notify.notified()).await;
         }
         supervisor.abort();
+
+        if ctx.range_fallback.load(Ordering::Acquire) && !control.is_cancelled() {
+            ctx.target.store(0, Ordering::Release);
+            ctx.notify.notify_waiters();
+            for _ in 0..500 {
+                if ctx.active_workers.load(Ordering::Acquire) == 0 {
+                    break;
+                }
+                tokio::time::sleep(Duration::from_millis(10)).await;
+            }
+            let _ = std::fs::remove_file(&output);
+            let _ = DownloadState::remove(&state_path);
+            return self
+                .download_single(&req, &output, &state_path, events, control)
+                .await;
+        }
 
         // Surface any fatal error or cancellation.
         if let Some(err) = ctx.fatal.lock().unwrap().take() {
@@ -856,11 +917,7 @@ impl Downloader {
     ) -> Result<u64> {
         use std::io::Write;
         let resp = loop {
-            let send_fut = self
-                .client
-                .get(url)
-                .timeout(self.config.request_timeout)
-                .send();
+            let send_fut = self.client.get(url).send();
             break tokio::select! {
                 r = send_fut => r?,
                 changed = ctrl_rx.changed() => {
@@ -933,7 +990,10 @@ fn spawn_worker(ctx: Arc<Ctx>) {
         let mut ctrl_rx = ctx.control.subscribe();
         // Keep claiming work (queue, then stealing) until nothing remains.
         loop {
-            if ctx.fatal.lock().unwrap().is_some() || ctx.control.is_cancelled() {
+            if ctx.range_fallback.load(Ordering::Acquire)
+                || ctx.fatal.lock().unwrap().is_some()
+                || ctx.control.is_cancelled()
+            {
                 break;
             }
             let target = ctx.target.load(Ordering::Acquire);
@@ -942,16 +1002,30 @@ fn spawn_worker(ctx: Arc<Ctx>) {
                 // Over the connection target — retire without taking new work.
                 break;
             }
-            let Some(seg) = ctx.table.next_work() else {
-                break;
+            let idle = ctx.active_workers.load(Ordering::Acquire)
+                > ctx.busy_workers.load(Ordering::Acquire);
+            let Some(seg) = ctx.table.next_work(idle) else {
+                if ctx.table.all_done() {
+                    break;
+                }
+                let _ = tokio::time::timeout(Duration::from_millis(25), ctx.notify.notified()).await;
+                continue;
             };
-            match run_segment(&ctx, &seg, &mut ctrl_rx).await {
+            ctx.busy_workers.fetch_add(1, Ordering::AcqRel);
+            let seg_result = run_segment(&ctx, &seg, &mut ctrl_rx).await;
+            ctx.busy_workers.fetch_sub(1, Ordering::AcqRel);
+            match seg_result {
                 Ok(()) => {
                     ctx.global_fail_streak.store(0, Ordering::Release);
                 }
                 Err(Error::Cancelled) => break,
                 Err(e @ Error::LinkExpired { .. }) => {
                     ctx.set_fatal(e);
+                    break;
+                }
+                Err(Error::RangeIgnored) => {
+                    ctx.range_fallback.store(true, Ordering::Release);
+                    ctx.notify.notify_waiters();
                     break;
                 }
                 Err(e) => {
@@ -1045,8 +1119,7 @@ async fn run_segment(
         let req_builder = ctx
             .client
             .get(&url)
-            .header(reqwest::header::RANGE, range)
-            .timeout(ctx.config.request_timeout);
+            .header(reqwest::header::RANGE, range);
 
         let resp = tokio::select! {
             res = req_builder.send() => res,
@@ -1063,18 +1136,6 @@ async fn run_segment(
             Ok(r) => r,
             Err(e) => {
                 ctx.pool.demote(&mirror);
-                if is_throttle_error(&e) {
-                    ctx.recent_throttles.fetch_add(1, Ordering::Relaxed);
-                    let active = ctx.active_workers.load(Ordering::Acquire);
-                    let target = ctx.target.load(Ordering::Acquire);
-                    if active > target && seg.remaining() > 0 {
-                        ctx.table.requeue(seg.clone());
-                        return Ok(());
-                    }
-                    emit_retry(ctx, attempt + 1, &e.to_string());
-                    interruptible_sleep(ctrl_rx, backoff_delay(attempt + 1)).await?;
-                    continue;
-                }
                 ctx.recent_errors.fetch_add(1, Ordering::Relaxed);
                 attempt += 1;
                 if attempt > ctx.config.max_retries {
@@ -1087,6 +1148,11 @@ async fn run_segment(
         };
 
         let status = resp.status();
+        if status == reqwest::StatusCode::OK
+            && (begin > 0 || end < ctx.total.saturating_sub(1))
+        {
+            return Err(Error::RangeIgnored);
+        }
         if status == reqwest::StatusCode::FORBIDDEN || status == reqwest::StatusCode::GONE {
             // Expired link: try to refresh via the hook.
             if let Some(refresher) = &ctx.refresher {
@@ -1207,11 +1273,7 @@ async fn run_segment(
                 }
                 Some(Err(e)) => {
                     flush_segment_buf(ctx, &file, &mut write_buf, &mut write_at, seg).await?;
-                    if is_throttle_error(&e) {
-                        ctx.recent_throttles.fetch_add(1, Ordering::Relaxed);
-                    } else {
-                        ctx.recent_errors.fetch_add(1, Ordering::Relaxed);
-                    }
+                    ctx.recent_errors.fetch_add(1, Ordering::Relaxed);
                     stream_err = Some(e.into());
                     break;
                 }
@@ -1321,21 +1383,32 @@ async fn supervise(
             "downloading"
         };
 
-        ctx.emit(progress_tick(
-            bytes,
-            Some(ctx.total),
-            speed_ewma,
-            target,
-            eta,
-            Some(avg),
-            Some(elapsed),
-            Some(active),
-            Some(status),
-            Some(true),
-            if host.is_empty() { None } else { Some(&host) },
-            Some("HTTP/1.1"),
-            Some(ctx.table.snapshot()),
-        ));
+        let should_emit = {
+            let mut last = ctx.last_progress_emit.lock().unwrap();
+            if last.elapsed() >= PROGRESS_EMIT_INTERVAL {
+                *last = now;
+                true
+            } else {
+                false
+            }
+        };
+        if should_emit {
+            ctx.emit(progress_tick(
+                bytes,
+                Some(ctx.total),
+                speed_ewma,
+                target,
+                eta,
+                Some(avg),
+                Some(elapsed),
+                Some(active),
+                Some(status),
+                Some(true),
+                if host.is_empty() { None } else { Some(&host) },
+                Some("HTTP/1.1"),
+                Some(ctx.table.snapshot()),
+            ));
+        }
 
         persist_state(&ctx, &req, &meta, &state_path, target);
 
@@ -1367,9 +1440,6 @@ async fn supervise(
             if throttles > 0 && !host.is_empty() {
                 host_stats.record_throttle(&host, t.host_cap());
             }
-        } else if errors > 0 && target > 1 {
-            target = target.saturating_sub(1).max(1);
-            ctx.target.store(target, Ordering::Release);
         }
 
         reconcile_workers(&ctx);

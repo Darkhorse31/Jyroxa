@@ -8,6 +8,8 @@ use std::time::Duration;
 use sha2::{Digest, Sha256};
 
 use axum::body::Body;
+use bytes::Bytes;
+use futures::stream::unfold;
 use axum::extract::State;
 use axum::http::{header, HeaderMap, StatusCode};
 use axum::response::Response;
@@ -429,6 +431,169 @@ async fn throttle_429_download_completes() {
         .expect("should complete despite 429s");
     assert_eq!(outcome.total_size, data.len() as u64);
     assert_eq!(std::fs::read(&out).unwrap(), data);
+}
+
+#[derive(Clone)]
+struct SlowState {
+    data: Arc<Vec<u8>>,
+}
+
+async fn serve_slow(State(st): State<SlowState>, headers: HeaderMap) -> Response {
+    let range = headers.get(header::RANGE).and_then(|v| v.to_str().ok());
+    let total = st.data.len() as u64;
+    let slice = if let Some(r) = range {
+        let Some((s, e)) = parse_range(r, total) else {
+            return Response::builder()
+                .status(StatusCode::RANGE_NOT_SATISFIABLE)
+                .body(Body::empty())
+                .unwrap();
+        };
+        st.data[s as usize..=e as usize].to_vec()
+    } else {
+        st.data.to_vec()
+    };
+
+    let len = slice.len();
+    let buf = slice;
+    let stream = unfold((buf, 0usize), |(data, off)| async move {
+        if off >= data.len() {
+            return None;
+        }
+        tokio::time::sleep(Duration::from_millis(80)).await;
+        let end = (off + 64 * 1024).min(data.len());
+        let chunk = Bytes::copy_from_slice(&data[off..end]);
+        Some((Ok::<Bytes, std::convert::Infallible>(chunk), (data, end)))
+    });
+    let body = Body::from_stream(stream);
+
+    if let Some(r) = range {
+        if let Some((s, e)) = parse_range(r, total) {
+            return Response::builder()
+                .status(StatusCode::PARTIAL_CONTENT)
+                .header(header::CONTENT_RANGE, format!("bytes {s}-{e}/{total}"))
+                .header(header::ACCEPT_RANGES, "bytes")
+                .header(header::ETAG, "\"slow\"")
+                .body(body)
+                .unwrap();
+        }
+    }
+
+    Response::builder()
+        .status(StatusCode::OK)
+        .header(header::CONTENT_LENGTH, len.to_string())
+        .header(header::ETAG, "\"slow\"")
+        .body(body)
+        .unwrap()
+}
+
+async fn spawn_slow_server(data: Vec<u8>) -> SocketAddr {
+    let st = SlowState {
+        data: Arc::new(data),
+    };
+    let app = Router::new()
+        .route("/slow", get(serve_slow))
+        .with_state(st);
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    tokio::spawn(async move {
+        axum::serve(listener, app).await.unwrap();
+    });
+    addr
+}
+
+#[derive(Clone)]
+struct IgnoreRangeState {
+    data: Arc<Vec<u8>>,
+}
+
+async fn serve_ignore_range_head(State(st): State<IgnoreRangeState>) -> Response {
+    Response::builder()
+        .status(StatusCode::OK)
+        .header(header::ACCEPT_RANGES, "bytes")
+        .header(header::CONTENT_LENGTH, st.data.len().to_string())
+        .header(header::ETAG, "\"ignore\"")
+        .body(Body::empty())
+        .unwrap()
+}
+
+async fn serve_ignore_range(State(st): State<IgnoreRangeState>, _headers: HeaderMap) -> Response {
+    build_response(&st.data, "\"ignore\"", None, false)
+}
+
+async fn spawn_ignore_range_server(data: Vec<u8>) -> SocketAddr {
+    let st = IgnoreRangeState {
+        data: Arc::new(data),
+    };
+    let app = Router::new()
+        .route(
+            "/ignore",
+            get(serve_ignore_range).head(serve_ignore_range_head),
+        )
+        .with_state(st);
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    tokio::spawn(async move {
+        axum::serve(listener, app).await.unwrap();
+    });
+    addr
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn slow_stream_survives_read_timeout_not_total_deadline() {
+    let data = make_data(4 * 1024 * 1024);
+    let addr = spawn_slow_server(data.clone()).await;
+    let dir = tempfile::tempdir().unwrap();
+    let out = dir.path().join("slow.bin");
+
+    let config = DownloadConfig {
+        read_timeout: Duration::from_secs(5),
+        request_timeout: Duration::from_secs(1),
+        min_segment_size: 64 * 1024,
+        tune_interval: Duration::from_millis(100),
+        ..DownloadConfig::default()
+    };
+    let engine = Downloader::new(config).unwrap();
+    let req = DownloadRequest::new(format!("http://{addr}/slow"), out.clone()).connections(2);
+    let outcome = engine
+        .download(req, None, Control::new(), None)
+        .await
+        .expect("slow but steady download should complete");
+    assert_eq!(outcome.total_size, data.len() as u64);
+    assert_eq!(std::fs::read(&out).unwrap(), data);
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn range_ignored_falls_back_to_single_connection() {
+    let data = make_data(200 * 1024);
+    let addr = spawn_ignore_range_server(data.clone()).await;
+    let dir = tempfile::tempdir().unwrap();
+    let out = dir.path().join("ignore.bin");
+
+    // Probe thinks ranges work (HEAD advertises Accept-Ranges) but GET ignores Range.
+    let req = DownloadRequest::new(format!("http://{addr}/ignore"), out.clone()).connections(8);
+    let outcome = test_engine()
+        .download(req, None, Control::new(), None)
+        .await
+        .expect("should fall back to single-connection download");
+
+    assert_eq!(outcome.connections_used, 1);
+    assert_eq!(std::fs::read(&out).unwrap(), data);
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn throttle_429_autotune_stays_at_least_one_connection() {
+    let data = make_data(128 * 1024);
+    let addr = spawn_throttle_server(data.clone()).await;
+    let dir = tempfile::tempdir().unwrap();
+    let out = dir.path().join("throttle_auto.bin");
+    let mut req = DownloadRequest::new(format!("http://{addr}/throttle"), out.clone()).connections(8);
+    req.autotune = true;
+    let outcome = test_engine()
+        .download(req, None, Control::new(), None)
+        .await
+        .expect("should complete despite 429s");
+    assert!(outcome.connections_used >= 1);
+    assert_eq!(outcome.total_size, data.len() as u64);
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]

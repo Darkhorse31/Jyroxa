@@ -49,6 +49,8 @@ reqwest = { workspace = true }
 
 [dev-dependencies]
 axum = "0.7"
+bytes = { workspace = true }
+futures = { workspace = true }
 hyper = { version = "1", features = ["full"] }
 tempfile = "3"
 tokio = { workspace = true, features = ["test-util"] }

@@ -2,7 +2,7 @@
 
 use std::collections::{HashMap, VecDeque};
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Weak};
 
 use serde::{Deserialize, Serialize};
@@ -164,6 +164,8 @@ pub struct DesktopEngine {
     active_count: Arc<Mutex<usize>>,
     next_id: AtomicU64,
     settings: Arc<Mutex<AppSettings>>,
+    /// Cached `close_to_tray` for synchronous window close handling (no async lock).
+    close_to_tray_cached: AtomicBool,
     data_dir: PathBuf,
     weak: Weak<Self>,
 }
@@ -197,6 +199,7 @@ impl DesktopEngine {
             }
         }
 
+        let close_to_tray = settings.close_to_tray;
         let engine = Arc::new_cyclic(|weak| DesktopEngine {
             downloader,
             linkgrabber,
@@ -205,6 +208,7 @@ impl DesktopEngine {
             active_count: Arc::new(Mutex::new(0)),
             next_id: AtomicU64::new(next_id),
             settings: Arc::new(Mutex::new(settings)),
+            close_to_tray_cached: AtomicBool::new(close_to_tray),
             data_dir,
             weak: weak.clone(),
         });
@@ -213,6 +217,10 @@ impl DesktopEngine {
 
     pub fn data_dir(&self) -> &Path {
         &self.data_dir
+    }
+
+    pub fn close_to_tray(&self) -> bool {
+        self.close_to_tray_cached.load(Ordering::Relaxed)
     }
 
     pub async fn get_settings(&self) -> AppSettings {
@@ -229,6 +237,8 @@ impl DesktopEngine {
             let mut settings = self.settings.lock().await;
             *settings = s.clone();
         }
+        self.close_to_tray_cached
+            .store(s.close_to_tray, Ordering::Release);
         {
             let mut dl = self.downloader.write().await;
             dl.set_global_limit(s.global_speed_limit);

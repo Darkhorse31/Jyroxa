@@ -47,13 +47,22 @@ pub const HTTP3_ENABLED: bool = cfg!(feature = "http3");
 /// A convenient default `User-Agent`.
 pub const USER_AGENT: &str = concat!("SwiftGet/", env!("CARGO_PKG_VERSION"));
 
+/// Default idle/read timeout for open HTTP responses (no bytes arriving).
+pub const DEFAULT_READ_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(30);
+
 /// Build a tuned [`reqwest::Client`] suitable for the engine and LinkGrabber.
 pub fn build_client() -> Result<reqwest::Client> {
+    build_client_with(DEFAULT_READ_TIMEOUT)
+}
+
+/// Build a client with a custom per-read idle timeout (no total request deadline).
+pub fn build_client_with(read_timeout: std::time::Duration) -> Result<reqwest::Client> {
     let client = reqwest::Client::builder()
         .user_agent(USER_AGENT)
         .pool_max_idle_per_host(MAX_CONNECTIONS)
         .tcp_keepalive(std::time::Duration::from_secs(30))
         .connect_timeout(std::time::Duration::from_secs(20))
+        .read_timeout(read_timeout)
         .build()?;
     Ok(client)
 }
@@ -65,6 +74,11 @@ pub fn build_client() -> Result<reqwest::Client> {
 /// segment worker opens its own TCP connection — like IDM — giving real
 /// parallelism across connections.
 pub fn build_segment_client() -> Result<reqwest::Client> {
+    build_segment_client_with(DEFAULT_READ_TIMEOUT)
+}
+
+/// Segment worker client with HTTP/1.1 and an idle read timeout.
+pub fn build_segment_client_with(read_timeout: std::time::Duration) -> Result<reqwest::Client> {
     let client = reqwest::Client::builder()
         .user_agent(USER_AGENT)
         .http1_only()
@@ -72,6 +86,7 @@ pub fn build_segment_client() -> Result<reqwest::Client> {
         .tcp_nodelay(true)
         .tcp_keepalive(std::time::Duration::from_secs(30))
         .connect_timeout(std::time::Duration::from_secs(20))
+        .read_timeout(read_timeout)
         .build()?;
     Ok(client)
 }

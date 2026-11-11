@@ -184,14 +184,18 @@ impl SegmentTable {
     }
 
     /// Get the next unit of work for a worker: first from the queue, then by
-    /// stealing. Returns `None` when there is nothing left to do.
-    pub fn next_work(&self) -> Option<Arc<Segment>> {
+    /// stealing when `allow_steal` is true (another worker is idle).
+    pub fn next_work(&self, allow_steal: bool) -> Option<Arc<Segment>> {
         if let Some(s) = self.queue.lock().unwrap().pop_front() {
             if s.remaining() > 0 {
                 return Some(s);
             }
         }
-        self.steal()
+        if allow_steal {
+            self.steal()
+        } else {
+            None
+        }
     }
 
     /// Steal work: find the active segment with the most remaining bytes and,
@@ -200,18 +204,23 @@ impl SegmentTable {
     pub fn steal(&self) -> Option<Arc<Segment>> {
         let mut segs = self.all.lock().unwrap();
 
-        let mut best: Option<(usize, u64)> = None;
+        let mut best: Option<(usize, u64, u64)> = None;
         for (i, s) in segs.iter().enumerate() {
             let rem = s.remaining();
-            if best.map(|(_, r)| rem > r).unwrap_or(true) {
-                best = Some((i, rem));
+            if rem < self.min_steal.saturating_mul(2) {
+                continue;
+            }
+            let cur = s.current();
+            let replace = best
+                .map(|(_, r, c)| rem > r || (rem == r && cur > c))
+                .unwrap_or(true);
+            if replace {
+                best = Some((i, rem, cur));
             }
         }
 
-        let (victim_idx, remaining) = best?;
-        if remaining < self.min_steal.saturating_mul(2) {
-            return None;
-        }
+        let (victim_idx, remaining, _) = best?;
+        let _ = remaining;
 
         let victim = segs[victim_idx].clone();
         let cur = victim.current();
@@ -271,11 +280,11 @@ mod tests {
         let table = SegmentTable::from_ranges(&[(0, 999)], 10);
         assert_eq!(table.queued(), 1);
         // First worker claims the queued segment.
-        let first = table.next_work().expect("queued work");
+        let first = table.next_work(true).expect("queued work");
         assert_eq!(first.start, 0);
         assert_eq!(table.queued(), 0);
         // Second worker must steal the tail of the first.
-        let stolen = table.next_work().expect("stolen work");
+        let stolen = table.next_work(true).expect("stolen work");
         assert_eq!(stolen.start, 500);
         assert_eq!(stolen.end(), 999);
         assert_eq!(first.end(), 499);
@@ -285,14 +294,14 @@ mod tests {
     #[test]
     fn steal_respects_min() {
         let table = SegmentTable::from_ranges(&[(0, 15)], 100);
-        let _ = table.next_work();
+        let _ = table.next_work(true);
         assert!(table.steal().is_none());
     }
 
     #[test]
     fn steal_follows_cursor() {
         let table = SegmentTable::from_ranges(&[(0, 999)], 10);
-        let victim = table.next_work().unwrap();
+        let victim = table.next_work(true).unwrap();
         victim.current.store(400, Ordering::Release);
         let stolen = table.steal().expect("should steal");
         // mid = 400 + (999-400)/2 = 699; tail = 700..=999.
@@ -310,7 +319,7 @@ mod tests {
         let table = SegmentTable::from_state(&segs, 10);
         assert_eq!(table.len(), 2);
         assert_eq!(table.queued(), 1);
-        let w = table.next_work().unwrap();
+        let w = table.next_work(true).unwrap();
         assert_eq!(w.index, 1);
         assert_eq!(w.current(), 140);
     }
