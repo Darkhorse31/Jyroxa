@@ -32,13 +32,14 @@ Rust on Android uses **rustls** (via `swiftget-core` target cfg); Windows deskto
 
 ## Desktop (Windows GNU)
 
-Built on **2026-11-10** with host `x86_64-pc-windows-gnu`, Tauri v2.
-
-## Desktop (Tauri)
+Built on **2026-11-11** with host `x86_64-pc-windows-gnu`, Tauri v2.
 
 | Artifact | Path |
 |----------|------|
 | Release executable | `E:\SwiftGet\target\release\swiftget-desktop.exe` |
+| WebView2 loader (required beside exe on GNU) | `E:\SwiftGet\target\release\WebView2Loader.dll` |
+| NSIS installer | `E:\SwiftGet\dist\SwiftGet_0.1.0_x64-setup.exe` |
+| Portable zip (`SwiftGet.exe` + `WebView2Loader.dll`) | `E:\SwiftGet\dist\SwiftGet-0.1.0-windows-x64-portable.zip` |
 | Frontend bundle (embedded) | `E:\SwiftGet\apps\desktop\dist\` |
 
 ### Commands used
@@ -46,18 +47,14 @@ Built on **2026-11-10** with host `x86_64-pc-windows-gnu`, Tauri v2.
 ```powershell
 cd E:\SwiftGet\apps\desktop
 npm install
-.\build-gnu.ps1 --no-bundle
+powershell -NoProfile -ExecutionPolicy Bypass -Command "cd E:\SwiftGet\apps\desktop; .\build-gnu.ps1"
+.\package-portable.ps1
+Copy-Item E:\SwiftGet\target\release\bundle\nsis\SwiftGet_0.1.0_x64-setup.exe E:\SwiftGet\dist\ -Force
 ```
 
 `build-gnu.ps1` prepends `.toolbin` (windres/ar shims) and the NDK LLVM bin directory to `PATH` so `tauri-winres` can compile the Windows manifest.
 
-### Installer (NSIS)
-
-Full `npm run tauri build` (with bundling) **failed** on this machine: Tauri could not finish downloading `nsis-3.13.zip` from GitHub (`timeout: global`). Use `--no-bundle` for a runnable `.exe`, or retry bundling when the network allows.
-
-Expected installer output (when bundling succeeds):
-
-`E:\SwiftGet\target\release\bundle\nsis\SwiftGet_*_x64-setup.exe`
+**Note:** A lone copy of `swiftget-desktop.exe` (or a zip containing only the exe) will fail at startup with a missing `WebView2Loader.dll` error on GNU builds. Use the portable zip or the NSIS installer.
 
 ## Workspace Rust binaries (reference)
 
