@@ -1,0 +1,96 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>SwiftGet</title>
+    <link rel="stylesheet" href="/src/styles.css" />
+  </head>
+  <body data-theme="dark">
+    <div id="app">
+      <header class="topbar">
+        <div class="brand">
+          <span class="logo">SwiftGet</span>
+          <span class="tagline">fast segmented downloads</span>
+        </div>
+        <div class="toolbar">
+          <button type="button" id="btn-add" class="primary">Add download</button>
+          <button type="button" id="btn-grabber">LinkGrabber</button>
+          <button type="button" id="btn-settings">Settings</button>
+          <button type="button" id="btn-theme" title="Toggle theme">◑</button>
+        </div>
+      </header>
+
+      <main class="layout">
+        <section class="panel downloads-panel">
+          <div class="panel-head">
+            <h2>Downloads</h2>
+            <canvas id="speed-graph" width="640" height="80" aria-label="Speed graph"></canvas>
+          </div>
+          <div id="download-list" class="download-list"></div>
+        </section>
+
+        <aside id="sidebar" class="panel sidebar hidden">
+          <div id="grabber-panel" class="hidden"></div>
+          <div id="settings-panel" class="hidden"></div>
+        </aside>
+      </main>
+    </div>
+
+    <dialog id="dlg-add">
+      <form method="dialog" id="form-add">
+        <h3>Add download</h3>
+        <label
+          >URLs (one per line)
+          <textarea id="add-urls" rows="4" required></textarea>
+        </label>
+        <label
+          >Save as
+          <input id="add-filename" type="text" required />
+        </label>
+        <label
+          >Folder
+          <div class="row">
+            <input id="add-folder" type="text" required />
+            <button type="button" id="btn-pick-folder">Browse</button>
+          </div>
+        </label>
+        <label class="row check">
+          <input id="add-auto-conn" type="checkbox" checked />
+          Auto connections (1–32)
+        </label>
+        <label
+          >Connections
+          <input id="add-connections" type="number" min="1" max="32" value="8" disabled />
+        </label>
+        <label
+          >SHA-256 (optional)
+          <input id="add-sha256" type="text" autocomplete="off" />
+        </label>
+        <label
+          >MD5 (optional)
+          <input id="add-md5" type="text" autocomplete="off" />
+        </label>
+        <div class="dialog-actions">
+          <button type="submit" class="primary">Queue</button>
+          <button type="button" id="add-cancel">Cancel</button>
+        </div>
+      </form>
+    </dialog>
+
+    <dialog id="dlg-clipboard">
+      <form method="dialog">
+        <h3>URL in clipboard</h3>
+        <p id="clipboard-url-text"></p>
+        <p class="hint">Open LinkGrabber to probe, or queue directly.</p>
+        <div class="dialog-actions">
+          <button type="button" id="clipboard-grab" class="primary">LinkGrabber</button>
+          <button type="button" id="clipboard-queue">Queue URL</button>
+          <button type="button" id="clipboard-dismiss">Dismiss</button>
+        </div>
+      </form>
+    </dialog>
+
+    <script type="module" src="/src/main.ts"></script>
+  </body>
+</html>
