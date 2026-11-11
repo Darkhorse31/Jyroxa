@@ -1,0 +1,31 @@
+﻿# Build artifacts
+target/
+dist/
+build/
+
+# Node / desktop (later phase)
+node_modules/
+apps/desktop/dist/
+apps/desktop/src-tauri/target/
+
+# Android (later phase)
+android/.gradle/
+android/build/
+android/local.properties
+
+# SwiftGet runtime state & logs
+*.sgstate
+*.sgstate.tmp
+.swiftget/
+.swiftget-bench/
+.logs/
+
+# Local toolchain helpers (host-specific, not portable)
+.toolbin/
+
+# Task specs (local only)
+.tasks/
+
+# OS / editor noise
+Thumbs.db
+.DS_Store
