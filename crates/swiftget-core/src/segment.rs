@@ -176,6 +176,13 @@ impl SegmentTable {
             .collect()
     }
 
+    /// Put a segment back on the pending queue after a transient failure.
+    pub fn requeue(&self, seg: Arc<Segment>) {
+        if seg.remaining() > 0 {
+            self.queue.lock().unwrap().push_back(seg);
+        }
+    }
+
     /// Get the next unit of work for a worker: first from the queue, then by
     /// stealing. Returns `None` when there is nothing left to do.
     pub fn next_work(&self) -> Option<Arc<Segment>> {
