@@ -43,3 +43,15 @@ binaries C-compiler-free, the project:
 and host-derived system import archives) are large and host-specific;
 `gen-winlibs.ps1` regenerates `winlibs` on this machine. Nothing here touches
 PATH/registry/system state.
+
+## Created outside E:\.swiftget-tools during the build
+- %LOCALAPPDATA%\tauri (NSIS toolchain downloaded by the Tauri bundler; did not exist before)
+- %USERPROFILE%\.android (created by Android build tools/Gradle; did not exist before)
+- E:\.swiftget-tools\dl\winlibs.7z (MinGW archive downloaded by the coding agent while fixing the GNU linker)
+
+## Removal (2026-11-11)
+After the build was verified, everything listed under "Installed during this work" and "Created outside" was deleted:
+E:\.swiftget-tools (Rust toolchain + cargo cache + cargo-ndk, JDK 17, Android SDK/NDK, Gradle 8.7 + Gradle cache, downloads, helper scripts),
+%LOCALAPPDATA%\tauri and %USERPROFILE%\.android. Pre-existing tools (Git, Node.js, WebView2, Cursor CLI, Antigravity CLI) were left untouched.
+Project-local items are kept: apps/desktop/node_modules, .toolbin (git-ignored GNU linker helpers), target/ and dist/ build outputs.
+To rebuild later, reinstall Rust (rustup), and for Android a JDK 17 + Android SDK/NDK; see README.md.
