@@ -1,219 +1,55 @@
-# SwiftGet Android App
+# Jyroxa Android app
 
-Modern, high-performance Android download manager frontend for **SwiftGet**, engineered with **Kotlin**, **Jetpack Compose (Material 3 with Dynamic Color)**, and native **Rust FFI bindings via JNI**.
+Kotlin + Jetpack Compose (Material 3) frontend for **Jyroxa**, with JNI into `crates/jyroxa-ffi` (`libjyroxa_ffi.so`).
 
-SwiftGet Android brings desktop-grade download acceleration to mobile devices:
-- **Multi-Part Parallel Segments:** Dynamic connection chunking (1–32 parallel threads) with per-segment progress visualization, outperforming standard single-stream mobile downloaders.
-- **Real-Time Speed Graph:** High-frequency Canvas speed graph tracking network throughput, peak rates, and transfer curves.
-- **JDownloader-style LinkGrabber:** Extract, scrape, and probe links from shared text, clipboard clips, or webpage dumps with category filtering (Videos, Audio, Archives, Documents, Images, Apps).
-- **Background Foreground Service (`dataSync`):** Resilient downloading service keeping transfers alive with screen off, accompanied by rich notification controls (Pause All, Resume All, Cancel).
-- **Deep Android Integration:** Share-to-download target (`ACTION_SEND` text/plain, `ACTION_VIEW` http/https) and automatic clipboard detection on app resume.
-- **Rust Core Engine:** Powered by `crates/jyroxa-ffi` compiled via `cargo-ndk` into `jniLibs`.
-
----
-
-## Architecture Overview
-
-```
-android/
-├── build.gradle.kts                # Root build script (AGP 8.4.2, Kotlin 2.0.0)
-├── settings.gradle.kts             # Module resolution and repositories
-├── gradle/
-│   ├── libs.versions.toml          # Centralized version catalog
-│   └── wrapper/
-│       └── gradle-wrapper.properties # Gradle 8.7 wrapper configuration
-└── app/
-    ├── build.gradle.kts            # Application build configuration + buildCargoNdk task
-    ├── src/
-    │   ├── main/
-    │   │   ├── AndroidManifest.xml # Permissions, Foreground Service (dataSync), Intent filters
-    │   │   ├── res/                # Vector drawables, colors, strings, themes, adaptive icons
-    │   │   └── java/
-    │   │       ├── com/swiftget/
-    │   │       │   └── SwiftGet.kt # Direct JNI entry points matching crates/jyroxa-ffi
-    │   │       └── com/swiftget/app/
-    │   │           ├── SwiftGetApp.kt        # Application class & DI container
-    │   │           ├── MainActivity.kt       # Intent receiver & Clipboard lifecycle detection
-    │   │           ├── data/
-    │   │           │   ├── model/            # DownloadItem, SegmentProgress, SpeedSample, GrabbedLink
-    │   │           │   └── repository/       # DownloadRepository, LinkProbeRepository
-    │   │           ├── native/
-    │   │           │   └── SwiftGetNative.kt # High-level typed bridge & preview fallback
-    │   │           ├── service/
-    │   │           │   └── DownloadService.kt# Foreground service (dataSync) with rich notifications
-    │   │           └── ui/
-    │   │               ├── theme/            # Material 3 Color, Type, Theme (Dynamic Color)
-    │   │               ├── components/       # SegmentProgressBar, SpeedGraph, DownloadCard
-    │   │               └── screens/          # Downloads, AddDownload, LinkGrabber, Settings
-    │   └── test/                             # JUnit unit tests for models and bridge
-```
-
----
+- Package: `com.jyroxa.app`
+- Native entry: `com.jyroxa.app.JyroxaFfi` ↔ `Java_com_jyroxa_app_JyroxaFfi_*`
+- High-level bridge: `com.jyroxa.app.native.JyroxaNative`
 
 ## Prerequisites
 
-To build and run the Android application:
+- JDK 17+
+- Android SDK (API 34, build-tools 34.0.0+), NDK 27.x
+- Rust + `cargo-ndk`, targets `aarch64-linux-android`, `armv7-linux-androideabi`, `x86_64-linux-android`
+- `android/local.properties` with `sdk.dir=` (git-ignored)
 
-1. **Java Development Kit (JDK):** JDK 17 or JDK 21 (e.g. OpenJDK / Temurin).
-2. **Android SDK:**
-   - Platform SDK: Android 14 (API 34)
-   - Build Tools: 34.0.0 or later
-   - NDK: 27.x (`ANDROID_NDK_HOME` or `ndk.dir` in `local.properties`)
-3. **Rust Toolchain & cargo-ndk (for building native Rust engine):**
-   ```bash
-   cargo install cargo-ndk
-   rustup target add aarch64-linux-android armv7-linux-androideabi
-   ```
-4. **`android/local.properties`** (git-ignored): point `sdk.dir` at your SDK root (Windows example: `sdk.dir=E\:\\.swiftget-tools\\android-sdk`).
+On Windows GNU hosts, clear `RUSTC_WRAPPER` when invoking `cargo ndk` for Android.
 
-On the reference Windows GNU host, set `RUSTC_WRAPPER=` when running `cargo ndk` so the desktop raw-dylib rustc wrapper is not applied to Android targets.
-
----
-
-## Native Rust Engine Compilation (`cargo-ndk`)
-
-SwiftGet uses `crates/jyroxa-ffi` to compile a shared C library (`libjyroxa_ffi.so`) for phone ABIs (release APK ships both in one universal package):
-- **32-bit ARM:** `armeabi-v7a` (`armv7-linux-androideabi`)
-- **64-bit ARM:** `arm64-v8a` (`aarch64-linux-android`)
-
-`jyroxa-core` uses **reqwest + rustls** on `target_os = "android"` (no system OpenSSL).
-
-### Option A: Via Gradle Task
-
-The Android project includes a built-in Gradle task that automatically invokes `cargo-ndk` with the required parameters:
+## Build native library
 
 ```bash
 cd android
 ./gradlew buildCargoNdk
 ```
 
-This compiles `crates/jyroxa-ffi` in `--release` mode and places the resulting `.so` files directly into:
-```
-android/app/src/main/jniLibs/
-  ├── arm64-v8a/libjyroxa_ffi.so
-  ├── armeabi-v7a/libjyroxa_ffi.so
-  ├── x86/libjyroxa_ffi.so
-  └── x86_64/libjyroxa_ffi.so
-```
+Outputs under `app/src/main/jniLibs/{armeabi-v7a,arm64-v8a,x86_64}/libjyroxa_ffi.so` (git-ignored).
 
-### Option B: Manual Compilation
+## Build signed release APK
 
-You can also run `cargo ndk` directly from the `crates/jyroxa-ffi` directory:
+Configure signing in git-ignored `android/keystore.properties` (see template in this file’s history). Then:
 
 ```bash
-cd crates/jyroxa-ffi
-cargo ndk \
-  -t armeabi-v7a \
-  -t arm64-v8a \
-  -o ../../android/app/src/main/jniLibs \
-  build --release
+./gradlew :app:assembleRelease :app:exportReleaseApk
 ```
 
----
+Distribution copy: `../dist/Jyroxa-<version>-universal.apk`.
 
-## JNI Specification & Symbol Mapping
+## Debug
 
-The Kotlin native bridge connects to the Rust engine using the following JNI exports:
-
-| Kotlin Binding Method | Exported C/Rust JNI Symbol | Arguments | Return Type | Description |
-|:---|:---|:---|:---|:---|
-| `SwiftGet.nativeStart` | `Java_com_jyroxa_app_JyroxaFfi_nativeStart` | `String url, String output, int connections` | `jlong` | Starts download task; returns handle ID (>0) |
-| `SwiftGet.nativePause` | `Java_com_jyroxa_app_JyroxaFfi_nativePause` | `long id` | `jboolean` | Pauses active download |
-| `SwiftGet.nativeResume` | `Java_com_jyroxa_app_JyroxaFfi_nativeResume` | `long id` | `jboolean` | Resumes paused download |
-| `SwiftGet.nativeCancel` | `Java_com_jyroxa_app_JyroxaFfi_nativeCancel` | `long id` | `jboolean` | Cancels download and frees handle |
-| `SwiftGet.nativeStatus` | `Java_com_jyroxa_app_JyroxaFfi_nativeStatus` | `long id` | `jstring` | Returns real-time JSON status payload |
-
-### JSON Status Format
-
-`nativeStatus(id)` outputs a JSON object:
-```json
-{
-  "id": 1,
-  "state": "running",
-  "downloaded": 104857600,
-  "total": 524288000,
-  "speed_bps": 15728640.0,
-  "progress_pct": 20.0
-}
-```
-
-*Note:* If the application is compiled or run without `libjyroxa_ffi.so` present in `jniLibs` (e.g. during rapid UI prototyping in Android Studio preview), `SwiftGetNative` automatically falls back to an integrated mock simulation engine so the UI remains fully functional.
-
----
-
-## Building the Android APK / App Bundle
-
-### Debug APK
 ```bash
-cd android
-./gradlew assembleDebug
-```
-Output: `android/app/build/outputs/apk/debug/app-debug.apk`
-
-### Install on Connected Device or Emulator
-```bash
-./gradlew installDebug
+./gradlew :app:assembleDebug
+# APK: app/build/outputs/apk/debug/app-debug.apk
 ```
 
-### Signed release APK (local / sideload)
+## Keystore (local only)
 
-Create a keystore once (passwords go in git-ignored `android/keystore.properties`):
-
-```powershell
-mkdir android\keystore
-keytool -genkeypair -v `
-  -keystore android\keystore\swiftget-release.jks `
-  -alias swiftget -keyalg RSA -keysize 2048 -validity 10000
-```
-
-Example `android/keystore.properties`:
+Never commit keystores or passwords. Example `keystore.properties`:
 
 ```properties
-storeFile=keystore/swiftget-release.jks
-storePassword=YOUR_STORE_PASSWORD
-keyAlias=swiftget
-keyPassword=YOUR_KEY_PASSWORD
+storeFile=keystore/jyroxa-release.jks
+storePassword=<store-password>
+keyAlias=jyroxa
+keyPassword=<key-password>
 ```
 
-```bash
-./gradlew assembleRelease
-```
-
-Output: `android/app/build/outputs/apk/release/app-release.apk` — copy to `dist/SwiftGet-<version>-universal.apk` for distribution.
-
-### Release Android App Bundle (AAB for Google Play)
-```bash
-./gradlew bundleRelease
-```
-Output: `android/app/build/outputs/bundle/release/app-release.aab`
-
-### Running Unit Tests
-```bash
-./gradlew testDebugUnitTest
-```
-
----
-
-## System Integration & Features
-
-### 1. Foreground Service (`dataSync`)
-Declared in `AndroidManifest.xml`:
-```xml
-<service
-    android:name=".service.DownloadService"
-    android:enabled="true"
-    android:exported="false"
-    android:foregroundServiceType="dataSync" />
-```
-Provides persistent execution for large downloads when the app is in the background, updating notification progress and handling `Pause All` / `Resume All` actions directly from the notification tray.
-
-### 2. Share-to-Download Intent Filters
-Accepts links shared from web browsers, YouTube, Twitter, and other apps:
-- `ACTION_SEND` with `text/plain`
-- `ACTION_VIEW` with `http` and `https` schemes
-
-### 3. Clipboard Auto-Capture
-When enabled in Settings, `MainActivity` inspects the clipboard during `onResume()`. When a valid HTTP/HTTPS link is detected, an interactive banner appears at the top of the UI offering a one-click download action.
-
-### 4. Dynamic Color (Material You)
-On Android 12+ (API 31+), the UI adapts to the user's wallpaper palette using `dynamicLightColorScheme` and `dynamicDarkColorScheme`, with full manual dark mode overrides.
+Generate a keystore once with `keytool`; keep files under `android/keystore/` (git-ignored).

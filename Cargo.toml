@@ -17,8 +17,8 @@ default-members = [
 version = "0.1.1"
 edition = "2021"
 license = "MIT"
-authors = ["SwiftGet contributors"]
-repository = "https://github.com/swiftget/swiftget"
+authors = ["Prateek Kumar"]
+repository = "https://github.com/jyroxa/jyroxa"
 rust-version = "1.75"
 
 [workspace.dependencies]
