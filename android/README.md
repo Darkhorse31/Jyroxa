@@ -8,7 +8,7 @@ SwiftGet Android brings desktop-grade download acceleration to mobile devices:
 - **JDownloader-style LinkGrabber:** Extract, scrape, and probe links from shared text, clipboard clips, or webpage dumps with category filtering (Videos, Audio, Archives, Documents, Images, Apps).
 - **Background Foreground Service (`dataSync`):** Resilient downloading service keeping transfers alive with screen off, accompanied by rich notification controls (Pause All, Resume All, Cancel).
 - **Deep Android Integration:** Share-to-download target (`ACTION_SEND` text/plain, `ACTION_VIEW` http/https) and automatic clipboard detection on app resume.
-- **Rust Core Engine:** Powered by `crates/swiftget-ffi` compiled via `cargo-ndk` into `jniLibs`.
+- **Rust Core Engine:** Powered by `crates/jyroxa-ffi` compiled via `cargo-ndk` into `jniLibs`.
 
 ---
 
@@ -30,7 +30,7 @@ android/
     │   │   ├── res/                # Vector drawables, colors, strings, themes, adaptive icons
     │   │   └── java/
     │   │       ├── com/swiftget/
-    │   │       │   └── SwiftGet.kt # Direct JNI entry points matching crates/swiftget-ffi
+    │   │       │   └── SwiftGet.kt # Direct JNI entry points matching crates/jyroxa-ffi
     │   │       └── com/swiftget/app/
     │   │           ├── SwiftGetApp.kt        # Application class & DI container
     │   │           ├── MainActivity.kt       # Intent receiver & Clipboard lifecycle detection
@@ -72,11 +72,11 @@ On the reference Windows GNU host, set `RUSTC_WRAPPER=` when running `cargo ndk`
 
 ## Native Rust Engine Compilation (`cargo-ndk`)
 
-SwiftGet uses `crates/swiftget-ffi` to compile a shared C library (`libswiftget_ffi.so`) for phone ABIs (release APK ships both in one universal package):
+SwiftGet uses `crates/jyroxa-ffi` to compile a shared C library (`libjyroxa_ffi.so`) for phone ABIs (release APK ships both in one universal package):
 - **32-bit ARM:** `armeabi-v7a` (`armv7-linux-androideabi`)
 - **64-bit ARM:** `arm64-v8a` (`aarch64-linux-android`)
 
-`swiftget-core` uses **reqwest + rustls** on `target_os = "android"` (no system OpenSSL).
+`jyroxa-core` uses **reqwest + rustls** on `target_os = "android"` (no system OpenSSL).
 
 ### Option A: Via Gradle Task
 
@@ -87,21 +87,21 @@ cd android
 ./gradlew buildCargoNdk
 ```
 
-This compiles `crates/swiftget-ffi` in `--release` mode and places the resulting `.so` files directly into:
+This compiles `crates/jyroxa-ffi` in `--release` mode and places the resulting `.so` files directly into:
 ```
 android/app/src/main/jniLibs/
-  ├── arm64-v8a/libswiftget_ffi.so
-  ├── armeabi-v7a/libswiftget_ffi.so
-  ├── x86/libswiftget_ffi.so
-  └── x86_64/libswiftget_ffi.so
+  ├── arm64-v8a/libjyroxa_ffi.so
+  ├── armeabi-v7a/libjyroxa_ffi.so
+  ├── x86/libjyroxa_ffi.so
+  └── x86_64/libjyroxa_ffi.so
 ```
 
 ### Option B: Manual Compilation
 
-You can also run `cargo ndk` directly from the `crates/swiftget-ffi` directory:
+You can also run `cargo ndk` directly from the `crates/jyroxa-ffi` directory:
 
 ```bash
-cd crates/swiftget-ffi
+cd crates/jyroxa-ffi
 cargo ndk \
   -t armeabi-v7a \
   -t arm64-v8a \
@@ -117,11 +117,11 @@ The Kotlin native bridge connects to the Rust engine using the following JNI exp
 
 | Kotlin Binding Method | Exported C/Rust JNI Symbol | Arguments | Return Type | Description |
 |:---|:---|:---|:---|:---|
-| `SwiftGet.nativeStart` | `Java_com_swiftget_SwiftGet_nativeStart` | `String url, String output, int connections` | `jlong` | Starts download task; returns handle ID (>0) |
-| `SwiftGet.nativePause` | `Java_com_swiftget_SwiftGet_nativePause` | `long id` | `jboolean` | Pauses active download |
-| `SwiftGet.nativeResume` | `Java_com_swiftget_SwiftGet_nativeResume` | `long id` | `jboolean` | Resumes paused download |
-| `SwiftGet.nativeCancel` | `Java_com_swiftget_SwiftGet_nativeCancel` | `long id` | `jboolean` | Cancels download and frees handle |
-| `SwiftGet.nativeStatus` | `Java_com_swiftget_SwiftGet_nativeStatus` | `long id` | `jstring` | Returns real-time JSON status payload |
+| `SwiftGet.nativeStart` | `Java_com_jyroxa_app_JyroxaFfi_nativeStart` | `String url, String output, int connections` | `jlong` | Starts download task; returns handle ID (>0) |
+| `SwiftGet.nativePause` | `Java_com_jyroxa_app_JyroxaFfi_nativePause` | `long id` | `jboolean` | Pauses active download |
+| `SwiftGet.nativeResume` | `Java_com_jyroxa_app_JyroxaFfi_nativeResume` | `long id` | `jboolean` | Resumes paused download |
+| `SwiftGet.nativeCancel` | `Java_com_jyroxa_app_JyroxaFfi_nativeCancel` | `long id` | `jboolean` | Cancels download and frees handle |
+| `SwiftGet.nativeStatus` | `Java_com_jyroxa_app_JyroxaFfi_nativeStatus` | `long id` | `jstring` | Returns real-time JSON status payload |
 
 ### JSON Status Format
 
@@ -137,7 +137,7 @@ The Kotlin native bridge connects to the Rust engine using the following JNI exp
 }
 ```
 
-*Note:* If the application is compiled or run without `libswiftget_ffi.so` present in `jniLibs` (e.g. during rapid UI prototyping in Android Studio preview), `SwiftGetNative` automatically falls back to an integrated mock simulation engine so the UI remains fully functional.
+*Note:* If the application is compiled or run without `libjyroxa_ffi.so` present in `jniLibs` (e.g. during rapid UI prototyping in Android Studio preview), `SwiftGetNative` automatically falls back to an integrated mock simulation engine so the UI remains fully functional.
 
 ---
 

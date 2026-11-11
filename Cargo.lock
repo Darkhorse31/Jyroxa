@@ -2375,6 +2375,72 @@ dependencies = [
 ]
 
 [[package]]
+name = "jyroxa-cli"
+version = "0.1.1"
+dependencies = [
+ "anyhow",
+ "clap",
+ "jyroxa-core",
+ "serde_json",
+ "tokio",
+ "url",
+]
+
+[[package]]
+name = "jyroxa-core"
+version = "0.1.1"
+dependencies = [
+ "axum",
+ "bytes",
+ "futures",
+ "hex",
+ "hyper",
+ "md-5",
+ "rand 0.8.8",
+ "regex",
+ "reqwest 0.12.28",
+ "serde",
+ "serde_json",
+ "sha2",
+ "tempfile",
+ "thiserror 1.0.69",
+ "tokio",
+ "tracing",
+ "url",
+]
+
+[[package]]
+name = "jyroxa-desktop"
+version = "0.1.1"
+dependencies = [
+ "jyroxa-core",
+ "regex",
+ "serde",
+ "serde_json",
+ "tauri",
+ "tauri-build",
+ "tauri-plugin-clipboard-manager",
+ "tauri-plugin-dialog",
+ "tauri-plugin-notification",
+ "tauri-plugin-opener",
+ "tokio",
+ "tracing",
+ "url",
+ "winreg 0.55.0",
+]
+
+[[package]]
+name = "jyroxa-ffi"
+version = "0.1.1"
+dependencies = [
+ "jni",
+ "jyroxa-core",
+ "once_cell",
+ "serde_json",
+ "tokio",
+]
+
+[[package]]
 name = "keyboard-types"
 version = "0.8.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -4330,72 +4396,6 @@ dependencies = [
  "base64 0.21.7",
  "serde",
  "serde_json",
-]
-
-[[package]]
-name = "swiftget-cli"
-version = "0.1.1"
-dependencies = [
- "anyhow",
- "clap",
- "serde_json",
- "swiftget-core",
- "tokio",
- "url",
-]
-
-[[package]]
-name = "swiftget-core"
-version = "0.1.1"
-dependencies = [
- "axum",
- "bytes",
- "futures",
- "hex",
- "hyper",
- "md-5",
- "rand 0.8.8",
- "regex",
- "reqwest 0.12.28",
- "serde",
- "serde_json",
- "sha2",
- "tempfile",
- "thiserror 1.0.69",
- "tokio",
- "tracing",
- "url",
-]
-
-[[package]]
-name = "swiftget-desktop"
-version = "0.1.1"
-dependencies = [
- "regex",
- "serde",
- "serde_json",
- "swiftget-core",
- "tauri",
- "tauri-build",
- "tauri-plugin-clipboard-manager",
- "tauri-plugin-dialog",
- "tauri-plugin-notification",
- "tauri-plugin-opener",
- "tokio",
- "tracing",
- "url",
- "winreg 0.55.0",
-]
-
-[[package]]
-name = "swiftget-ffi"
-version = "0.1.1"
-dependencies = [
- "jni",
- "once_cell",
- "serde_json",
- "swiftget-core",
- "tokio",
 ]
 
 [[package]]

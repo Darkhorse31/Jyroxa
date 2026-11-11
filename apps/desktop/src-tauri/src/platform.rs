@@ -165,7 +165,7 @@ mod win {
         }
     }
 
-    pub const SINGLE_INSTANCE_PIPE: &str = r"\\.\pipe\SwiftGetSingleInstancePipe";
+    pub const SINGLE_INSTANCE_PIPE: &str = r"\\.\pipe\JyroxaSingleInstancePipe";
 
     pub fn send_to_first_instance(url: Option<&str>) -> bool {
         use std::io::Write;

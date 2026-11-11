@@ -2,5 +2,5 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 fn main() {
-    swiftget_desktop_lib::run()
+    jyroxa_desktop_lib::run()
 }

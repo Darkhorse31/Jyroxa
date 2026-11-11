@@ -15,14 +15,14 @@ val keystoreProperties = Properties().apply {
 }
 
 android {
-    namespace = "com.swiftget.app"
+    namespace = "com.jyroxa.app"
     compileSdk = 34
 
     defaultConfig {
-        applicationId = "com.swiftget.app"
+        applicationId = "com.jyroxa.app"
         minSdk = 24
         targetSdk = 34
-        versionCode = 1
+        versionCode = 2
         versionName = "0.1.1"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
@@ -31,7 +31,7 @@ android {
         }
 
         ndk {
-            abiFilters.addAll(listOf("armeabi-v7a", "arm64-v8a"))
+            abiFilters.addAll(listOf("armeabi-v7a", "arm64-v8a", "x86_64"))
         }
     }
 
@@ -130,14 +130,14 @@ dependencies {
 }
 
 /**
- * Gradle task to build the swiftget-ffi Rust library using cargo-ndk
+ * Gradle task to build the jyroxa-ffi Rust library using cargo-ndk
  * into app/src/main/jniLibs for armeabi-v7a, arm64-v8a, x86, and x86_64.
  */
 tasks.register<Exec>("buildCargoNdk") {
     group = "rust"
-    description = "Compiles crates/swiftget-ffi for Android ABIs using cargo-ndk into src/main/jniLibs"
+    description = "Compiles crates/jyroxa-ffi for Android ABIs using cargo-ndk into src/main/jniLibs"
 
-    val ffiDir = file("${project.rootDir}/../crates/swiftget-ffi")
+    val ffiDir = file("${project.rootDir}/../crates/jyroxa-ffi")
     val jniOutDir = file("${project.projectDir}/src/main/jniLibs")
 
     workingDir = ffiDir
@@ -145,6 +145,7 @@ tasks.register<Exec>("buildCargoNdk") {
         "cargo", "ndk",
         "-t", "armeabi-v7a",
         "-t", "arm64-v8a",
+        "-t", "x86_64",
         "-o", jniOutDir.absolutePath,
         "build", "--release"
     )
@@ -155,4 +156,21 @@ tasks.register<Exec>("buildCargoNdk") {
         }
         println("Building Rust FFI cdylib with cargo-ndk into ${jniOutDir.absolutePath}...")
     }
+}
+
+afterEvaluate {
+    tasks.named("assembleRelease") {
+        dependsOn("buildCargoNdk")
+    }
+}
+
+tasks.register<Copy>("exportReleaseApk") {
+    group = "distribution"
+    description = "Copy signed release APK to dist/Jyroxa-<version>-universal.apk"
+    dependsOn("assembleRelease")
+    val version = android.defaultConfig.versionName
+    from(layout.buildDirectory.dir("outputs/apk/release"))
+    into(rootProject.file("../dist"))
+    include("app-release.apk")
+    rename { "Jyroxa-${version}-universal.apk" }
 }

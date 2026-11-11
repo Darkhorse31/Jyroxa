@@ -1,8 +1,8 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
-  "productName": "SwiftGet",
+  "productName": "Jyroxa",
   "version": "0.1.1",
-  "identifier": "com.swiftget.desktop",
+  "identifier": "com.jyroxa.app",
   "build": {
     "beforeDevCommand": "npm run dev",
     "devUrl": "http://localhost:1420",
@@ -14,7 +14,7 @@
     "windows": [
       {
         "label": "main",
-        "title": "SwiftGet",
+        "title": "Jyroxa",
         "width": 1180,
         "height": 760,
         "minWidth": 900,

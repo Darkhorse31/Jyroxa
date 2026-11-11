@@ -3,8 +3,8 @@ use tauri::{AppHandle, State};
 
 use crate::engine::{AddDownloadArgs, AppSettings, DownloadView, EngineState, GrabOptionsDto};
 use crate::platform::{open_file_in_folder, open_folder};
-use swiftget_core::linkgrabber::{LinkInfo, Package};
-use swiftget_core::ProbeInfo;
+use jyroxa_core::linkgrabber::{LinkInfo, Package};
+use jyroxa_core::ProbeInfo;
 
 #[tauri::command]
 pub async fn get_settings(state: State<'_, EngineState>) -> Result<AppSettings, String> {
