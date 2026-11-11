@@ -545,6 +545,27 @@ impl DesktopEngine {
             let mut pending = self.pending.lock().await;
             pending.retain(|&x| x != id);
             let _ = app.emit("downloads-changed", ());
+            let _ = app.emit(
+                "download-progress",
+                ProgressPayload {
+                    id,
+                    event: ProgressEvent::Progress {
+                        downloaded: 0,
+                        total: None,
+                        speed_bps: 0.0,
+                        connections: 0,
+                        eta_secs: None,
+                        avg_speed_bps: None,
+                        elapsed_secs: None,
+                        active_connections: None,
+                        status: Some("cancelled".into()),
+                        resumable: None,
+                        server: None,
+                        protocol: None,
+                        segments: None,
+                    },
+                },
+            );
             let _ = self.save_queue_snapshot().await;
         }
         cancelled
@@ -552,11 +573,36 @@ impl DesktopEngine {
 
     pub async fn pause_and_mark(&self, app: AppHandle, id: u64) -> bool {
         if self.pause(id).await {
-            let mut items = self.items.lock().await;
-            if let Some(inner) = items.get_mut(&id) {
+            let (downloaded, total) = {
+                let mut items = self.items.lock().await;
+                let Some(inner) = items.get_mut(&id) else {
+                    return false;
+                };
                 inner.view.status = TaskStatus::Paused;
-            }
+                (inner.view.downloaded, inner.view.total)
+            };
             let _ = app.emit("downloads-changed", ());
+            let _ = app.emit(
+                "download-progress",
+                ProgressPayload {
+                    id,
+                    event: ProgressEvent::Progress {
+                        downloaded,
+                        total,
+                        speed_bps: 0.0,
+                        connections: 0,
+                        eta_secs: None,
+                        avg_speed_bps: None,
+                        elapsed_secs: None,
+                        active_connections: None,
+                        status: Some("paused".into()),
+                        resumable: Some(true),
+                        server: None,
+                        protocol: None,
+                        segments: None,
+                    },
+                },
+            );
             true
         } else {
             false
@@ -602,6 +648,7 @@ async fn apply_event(items: &Mutex<HashMap<u64, InnerItem>>, id: u64, ev: &Progr
             downloaded,
             total,
             speed_bps,
+            connections: _,
             ..
         } => {
             inner.view.downloaded = *downloaded;

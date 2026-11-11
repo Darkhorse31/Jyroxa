@@ -55,3 +55,9 @@ E:\.swiftget-tools (Rust toolchain + cargo cache + cargo-ndk, JDK 17, Android SD
 %LOCALAPPDATA%\tauri and %USERPROFILE%\.android. Pre-existing tools (Git, Node.js, WebView2, Cursor CLI, Antigravity CLI) were left untouched.
 Project-local items are kept: apps/desktop/node_modules, .toolbin (git-ignored GNU linker helpers), target/ and dist/ build outputs.
 To rebuild later, reinstall Rust (rustup), and for Android a JDK 17 + Android SDK/NDK; see README.md.
+
+## v0.1.1 work session (2026-11-11, from 00:41 PST)
+Installed for this session (to be removed at the end):
+- Rust: rustup-init (x86_64-pc-windows-gnu, minimal profile) + stable-x86_64-pc-windows-gnu toolchain (cargo 1.99.1), RUSTUP_HOME=E:\.swiftget-tools\rustup, CARGO_HOME=E:\.swiftget-tools\cargo, --no-modify-path (no PATH/registry changes).
+- Internet Download Manager 6.43 build 18 trial (official installer https://download.internetdownloadmanager.com/idman643build18.exe, Authenticode signer "Tonec Inc." verified, silent `/skipdlgs`), installed to C:\Program Files (x86)\Internet Download Manager - only for the head-to-head benchmark; uninstalled afterwards.
+- Scratch: E:\.swiftget-tools (task files, logs, benchmark temp dirs, downloads).
