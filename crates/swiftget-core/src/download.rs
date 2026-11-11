@@ -223,84 +223,17 @@ fn header_str(h: &reqwest::header::HeaderMap, name: reqwest::header::HeaderName)
 
 /// Parse `Content-Disposition` for a filename.
 pub fn filename_from_disposition(value: &str) -> Option<String> {
-    // Prefer RFC 5987 filename*=
-    for part in value.split(';') {
-        let part = part.trim();
-        if let Some(rest) = part.strip_prefix("filename*=") {
-            let rest = rest.trim();
-            // e.g. UTF-8''my%20file.zip
-            if let Some(idx) = rest.rfind("''") {
-                let enc = &rest[idx + 2..];
-                if let Ok(dec) = percent_decode(enc) {
-                    return Some(sanitize_name(&dec));
-                }
-            }
-        }
-    }
-    for part in value.split(';') {
-        let part = part.trim();
-        if let Some(rest) = part.strip_prefix("filename=") {
-            let v = rest.trim().trim_matches('"');
-            if !v.is_empty() {
-                return Some(sanitize_name(v));
-            }
-        }
-    }
-    None
-}
-
-fn percent_decode(s: &str) -> std::result::Result<String, ()> {
-    let bytes = s.as_bytes();
-    let mut out = Vec::with_capacity(bytes.len());
-    let mut i = 0;
-    while i < bytes.len() {
-        match bytes[i] {
-            b'%' if i + 2 < bytes.len() => {
-                let hi = (bytes[i + 1] as char).to_digit(16).ok_or(())?;
-                let lo = (bytes[i + 2] as char).to_digit(16).ok_or(())?;
-                out.push((hi * 16 + lo) as u8);
-                i += 3;
-            }
-            b'+' => {
-                out.push(b' ');
-                i += 1;
-            }
-            c => {
-                out.push(c);
-                i += 1;
-            }
-        }
-    }
-    String::from_utf8(out).map_err(|_| ())
+    crate::naming::filename_from_disposition(value).map(|s| crate::naming::sanitize_filename(&s))
 }
 
 /// Strip path separators / parent references from a candidate filename.
 pub fn sanitize_name(name: &str) -> String {
-    let base = name
-        .rsplit(['/', '\\'])
-        .next()
-        .unwrap_or(name)
-        .trim()
-        .trim_matches('.');
-    let cleaned: String = base
-        .chars()
-        .map(|c| if "<>:\"|?*".contains(c) || c.is_control() { '_' } else { c })
-        .collect();
-    if cleaned.is_empty() {
-        "download".to_string()
-    } else {
-        cleaned
-    }
+    crate::naming::sanitize_filename(name)
 }
 
 /// Derive a filename from a URL path, if any.
 pub fn filename_from_url(u: &url::Url) -> Option<String> {
-    let seg = u.path_segments()?.last()?;
-    if seg.is_empty() {
-        None
-    } else {
-        Some(sanitize_name(seg))
-    }
+    crate::naming::filename_from_url_path(u).map(|s| crate::naming::sanitize_filename(&s))
 }
 
 async fn probe(client: &reqwest::Client, url: &str, timeout: Duration) -> Result<Meta> {
@@ -608,6 +541,10 @@ impl Downloader {
     }
     pub fn config(&self) -> &DownloadConfig {
         &self.config
+    }
+
+    pub fn set_config(&mut self, config: DownloadConfig) {
+        self.config = config;
     }
 
     /// Run a download to completion (or cancellation/failure).

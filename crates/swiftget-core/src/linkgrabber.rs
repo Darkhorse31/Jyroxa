@@ -15,8 +15,9 @@ use regex::Regex;
 use serde::{Deserialize, Serialize};
 use url::Url;
 
-use crate::download::{filename_from_disposition, filename_from_url};
 use crate::error::Result;
+use crate::naming::{suggest_filename, filename_from_url_path};
+use crate::probe::probe_url;
 
 /// Common downloadable file extensions used by the bare-URL and filter logic.
 pub const COMMON_EXTENSIONS: &[&str] = &[
@@ -52,7 +53,11 @@ impl LinkInfo {
         let name = self
             .filename
             .clone()
-            .or_else(|| Url::parse(&self.url).ok().and_then(|u| filename_from_url(&u)))?;
+            .or_else(|| {
+                Url::parse(&self.url)
+                    .ok()
+                    .and_then(|u| filename_from_url_path(&u))
+            })?;
         name.rsplit_once('.').map(|(_, ext)| ext.to_lowercase())
     }
 }
@@ -173,7 +178,7 @@ pub fn extract_links(base: Option<&Url>, text: &str) -> Vec<String> {
 pub fn looks_like_file(url: &str) -> bool {
     Url::parse(url)
         .ok()
-        .and_then(|u| filename_from_url(&u))
+        .and_then(|u| filename_from_url_path(&u))
         .and_then(|n| n.rsplit_once('.').map(|(_, e)| e.to_lowercase()))
         .map(|ext| COMMON_EXTENSIONS.contains(&ext.as_str()))
         .unwrap_or(false)
@@ -276,7 +281,7 @@ impl LinkGrabber {
         if let Some(exts) = &opts.include_ext {
             let ext = Url::parse(url)
                 .ok()
-                .and_then(|u| filename_from_url(&u))
+                .and_then(|u| filename_from_url_path(&u))
                 .and_then(|n| n.rsplit_once('.').map(|(_, e)| e.to_lowercase()));
             match ext {
                 Some(e) => exts.iter().any(|x| x.eq_ignore_ascii_case(&e)),
@@ -309,67 +314,20 @@ impl LinkGrabber {
     /// Probe a single link: HEAD first, then a ranged GET fallback, for
     /// filename / size / mime / resumability.
     pub async fn probe_link(&self, url: &str) -> LinkInfo {
-        use reqwest::header as h;
-        let mut info = LinkInfo::bare(url.to_string());
-        info.filename = Url::parse(url).ok().and_then(|u| filename_from_url(&u));
-
-        if let Ok(resp) = self.client.head(url).timeout(self.timeout).send().await {
-            if resp.status().is_success() {
-                let hdr = resp.headers();
-                info.size = resp.content_length();
-                info.mime = hdr
-                    .get(h::CONTENT_TYPE)
-                    .and_then(|v| v.to_str().ok())
-                    .map(|s| s.split(';').next().unwrap_or(s).trim().to_string());
-                info.resumable = hdr
-                    .get(h::ACCEPT_RANGES)
-                    .and_then(|v| v.to_str().ok())
-                    .map(|v| v.to_ascii_lowercase().contains("bytes"))
-                    .unwrap_or(false);
-                if let Some(cd) = hdr.get(h::CONTENT_DISPOSITION).and_then(|v| v.to_str().ok()) {
-                    if let Some(name) = filename_from_disposition(cd) {
-                        info.filename = Some(name);
-                    }
-                }
-                if info.size.is_some() {
-                    return info;
-                }
+        match probe_url(&self.client, url, self.timeout).await {
+            Ok(p) => LinkInfo {
+                url: p.final_url,
+                filename: Some(p.suggested_name),
+                size: p.size,
+                mime: p.mime,
+                resumable: p.resumable,
+            },
+            Err(_) => {
+                let mut info = LinkInfo::bare(url.to_string());
+                info.filename = Some(suggest_filename(url, None, None));
+                info
             }
         }
-
-        // Fallback: ranged GET bytes=0-0.
-        if let Ok(resp) = self
-            .client
-            .get(url)
-            .header(h::RANGE, "bytes=0-0")
-            .timeout(self.timeout)
-            .send()
-            .await
-        {
-            let status = resp.status();
-            let hdr = resp.headers().clone();
-            if info.mime.is_none() {
-                info.mime = hdr
-                    .get(h::CONTENT_TYPE)
-                    .and_then(|v| v.to_str().ok())
-                    .map(|s| s.split(';').next().unwrap_or(s).trim().to_string());
-            }
-            if let Some(cd) = hdr.get(h::CONTENT_DISPOSITION).and_then(|v| v.to_str().ok()) {
-                if let Some(name) = filename_from_disposition(cd) {
-                    info.filename = Some(name);
-                }
-            }
-            if status == reqwest::StatusCode::PARTIAL_CONTENT {
-                info.resumable = true;
-                if let Some(cr) = hdr.get(h::CONTENT_RANGE).and_then(|v| v.to_str().ok()) {
-                    info.size = cr.rsplit('/').next().and_then(|s| s.trim().parse().ok());
-                }
-            } else if status.is_success() {
-                info.size = resp.content_length();
-            }
-        }
-
-        info
     }
 
     pub fn with_timeout(mut self, timeout: Duration) -> Self {
