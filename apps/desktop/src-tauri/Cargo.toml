@@ -1,21 +1,21 @@
 [package]
-name = "swiftget-desktop"
+name = "jyroxa-desktop"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
 authors.workspace = true
 rust-version.workspace = true
-description = "SwiftGet desktop download manager (Tauri)"
+description = "Jyroxa desktop download manager (Tauri)"
 
 [lib]
-name = "swiftget_desktop_lib"
+name = "jyroxa_desktop_lib"
 crate-type = ["staticlib", "cdylib", "rlib"]
 
 [build-dependencies]
 tauri-build = { version = "2", features = [] }
 
 [dependencies]
-swiftget-core = { path = "../../../crates/swiftget-core" }
+jyroxa-core = { path = "../../../crates/jyroxa-core" }
 tauri = { version = "2", features = ["tray-icon", "image-png"] }
 tauri-plugin-opener = "2"
 tauri-plugin-dialog = "2"

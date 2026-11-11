@@ -1,4 +1,4 @@
-//! Persistent download queue and swiftget-core bridge for the desktop shell.
+//! Persistent download queue and jyroxa-core bridge for the desktop shell.
 
 use std::collections::{HashMap, VecDeque};
 use std::path::{Path, PathBuf};
@@ -6,11 +6,11 @@ use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Weak};
 
 use serde::{Deserialize, Serialize};
-use swiftget_core::download::{Control, DownloadConfig, DownloadRequest, Downloader};
-use swiftget_core::events::ProgressEvent;
-use swiftget_core::linkgrabber::{GrabOptions, LinkGrabber, LinkInfo, Package};
-use swiftget_core::state::SegmentState;
-use swiftget_core::{build_client, HostStats, Result as CoreResult};
+use jyroxa_core::download::{Control, DownloadConfig, DownloadRequest, Downloader};
+use jyroxa_core::events::ProgressEvent;
+use jyroxa_core::linkgrabber::{GrabOptions, LinkGrabber, LinkInfo, Package};
+use jyroxa_core::state::SegmentState;
+use jyroxa_core::{build_client, HostStats, Result as CoreResult};
 use tauri::{AppHandle, Emitter, Manager};
 use tauri_plugin_clipboard_manager::ClipboardExt;
 use tokio::sync::{Mutex, RwLock};
@@ -255,7 +255,7 @@ impl DesktopEngine {
             let mut dl = self.downloader.write().await;
             dl.set_global_limit(s.global_speed_limit);
             let mut cfg = dl.config().clone();
-            cfg.max_connections = s.per_host_cap.min(swiftget_core::MAX_CONNECTIONS);
+            cfg.max_connections = s.per_host_cap.min(jyroxa_core::MAX_CONNECTIONS);
             cfg.autotune = s.autotune;
             dl.set_config(cfg);
         }
@@ -293,14 +293,14 @@ impl DesktopEngine {
     }
 
     pub fn suggest_save_path(&self, dir: &str, name: &str) -> String {
-        swiftget_core::dedupe_path(dir, name)
+        jyroxa_core::dedupe_path(dir, name)
             .to_string_lossy()
             .into_owned()
     }
 
-    pub async fn probe_url(&self, url: &str) -> CoreResult<swiftget_core::ProbeInfo> {
+    pub async fn probe_url(&self, url: &str) -> CoreResult<jyroxa_core::ProbeInfo> {
         let client = build_client()?;
-        swiftget_core::probe_url(&client, url, std::time::Duration::from_secs(10)).await
+        jyroxa_core::probe_url(&client, url, std::time::Duration::from_secs(10)).await
     }
 
     pub async fn pause_many(&self, app: AppHandle, ids: &[u64]) -> usize {
@@ -473,12 +473,12 @@ impl DesktopEngine {
         let path = PathBuf::from(output);
         let _ = std::fs::remove_file(&path);
         let _ = std::fs::remove_file(path.with_extension("part"));
-        let _ = std::fs::remove_file(swiftget_core::state::DownloadState::state_path(&path));
+        let _ = std::fs::remove_file(jyroxa_core::state::DownloadState::state_path(&path));
+        let _ = std::fs::remove_file(jyroxa_core::state::DownloadState::legacy_state_path(&path));
     }
 
     fn progress_from_state(output: &Path) -> (u64, Option<u64>, Vec<SegmentState>) {
-        let state_path = swiftget_core::state::DownloadState::state_path(output);
-        match swiftget_core::state::DownloadState::load(&state_path) {
+        match jyroxa_core::state::DownloadState::load_for_output(output) {
             Ok(Some(st)) => {
                 let downloaded = st.segments.iter().map(|s| s.downloaded).sum();
                 (downloaded, st.total_size, st.segments)
@@ -551,7 +551,7 @@ impl DesktopEngine {
             let connections = if item.connections_auto {
                 8
             } else {
-                item.connections.clamp(1, swiftget_core::MAX_CONNECTIONS)
+                item.connections.clamp(1, jyroxa_core::MAX_CONNECTIONS)
             };
             let view = DownloadView {
                 id,
@@ -603,7 +603,7 @@ impl DesktopEngine {
 
     pub async fn add_download(&self, app: AppHandle, args: AddDownloadArgs) -> CoreResult<u64> {
         if args.urls.is_empty() {
-            return Err(swiftget_core::Error::other("at least one URL required"));
+            return Err(jyroxa_core::Error::other("at least one URL required"));
         }
         let settings = self.settings.lock().await.clone();
         let id = self.next_id.fetch_add(1, Ordering::Relaxed);
@@ -611,7 +611,7 @@ impl DesktopEngine {
         let connections = if args.connections_auto {
             8
         } else {
-            args.connections.clamp(1, swiftget_core::MAX_CONNECTIONS)
+            args.connections.clamp(1, jyroxa_core::MAX_CONNECTIONS)
         };
 
         let view = DownloadView {
@@ -729,7 +729,7 @@ impl DesktopEngine {
             let settings_lock = Arc::clone(&engine.settings);
             let engine_weak = engine.weak.clone();
 
-            let (tx, mut rx) = swiftget_core::events::channel();
+            let (tx, mut rx) = jyroxa_core::events::channel();
             let app_ev = app.clone();
             let id_ev = id;
 
@@ -779,7 +779,7 @@ impl DesktopEngine {
                                 ));
                             }
                         }
-                        Err(swiftget_core::Error::Cancelled) => {
+                        Err(jyroxa_core::Error::Cancelled) => {
                             inner.view.status = TaskStatus::Cancelled;
                         }
                         Err(e) => {
@@ -1075,12 +1075,21 @@ async fn apply_event(items: &Mutex<HashMap<u64, InnerItem>>, id: u64, ev: &Progr
 /// Shared Tauri state wrapper (async mutex).
 pub struct EngineState(pub Arc<DesktopEngine>);
 
+fn desktop_data_dir(app_data: &std::path::Path) -> std::path::PathBuf {
+    let new_dir = app_data.join("jyroxa");
+    let legacy = app_data.join("swiftget");
+    if !new_dir.exists() && legacy.is_dir() {
+        let _ = std::fs::rename(&legacy, &new_dir);
+    }
+    new_dir
+}
+
 pub async fn init_engine(app: &AppHandle) -> CoreResult<()> {
-    let dir = app
+    let app_data = app
         .path()
         .app_data_dir()
-        .map_err(|e| swiftget_core::Error::other(e.to_string()))?
-        .join("swiftget");
+        .map_err(|e| jyroxa_core::Error::other(e.to_string()))?;
+    let dir = desktop_data_dir(&app_data);
     std::fs::create_dir_all(&dir)?;
     let engine = DesktopEngine::build(dir)?;
     let settings = engine.get_settings().await;

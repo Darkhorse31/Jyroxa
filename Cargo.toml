@@ -1,15 +1,15 @@
 [workspace]
 resolver = "2"
 members = [
-    "crates/swiftget-core",
-    "crates/swiftget-cli",
-    "crates/swiftget-ffi",
+    "crates/jyroxa-core",
+    "crates/jyroxa-cli",
+    "crates/jyroxa-ffi",
     "apps/desktop/src-tauri",
 ]
 default-members = [
-    "crates/swiftget-core",
-    "crates/swiftget-cli",
-    "crates/swiftget-ffi",
+    "crates/jyroxa-core",
+    "crates/jyroxa-cli",
+    "crates/jyroxa-ffi",
 ]
 # apps/desktop (Tauri) lives under apps/desktop; build separately (see docs/BUILD_WINDOWS_GNU.md).
 

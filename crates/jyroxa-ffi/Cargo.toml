@@ -1,0 +1,22 @@
+[package]
+name = "jyroxa-ffi"
+description = "Jyroxa C ABI / JNI-friendly bindings for mobile and embedding."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+
+[lib]
+name = "jyroxa_ffi"
+# cdylib: the shared library Android (via JNI) and other hosts load.
+# rlib: so the Rust integration tests in this crate can link the code directly.
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+jyroxa-core = { path = "../jyroxa-core" }
+tokio = { workspace = true }
+jni = "0.21"
+once_cell = "1"
+serde_json = { workspace = true }

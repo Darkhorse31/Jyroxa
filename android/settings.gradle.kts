@@ -19,5 +19,5 @@ dependencyResolutionManagement {
     }
 }
 
-rootProject.name = "SwiftGet"
+rootProject.name = "jyroxa"
 include(":app")

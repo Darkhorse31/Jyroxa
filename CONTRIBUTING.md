@@ -19,13 +19,13 @@ you agree that your contributions will be released under the same license.
 
 ## Project layout
 
-- `crates/swiftget-core` — download engine and LinkGrabber (most logic lives here)
-- `crates/swiftget-cli` — command-line interface
-- `crates/swiftget-ffi` — JNI/C ABI for Android
+- `crates/jyroxa-core` — download engine and LinkGrabber (most logic lives here)
+- `crates/jyroxa-cli` — command-line interface
+- `crates/jyroxa-ffi` — JNI/C ABI for Android
 - `apps/desktop` — Tauri v2 desktop shell
 - `android` — Kotlin/Compose Android app
 
-Keep new Rust logic in `swiftget-core` when possible so all frontends benefit.
+Keep new Rust logic in `jyroxa-core` when possible so all frontends benefit.
 
 ## Coding guidelines
 
@@ -51,7 +51,7 @@ cargo test
 ```
 
 Integration tests use a local in-process HTTP server (no network required). When
-changing download semantics, add or update tests in `crates/swiftget-core`.
+changing download semantics, add or update tests in `crates/jyroxa-core`.
 
 Android unit tests (when SDK is available):
 

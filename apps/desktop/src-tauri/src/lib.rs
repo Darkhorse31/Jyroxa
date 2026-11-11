@@ -18,10 +18,17 @@ struct WindowState {
 }
 
 fn window_state_path(app: &tauri::AppHandle) -> Option<PathBuf> {
-    app.path()
-        .app_data_dir()
-        .ok()
-        .map(|d| d.join("swiftget").join("window.json"))
+    app.path().app_data_dir().ok().map(|d| {
+        let primary = d.join("jyroxa").join("window.json");
+        if primary.is_file() {
+            return primary;
+        }
+        let legacy = d.join("swiftget").join("window.json");
+        if legacy.is_file() {
+            return legacy;
+        }
+        primary
+    })
 }
 
 fn load_window_state(app: &tauri::AppHandle) -> Option<WindowState> {
@@ -99,11 +106,11 @@ pub fn run() {
         .find(|a| a.starts_with("http://") || a.starts_with("https://"))
         .cloned();
 
-    let _single_instance_guard = match platform::try_acquire_single_instance("SwiftGetSingleInstanceMutex") {
+    let _single_instance_guard = match platform::try_acquire_single_instance("JyroxaSingleInstanceMutex") {
         Some(g) => g,
         None => {
             platform::send_to_first_instance(maybe_url.as_deref());
-            platform::focus_existing_window("SwiftGet");
+            platform::focus_existing_window("jyroxa");
             return;
         }
     };

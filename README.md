@@ -42,20 +42,20 @@ See [apps/desktop](apps/desktop) and [docs/BUILD_WINDOWS_GNU.md](docs/BUILD_WIND
 ### Android
 
 Material 3 UI, foreground download service, share targets, LinkGrabber, native
-`libswiftget_ffi.so` via `cargo-ndk`. See [android/README.md](android/README.md).
+`libjyroxa_ffi.so` via `cargo-ndk`. See [android/README.md](android/README.md).
 
 ## Architecture
 
 ```mermaid
 flowchart TB
   subgraph frontends [Frontends]
-    CLI[swiftget-cli]
-    Tauri[swiftget-desktop Tauri]
+    CLI[jyroxa-cli]
+    Tauri[jyroxa-desktop Tauri]
     And[Android Kotlin/Compose]
   end
   subgraph core [Rust workspace]
-    Core[swiftget-core]
-    FFI[swiftget-ffi cdylib/JNI]
+    Core[jyroxa-core]
+    FFI[jyroxa-ffi cdylib/JNI]
   end
   CLI --> Core
   Tauri --> Core
@@ -66,9 +66,9 @@ flowchart TB
 ```
 SwiftGet/
 ├── crates/
-│   ├── swiftget-core/     # engine + LinkGrabber
-│   ├── swiftget-cli/      # swiftget.exe
-│   └── swiftget-ffi/      # C ABI / JNI for Android
+│   ├── jyroxa-core/     # engine + LinkGrabber
+│   ├── jyroxa-cli/      # swiftget.exe
+│   └── jyroxa-ffi/      # C ABI / JNI for Android
 ├── apps/desktop/          # Tauri v2 + TypeScript UI
 ├── android/               # Gradle + Compose app
 ├── vendor/windows-link/   # GNU Windows linking patch
@@ -114,7 +114,7 @@ npm install
 .\package-portable.ps1       # dist/SwiftGet-*-windows-x64-portable.zip (exe + WebView2Loader.dll)
 ```
 
-On **windows-gnu**, the app loads **WebView2** via `WebView2Loader.dll` next to the executable (not embeddable with the GNU linker). Do not ship `swiftget-desktop.exe` alone.
+On **windows-gnu**, the app loads **WebView2** via `WebView2Loader.dll` next to the executable (not embeddable with the GNU linker). Do not ship `jyroxa-desktop.exe` alone.
 
 Artifact paths: [docs/BUILD_OUTPUTS.md](docs/BUILD_OUTPUTS.md).
 
@@ -123,7 +123,7 @@ Artifact paths: [docs/BUILD_OUTPUTS.md](docs/BUILD_OUTPUTS.md).
 ```powershell
 $env:RUSTC_WRAPPER = ""   # recommended on the reference GNU Windows host
 
-cd crates\swiftget-ffi
+cd crates\jyroxa-ffi
 cargo ndk -t arm64-v8a -t armeabi-v7a -o ..\..\android\app\src\main\jniLibs build --release
 
 cd ..\..\android

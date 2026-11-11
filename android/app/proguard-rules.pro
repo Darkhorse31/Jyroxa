@@ -3,9 +3,9 @@
     native <methods>;
 }
 
--keep class com.swiftget.** { *; }
--keep class com.swiftget.app.native.** { *; }
--keep class com.swiftget.app.data.model.** { *; }
+-keep class com.jyroxa.app.** { *; }
+-keep class com.jyroxa.app.native.** { *; }
+-keep class com.jyroxa.app.data.model.** { *; }
 
 # Kotlin Serialization
 -keepattributes *Annotation*, InnerClasses
