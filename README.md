@@ -23,7 +23,7 @@ app (Tauri v2), and an **Android** app (Kotlin + Compose + JNI into the Rust eng
 | Single-connection fallback when Range unsupported | Implemented |
 | LinkGrabber (extract, probe, package, filter) | Implemented |
 | HTTP/3 (QUIC) | Optional feature flag (`http3`), **off by default** |
-| Windows NSIS installer bundle | **Planned** — use `--no-bundle` if NSIS download fails |
+| Windows NSIS installer bundle | **Supported** (`build-gnu.ps1`); portable zip ships `WebView2Loader.dll` on GNU |
 | Browser extensions / captcha solvers | **Not planned** in this repo |
 
 ### CLI (`swiftget`)
@@ -110,9 +110,11 @@ cargo test
 ```powershell
 cd apps\desktop
 npm install
-.\build-gnu.ps1              # or .\build-gnu.ps1 --no-bundle
-# binary: target/release/swiftget-desktop.exe
+.\build-gnu.ps1              # NSIS installer + exe under target/release/
+.\package-portable.ps1       # dist/SwiftGet-*-windows-x64-portable.zip (exe + WebView2Loader.dll)
 ```
+
+On **windows-gnu**, the app loads **WebView2** via `WebView2Loader.dll` next to the executable (not embeddable with the GNU linker). Do not ship `swiftget-desktop.exe` alone.
 
 Artifact paths: [docs/BUILD_OUTPUTS.md](docs/BUILD_OUTPUTS.md).
 

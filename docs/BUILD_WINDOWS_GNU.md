@@ -74,4 +74,20 @@ If installer bundling fails (e.g. NSIS download timeout), produce the binary onl
 .\build-gnu.ps1 --no-bundle
 ```
 
+### WebView2Loader.dll (portable / GNU)
+
+`webview2-com-sys` links **`WebView2Loader.dll` dynamically** on `windows-gnu` (MSVC builds use a
+static loader instead; `WebView2LoaderStatic.lib` is not usable with the GNU linker).
+
+After `cargo`/Tauri build, `tauri-build` copies `WebView2Loader.dll` into `target/release/`.
+The NSIS bundle also places a copy beside the installed app via `tauri.conf.json` `bundle.resources`.
+
+Portable distribution:
+
+```powershell
+.\build-gnu.ps1
+.\package-portable.ps1
+# => dist/SwiftGet-<version>-windows-x64-portable.zip (SwiftGet.exe + WebView2Loader.dll)
+```
+
 Output paths are recorded in [BUILD_OUTPUTS.md](./BUILD_OUTPUTS.md).
