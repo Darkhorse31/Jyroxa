@@ -526,7 +526,6 @@ export class SettingsView {
       per_host_cap: perHostInput ? Math.max(1, Math.min(64, Number(perHostInput.value) || 16)) : this.settings.per_host_cap,
       global_speed_limit: limitInput?.value.trim() ? Number(limitInput.value) : null,
       download_dir: folderVal,
-      default_folder: folderVal,
       category_dirs,
       clipboard_monitor: clipToggle ? clipToggle.checked : this.settings.clipboard_monitor,
       autotune: autotuneToggle ? autotuneToggle.checked : this.settings.autotune,
@@ -543,9 +542,10 @@ export class SettingsView {
     };
 
     try {
-      await api.setSettings(updated);
-      this.settings = updated;
-      this.onSettingsSaved(updated);
+      const { default_folder: _legacy, ...settingsForBackend } = updated;
+      await api.setSettings(settingsForBackend as AppSettings);
+      this.settings = { ...settingsForBackend, default_folder: folderVal };
+      this.onSettingsSaved(this.settings);
       showToast("Settings saved successfully");
     } catch (err) {
       showToast(`Failed to save settings: ${err}`);
