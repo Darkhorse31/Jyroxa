@@ -1,0 +1,21 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 48 48" width="48" height="48" fill="none">
+  <defs>
+    <linearGradient id="orbit-grad" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#3b82f6" />
+      <stop offset="50%" stop-color="#6366f1" />
+      <stop offset="100%" stop-color="#8b5cf6" />
+    </linearGradient>
+    <linearGradient id="core-grad" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#60a5fa" />
+      <stop offset="100%" stop-color="#3b82f6" />
+    </linearGradient>
+  </defs>
+  <!-- Central core -->
+  <circle cx="24" cy="24" r="8" fill="url(#core-grad)" />
+  <!-- Outer orbital track -->
+  <circle cx="24" cy="24" r="17" stroke="url(#orbit-grad)" stroke-width="2.5" stroke-dasharray="80 30" stroke-linecap="round" />
+  <!-- Orbital satellite -->
+  <circle cx="39" cy="18" r="3.2" fill="#60a5fa" />
+  <!-- Tilted inner orbit ring -->
+  <ellipse cx="24" cy="24" rx="21" ry="8.5" stroke="url(#orbit-grad)" stroke-width="1.8" stroke-dasharray="12 8" stroke-opacity="0.75" transform="rotate(-28 24 24)" />
+</svg>

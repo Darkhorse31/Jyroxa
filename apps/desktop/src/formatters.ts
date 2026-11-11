@@ -1,55 +1,89 @@
 // Utility formatters and file category detection
-
-export type FileCategory =
-  | "video"
-  | "audio"
-  | "archive"
-  | "image"
-  | "document"
-  | "executable"
-  | "code"
-  | "other";
+import type { FileCategory } from "./api";
+import { icons } from "./icons";
 
 const VIDEO_EXTS = new Set([
-  "mp4", "mkv", "avi", "mov", "wmv", "flv", "webm", "m4v", "ts", "3gp", "ogv",
+  "mp4", "mkv", "avi", "mov", "wmv", "flv", "webm", "m4v", "ts", "m2ts", "3gp", "ogv",
 ]);
-const AUDIO_EXTS = new Set([
+const MUSIC_EXTS = new Set([
   "mp3", "wav", "flac", "aac", "ogg", "m4a", "wma", "alac", "opus", "aiff",
 ]);
-const ARCHIVE_EXTS = new Set([
+const COMPRESSED_EXTS = new Set([
   "zip", "tar", "gz", "bz2", "xz", "7z", "rar", "tgz", "iso", "dmg", "pkg", "zst",
-]);
-const IMAGE_EXTS = new Set([
-  "jpg", "jpeg", "png", "gif", "webp", "bmp", "svg", "tiff", "ico", "avif",
 ]);
 const DOCUMENT_EXTS = new Set([
   "pdf", "doc", "docx", "xls", "xlsx", "ppt", "pptx", "odt", "ods", "odp", "txt", "rtf", "epub", "csv",
 ]);
-const EXECUTABLE_EXTS = new Set([
+const PROGRAM_EXTS = new Set([
   "exe", "msi", "appimage", "deb", "rpm", "apk", "bat", "cmd", "sh", "bin",
 ]);
-const CODE_EXTS = new Set([
-  "js", "ts", "jsx", "tsx", "py", "rs", "go", "cpp", "c", "h", "java", "json", "xml", "html", "css", "yaml", "yml", "sql",
-]);
 
-export function getFileCategory(filenameOrUrl: string): FileCategory {
+export function getFileCategory(filenameOrUrl: string, mime?: string | null): FileCategory {
+  if (mime) {
+    const m = mime.toLowerCase();
+    if (m.startsWith("video/")) return "Video";
+    if (m.startsWith("audio/")) return "Music";
+    if (
+      m.startsWith("application/pdf") ||
+      m.includes("document") ||
+      m.includes("spreadsheet") ||
+      m.includes("presentation") ||
+      m.startsWith("text/")
+    ) {
+      return "Documents";
+    }
+    if (
+      m.includes("zip") ||
+      m.includes("compressed") ||
+      m.includes("tar") ||
+      m.includes("gzip") ||
+      m.includes("rar")
+    ) {
+      return "Compressed";
+    }
+    if (
+      m.includes("octet-stream") ||
+      m.includes("x-msdownload") ||
+      m.includes("android.package-archive")
+    ) {
+      // Check extension below
+    }
+  }
+
   try {
     const raw = filenameOrUrl.split("?")[0].split("#")[0];
     const parts = raw.split(".");
     if (parts.length > 1) {
       const ext = parts.pop()!.toLowerCase().trim();
-      if (VIDEO_EXTS.has(ext)) return "video";
-      if (AUDIO_EXTS.has(ext)) return "audio";
-      if (ARCHIVE_EXTS.has(ext)) return "archive";
-      if (IMAGE_EXTS.has(ext)) return "image";
-      if (DOCUMENT_EXTS.has(ext)) return "document";
-      if (EXECUTABLE_EXTS.has(ext)) return "executable";
-      if (CODE_EXTS.has(ext)) return "code";
+      if (VIDEO_EXTS.has(ext)) return "Video";
+      if (MUSIC_EXTS.has(ext)) return "Music";
+      if (DOCUMENT_EXTS.has(ext)) return "Documents";
+      if (COMPRESSED_EXTS.has(ext)) return "Compressed";
+      if (PROGRAM_EXTS.has(ext)) return "Programs";
     }
   } catch {
     // fallback
   }
-  return "other";
+
+  return "Other";
+}
+
+export function getCategoryIcon(category: FileCategory, size = 18): string {
+  switch (category) {
+    case "Video":
+      return icons.video(size);
+    case "Music":
+      return icons.music(size);
+    case "Documents":
+      return icons.fileText(size);
+    case "Compressed":
+      return icons.archive(size);
+    case "Programs":
+      return icons.programs(size);
+    case "Other":
+    default:
+      return icons.other(size);
+  }
 }
 
 export function fmtBytes(n: number, decimals?: number): string {
@@ -109,7 +143,6 @@ export function basenameFromUrl(url: string): string {
     const clean = pathname.split("/").filter(Boolean).pop();
     if (clean) return decodeURIComponent(clean);
   } catch {
-    // If not a full URL, split by /
     const clean = url.split("?")[0].split("#")[0].split("/").filter(Boolean).pop();
     if (clean) return decodeURIComponent(clean);
   }
