@@ -42,7 +42,8 @@ Pre-built binaries from **GitHub Releases**:
 | -------- | ----------- |
 | `Jyroxa_0.1.1_x64-setup.exe` | Windows NSIS installer |
 | `Jyroxa-0.1.1-windows-x64-portable.zip` | Portable `Jyroxa.exe` + `WebView2Loader.dll` |
-| `Jyroxa-0.1.1-universal.apk` | Signed Android universal APK |
+| `Jyroxa-0.1.1-android-universal.apk` | Signed Android universal APK (arm64-v8a, armeabi-v7a, x86_64) |
+| `SHA256SUMS.txt` | SHA-256 checksums for the files above |
 
 ## Benchmarks
 
