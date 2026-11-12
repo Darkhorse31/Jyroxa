@@ -45,7 +45,7 @@ foreach ($dll in $Dlls) {
             if ($line -match "Export Table:") { $inExport = $true; continue }
             if ($inExport) {
                 if ($line -match "Table:" -and $line -notmatch "Export Table:") { break }
-                if ($line -match '^\s*\d+\s+0x[0-9a-fA-F]+\s+(\S+)\s*$') { $exports += $Matches[1] }
+                if ($line -match '^\s*\d+\s+(?:0x[0-9a-fA-F]+\s+)?(\S+)(?:\s+\(forwarded to [^)]*\))?\s*$') { $exports += $Matches[1] }
             }
         }
     }

@@ -14,7 +14,7 @@ foreach ($line in $raw) {
     if ($line -match "Export Table:") { $inExport = $true; continue }
     if ($inExport) {
         if ($line -match "Table:" -and $line -notmatch "Export Table:") { break }
-        if ($line -match '^\s*\d+\s+0x[0-9a-fA-F]+\s+(\S+)\s*$') { $name = $Matches[1]; if ($name -like "PathCch*") { $exports += $name } }
+        if ($line -match '^\s*\d+\s+(?:0x[0-9a-fA-F]+\s+)?(\S+)(?:\s+\(forwarded to [^)]*\))?\s*$') { $name = $Matches[1]; if ($name -like "PathCch*") { $exports += $name } }
     }
 }
 $sb = New-Object System.Text.StringBuilder

@@ -16,7 +16,7 @@ foreach ($line in $raw) {
     if ($line -match "Export Table:") { $inExport = $true; continue }
     if ($inExport) {
         if ($line -match "Table:" -and $line -notmatch "Export Table:") { break }
-        if ($line -match '^\s*\d+\s+0x[0-9a-fA-F]+\s+(\S+)\s*$') { $exports += $Matches[1] }
+        if ($line -match '^\s*\d+\s+(?:0x[0-9a-fA-F]+\s+)?(\S+)(?:\s+\(forwarded to [^)]*\))?\s*$') { $exports += $Matches[1] }
         elseif ($line -match '^\s*\d+\s+([A-Za-z_]\S*)\s*$') { $exports += $Matches[1] }
     }
 }
