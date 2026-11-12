@@ -58,6 +58,14 @@ class DownloadRepository(
     }.stateIn(scope, SharingStarted.Eagerly, 0.0)
 
     private val ewmaSpeedMap = ConcurrentHashMap<Long, Double>()
+
+    /**
+     * Download id -> handle of the transfer in the native engine. The engine numbers its
+     * handles from 1 again in every process, so they must never be used as list ids: v0.1.1
+     * did, and a new download collided with a saved one and crashed the downloads list
+     * ("Key was already used"). Items without a live handle are not transferring.
+     */
+    private val nativeHandles = ConcurrentHashMap<Long, Long>()
     private val pausedByWifiOnly = ConcurrentHashMap.newKeySet<Long>()
     private var isWifiOnlyEnforced = false
     private var pollingJob: Job? = null
@@ -120,22 +128,14 @@ class DownloadRepository(
                 val raw = storageFile.readText()
                 if (raw.isNotBlank()) {
                     val loaded = json.decodeFromString<List<DownloadItem>>(raw)
-                    if (loaded.isNotEmpty()) {
-                        // Any downloads that were RUNNING/STARTING when killed are set to PAUSED
-                        val adjusted = loaded.map {
-                            if (it.state.isRunning) it.copy(state = DownloadState.PAUSED, speedBps = 0.0) else it
-                        }
-                        _downloads.value = adjusted
-                        Log.i(TAG, "Loaded ${loaded.size} downloads from cache")
-                        return
-                    }
+                    // Nothing is transferring after a restart, so RUNNING/STARTING becomes PAUSED.
+                    _downloads.value = sanitizeLoaded(loaded)
+                    Log.i(TAG, "Loaded ${loaded.size} downloads from cache")
                 }
             } catch (e: Exception) {
                 Log.w(TAG, "Failed loading cached downloads: ${e.message}")
             }
         }
-
-        seedInitialDownloads()
     }
 
     private fun persistDownloads() {
@@ -151,74 +151,6 @@ class DownloadRepository(
                 Log.w(TAG, "Failed persisting downloads: ${e.message}")
             }
         }
-    }
-
-    private fun seedInitialDownloads() {
-        val ubuntuDownload = createInitialItem(
-            id = 1L,
-            url = "https://releases.ubuntu.com/24.04/ubuntu-24.04-desktop-amd64.iso",
-            output = "/storage/emulated/0/Download/Jyroxa/ubuntu-24.04-desktop-amd64.iso",
-            connections = 8,
-            totalBytes = 6_012_954_624L, // ~5.6 GB
-            downloadedBytes = 2_705_829_580L, // ~45%
-            speedBps = 18_874_368.0 // 18 MB/s
-        )
-
-        val rustDownload = createInitialItem(
-            id = 2L,
-            url = "https://static.rust-lang.org/dist/rust-1.80.0-x86_64-unknown-linux-gnu.tar.gz",
-            output = "/storage/emulated/0/Download/Jyroxa/rust-1.80.0-x86_64-unknown-linux-gnu.tar.gz",
-            connections = 4,
-            totalBytes = 345_280_192L,
-            downloadedBytes = 172_640_096L,
-            speedBps = 8_388_608.0
-        )
-
-        _downloads.value = listOf(ubuntuDownload, rustDownload)
-        persistDownloads()
-    }
-
-    private fun createInitialItem(
-        id: Long,
-        url: String,
-        output: String,
-        connections: Int,
-        totalBytes: Long,
-        downloadedBytes: Long,
-        speedBps: Double
-    ): DownloadItem {
-        val fileName = output.substringAfterLast(File.separatorChar)
-        val progress = if (totalBytes > 0) ((downloadedBytes.toDouble() / totalBytes) * 100).toFloat() else 0f
-        val segments = generateSegments(totalBytes, downloadedBytes, connections)
-        val history = generateInitialSpeedHistory(speedBps)
-        val avgSpeed = history.map { it.speedBps }.average()
-
-        return DownloadItem(
-            id = id,
-            url = url,
-            outputFile = output,
-            fileName = fileName,
-            state = DownloadState.RUNNING,
-            downloadedBytes = downloadedBytes,
-            totalBytes = totalBytes,
-            speedBps = speedBps,
-            averageSpeedBps = avgSpeed,
-            progressPercent = progress,
-            connections = connections,
-            etaSeconds = if (speedBps > 0) ((totalBytes - downloadedBytes) / speedBps).toLong() else 0L,
-            segments = segments,
-            speedHistory = history
-        )
-    }
-
-    private fun generateInitialSpeedHistory(currentSpeed: Double): List<SpeedSample> {
-        val now = System.currentTimeMillis()
-        val list = mutableListOf<SpeedSample>()
-        for (i in 30 downTo 0) {
-            val variance = (Math.sin(i.toDouble()) * 0.25 + 1.0)
-            list.add(SpeedSample(timestampMs = now - (i * 1000L), speedBps = currentSpeed * variance))
-        }
-        return list
     }
 
     private fun startPollingLoop() {
@@ -239,13 +171,13 @@ class DownloadRepository(
         val updated = currentList.map { item ->
             if (!item.state.isRunning) return@map item
 
-            val nativeStatus = JyroxaNative.status(item.id)
+            val handle = nativeHandles[item.id]
+                ?: return@map item.copy(state = DownloadState.PAUSED, speedBps = 0.0, etaSeconds = null)
+            val nativeStatus = JyroxaNative.status(handle)
             val newState = DownloadState.fromNative(nativeStatus.state)
 
             val total = if (nativeStatus.total > 0) nativeStatus.total else item.totalBytes
-            val downloaded = if (nativeStatus.downloaded > 0) nativeStatus.downloaded else {
-                (item.downloadedBytes + (item.speedBps).toLong()).coerceAtMost(total)
-            }
+            val downloaded = if (nativeStatus.downloaded > 0) nativeStatus.downloaded else item.downloadedBytes
             val speed = if (nativeStatus.speed_bps > 0) nativeStatus.speed_bps else item.speedBps
 
             val progress = if (total > 0) {
@@ -347,7 +279,8 @@ class DownloadRepository(
     ): Long {
         val fileName = outputFilePath.substringAfterLast(File.separatorChar)
         val handleId = JyroxaNative.start(url, outputFilePath, connections)
-        val effectiveId = if (handleId > 0) handleId else System.currentTimeMillis()
+        val effectiveId = nextDownloadId(_downloads.value, System.currentTimeMillis())
+        if (handleId > 0) nativeHandles[effectiveId] = handleId
 
         val newItem = DownloadItem(
             id = effectiveId,
@@ -371,7 +304,7 @@ class DownloadRepository(
     }
 
     fun pauseDownload(id: Long) {
-        JyroxaNative.pause(id)
+        nativeHandles[id]?.let { JyroxaNative.pause(it) }
         _downloads.value = _downloads.value.map { item ->
             if (item.id == id) {
                 item.copy(state = DownloadState.PAUSED, speedBps = 0.0)
@@ -388,7 +321,15 @@ class DownloadRepository(
         }
 
         pausedByWifiOnly.remove(id)
-        JyroxaNative.resume(id)
+        val handle = nativeHandles[id]
+        if (handle != null) {
+            JyroxaNative.resume(handle)
+        } else {
+            // Saved from an earlier run: the engine has no transfer for it, so start one.
+            val item = _downloads.value.find { it.id == id } ?: return
+            val newHandle = JyroxaNative.start(item.url, item.outputFile, item.connections)
+            if (newHandle > 0) nativeHandles[id] = newHandle
+        }
         _downloads.value = _downloads.value.map { item ->
             if (item.id == id) {
                 item.copy(state = DownloadState.RUNNING)
@@ -400,7 +341,7 @@ class DownloadRepository(
     fun cancelDownload(id: Long) {
         pausedByWifiOnly.remove(id)
         ewmaSpeedMap.remove(id)
-        JyroxaNative.cancel(id)
+        nativeHandles.remove(id)?.let { JyroxaNative.cancel(it) }
         _downloads.value = _downloads.value.map { item ->
             if (item.id == id) {
                 item.copy(state = DownloadState.CANCELLED, speedBps = 0.0)
@@ -418,7 +359,7 @@ class DownloadRepository(
     fun deleteDownload(id: Long) {
         pausedByWifiOnly.remove(id)
         ewmaSpeedMap.remove(id)
-        JyroxaNative.cancel(id)
+        nativeHandles.remove(id)?.let { JyroxaNative.cancel(it) }
         _downloads.value = _downloads.value.filterNot { it.id == id }
         persistDownloads()
     }
@@ -434,4 +375,26 @@ class DownloadRepository(
         }
         _downloads.value.filter { it.state == DownloadState.PAUSED }.forEach { resumeDownload(it.id) }
     }
+}
+
+/** Demo rows that v0.1.1 seeded into a fresh install; they were never real downloads. */
+private val V011_DEMO_URLS = setOf(
+    "https://releases.ubuntu.com/24.04/ubuntu-24.04-desktop-amd64.iso",
+    "https://static.rust-lang.org/dist/rust-1.80.0-x86_64-unknown-linux-gnu.tar.gz"
+)
+
+/**
+ * Cleans a saved download list: drops the v0.1.1 demo rows, keeps one row per id (the list
+ * UI requires unique ids), and marks anything that was transferring as paused.
+ */
+internal fun sanitizeLoaded(loaded: List<DownloadItem>): List<DownloadItem> =
+    loaded
+        .filterNot { it.url in V011_DEMO_URLS && (it.id == 1L || it.id == 2L) }
+        .distinctBy { it.id }
+        .map { if (it.state.isRunning) it.copy(state = DownloadState.PAUSED, speedBps = 0.0) else it }
+
+/** A fresh id that no existing download uses. */
+internal fun nextDownloadId(existing: List<DownloadItem>, nowMs: Long): Long {
+    val maxId = existing.maxOfOrNull { it.id } ?: 0L
+    return maxOf(nowMs, maxId + 1)
 }

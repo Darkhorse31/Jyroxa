@@ -2,21 +2,14 @@ mod commands;
 mod engine;
 mod platform;
 mod shell_paths;
+mod window_state;
 
 use engine::{init_engine, run_clipboard_monitor, EngineState};
-use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 use tauri::menu::{Menu, MenuItem};
 use tauri::tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent};
 use tauri::{Emitter, Manager, PhysicalPosition, PhysicalSize, WindowEvent};
-
-#[derive(Debug, Clone, Serialize, Deserialize, Default)]
-struct WindowState {
-    width: u32,
-    height: u32,
-    x: Option<i32>,
-    y: Option<i32>,
-}
+use window_state::{MonitorRect, WindowState};
 
 fn window_state_path(app: &tauri::AppHandle) -> Option<PathBuf> {
     app.path().app_data_dir().ok().map(|d| {
@@ -39,9 +32,10 @@ fn load_window_state(app: &tauri::AppHandle) -> Option<WindowState> {
 }
 
 fn save_window_state(app: &tauri::AppHandle, state: &WindowState) {
-    let Some(path) = window_state_path(app) else {
+    let Some(dir) = app.path().app_data_dir().ok() else {
         return;
     };
+    let path = dir.join("jyroxa").join("window.json");
     if let Some(parent) = path.parent() {
         let _ = std::fs::create_dir_all(parent);
     }
@@ -50,18 +44,136 @@ fn save_window_state(app: &tauri::AppHandle, state: &WindowState) {
     }
 }
 
+/// Current geometry of a normal, visible main window. Returns None while the window is
+/// minimized or hidden, because Windows reports those as 0x0 at (-32000, -32000).
 fn snapshot_window(app: &tauri::AppHandle) -> Option<WindowState> {
     let w = app.get_webview_window("main")?;
+    if w.is_minimized().unwrap_or(true) || !w.is_visible().unwrap_or(false) {
+        return None;
+    }
+    if w.is_maximized().unwrap_or(false) {
+        // Keep the last normal size so un-maximizing next time still looks right.
+        let mut prev = load_window_state(app).filter(|s| s.is_worth_saving()).unwrap_or(WindowState {
+            width: window_state::DEFAULT_WIDTH,
+            height: window_state::DEFAULT_HEIGHT,
+            x: None,
+            y: None,
+            maximized: false,
+        });
+        prev.maximized = true;
+        return Some(prev);
+    }
     let size = w.inner_size().ok()?;
     let pos = w.outer_position().ok();
-    Some(WindowState {
+    let state = WindowState {
         width: size.width,
         height: size.height,
         x: pos.as_ref().map(|p| p.x),
         y: pos.as_ref().map(|p| p.y),
-    })
+        maximized: false,
+    };
+    state.is_worth_saving().then_some(state)
 }
 
+fn monitor_rects(w: &tauri::WebviewWindow) -> Vec<MonitorRect> {
+    w.available_monitors()
+        .unwrap_or_default()
+        .iter()
+        .map(|m| {
+            let p = m.position();
+            let s = m.size();
+            (p.x, p.y, s.width, s.height)
+        })
+        .collect()
+}
+
+/// Puts the main window back at its default size, centred on the primary monitor.
+fn reset_window_geometry(w: &tauri::WebviewWindow) {
+    let _ = w.unmaximize();
+    let _ = w.set_size(PhysicalSize::new(
+        window_state::DEFAULT_WIDTH,
+        window_state::DEFAULT_HEIGHT,
+    ));
+    let _ = w.center();
+}
+
+/// Applies saved geometry only when it is usable and lands on a connected monitor.
+fn restore_window_geometry(w: &tauri::WebviewWindow, saved: Option<WindowState>) {
+    let Some(ws) = saved else {
+        return;
+    };
+    let monitors = monitor_rects(w);
+    if ws.size_is_usable() && ws.position_is_on_screen(&monitors) {
+        let _ = w.set_size(PhysicalSize::new(ws.width, ws.height));
+        if let (Some(x), Some(y)) = (ws.x, ws.y) {
+            let _ = w.set_position(PhysicalPosition::new(x, y));
+        }
+    } else {
+        tracing::warn!(?ws, "ignoring saved window geometry that is off-screen or too small");
+        reset_window_geometry(w);
+    }
+    if ws.maximized {
+        let _ = w.maximize();
+    }
+}
+
+/// Shows, restores and focuses the main window, and pulls it back on-screen if it is not
+/// on any connected monitor. Used by the tray, the single-instance handoff and startup.
+pub(crate) fn bring_main_window_to_front(app: &tauri::AppHandle) {
+    let Some(w) = app.get_webview_window("main") else {
+        return;
+    };
+    let _ = w.unminimize();
+    let _ = w.show();
+    if !w.is_maximized().unwrap_or(false) {
+        let on_screen = match (w.outer_position(), w.inner_size()) {
+            (Ok(p), Ok(s)) => WindowState {
+                width: s.width,
+                height: s.height,
+                x: Some(p.x),
+                y: Some(p.y),
+                maximized: false,
+            }
+            .position_is_on_screen(&monitor_rects(&w)),
+            _ => true,
+        };
+        if !on_screen {
+            reset_window_geometry(&w);
+        }
+    }
+    let _ = w.set_focus();
+}
+
+/// The app has no console, so a panic would otherwise vanish without a trace.
+fn install_panic_log() {
+    let default_hook = std::panic::take_hook();
+    std::panic::set_hook(Box::new(move |info| {
+        let dir = std::env::var_os("LOCALAPPDATA")
+            .map(PathBuf::from)
+            .unwrap_or_else(std::env::temp_dir)
+            .join("Jyroxa");
+        let _ = std::fs::create_dir_all(&dir);
+        let bt = std::backtrace::Backtrace::force_capture();
+        let line = format!("{}\n{info}\n{bt}\n\n", chrono_now());
+        use std::io::Write;
+        if let Ok(mut f) = std::fs::OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(dir.join("crash.log"))
+        {
+            let _ = f.write_all(line.as_bytes());
+        }
+        default_hook(info);
+    }));
+}
+
+fn chrono_now() -> String {
+    let secs = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs())
+        .unwrap_or(0);
+    format!("unix time {secs}")
+}
 fn format_speed(bps: f64) -> String {
     const MIB: f64 = 1024.0 * 1024.0;
     if bps >= MIB {
@@ -117,6 +229,7 @@ pub fn run() {
             }
         };
 
+    install_panic_log();
     let start_minimized = args.iter().any(|a| a == "--minimized");
 
     tauri::Builder::default()
@@ -135,13 +248,8 @@ pub fn run() {
                 });
             }
 
-            if let Some(ws) = load_window_state(&handle) {
-                if let Some(w) = app.get_webview_window("main") {
-                    let _ = w.set_size(PhysicalSize::new(ws.width, ws.height));
-                    if let (Some(x), Some(y)) = (ws.x, ws.y) {
-                        let _ = w.set_position(PhysicalPosition::new(x, y));
-                    }
-                }
+            if let Some(w) = app.get_webview_window("main") {
+                restore_window_geometry(&w, load_window_state(&handle));
             }
 
             tauri::async_runtime::block_on(async {
@@ -166,10 +274,7 @@ pub fn run() {
                 .tooltip(&product)
                 .on_menu_event(|app, event| match event.id.as_ref() {
                     "show" => {
-                        if let Some(w) = app.get_webview_window("main") {
-                            let _ = w.show();
-                            let _ = w.set_focus();
-                        }
+                        bring_main_window_to_front(app);
                     }
                     "pause_all" => {
                         let app = app.clone();
@@ -205,11 +310,7 @@ pub fn run() {
                         ..
                     } = event
                     {
-                        let app = tray.app_handle();
-                        if let Some(w) = app.get_webview_window("main") {
-                            let _ = w.show();
-                            let _ = w.set_focus();
-                        }
+                        bring_main_window_to_front(tray.app_handle());
                     }
                 })
                 .build(app)?;
@@ -218,6 +319,8 @@ pub fn run() {
                 if let Some(w) = app.get_webview_window("main") {
                     let _ = w.hide();
                 }
+            } else {
+                bring_main_window_to_front(&handle);
             }
 
             Ok(())
