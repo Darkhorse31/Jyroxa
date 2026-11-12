@@ -2057,7 +2057,7 @@ dialog::backdrop {
    Responsive Layout & Minimum Window Size (900x560)
    The topbar is a grid (brand | search | stats | actions). Lower-priority
    pieces drop out as the window narrows so nothing ever overlaps:
-   graph < 1440, sort label < 1360, done pill < 1200, button labels < 1100,
+   graph < 1440, sort label + done pill < 1360, button labels < 1100,
    active pill + tagline < 1000, all stats < 940.
    -------------------------------------------------------------------------- */
 @media (max-width: 1440px) {
@@ -2069,6 +2069,11 @@ dialog::backdrop {
 @media (max-width: 1360px) {
   .sort-label {
     display: none;
+  }
+
+  /* The completed count is also in the sidebar; give the search box room. */
+  .metric-pill-done {
+    display: none !important;
   }
 }
 

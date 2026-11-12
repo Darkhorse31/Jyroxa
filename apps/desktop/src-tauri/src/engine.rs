@@ -1046,6 +1046,7 @@ async fn apply_event(items: &Mutex<HashMap<u64, InnerItem>>, id: u64, ev: &Progr
             total,
             speed_bps,
             connections: _,
+            segments,
             ..
         } => {
             inner.view.downloaded = *downloaded;
@@ -1053,6 +1054,11 @@ async fn apply_event(items: &Mutex<HashMap<u64, InnerItem>>, id: u64, ev: &Progr
                 inner.view.total = *total;
             }
             inner.view.speed_bps = *speed_bps;
+            // Keep the segment map current so list_downloads (and a reopened
+            // details panel) shows the real connections, not an empty map.
+            if let Some(segs) = segments {
+                inner.view.segments = segs.clone();
+            }
         }
         ProgressEvent::SegmentProgress {
             index,
