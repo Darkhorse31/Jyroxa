@@ -24,7 +24,15 @@ pub const COMMON_EXTENSIONS: &[&str] = &[
     "zip", "rar", "7z", "tar", "gz", "tgz", "bz2", "xz", "iso", "exe", "msi", "dmg", "pkg", "deb",
     "rpm", "apk", "appimage", "bin", "img", "mp4", "mkv", "avi", "mov", "webm", "flv", "wmv", "m4v",
     "mp3", "flac", "wav", "aac", "ogg", "opus", "m4a", "pdf", "epub", "mobi", "doc", "docx", "xls",
-    "xlsx", "ppt", "pptx", "csv", "jpg", "jpeg", "png", "gif", "webp", "svg", "torrent",
+    "xlsx", "ppt", "pptx", "csv", "jpg", "jpeg", "png", "gif", "webp", "svg", "torrent", "dat",
+    "zst", "lz", "lzma", "lz4", "cab", "jar", "whl", "nupkg", "vsix", "xpi", "crx", "ipa", "aab",
+    "msix", "appx", "srt", "vtt", "m3u8", "mpd", "3gp", "wma", "aiff", "heic", "tif", "tiff",
+];
+
+/// Page assets that a LinkGrabber page crawl should never offer as downloads.
+const PAGE_ASSET_EXTENSIONS: &[&str] = &[
+    "css", "js", "mjs", "map", "woff", "woff2", "ttf", "otf", "eot", "ico", "json", "xml",
+    "webmanifest", "rss", "atom",
 ];
 
 /// Metadata discovered for a single link.
@@ -201,7 +209,7 @@ impl LinkGrabber {
     /// Grab from an input that is either a URL (fetched and parsed) or raw text.
     pub async fn grab(&self, input: &str, opts: &GrabOptions) -> Result<Vec<Package>> {
         let input = input.trim();
-        let (base, text, is_page) = if is_url(input) {
+        let (base, text, is_page) = if is_single_url(input) {
             let base = Url::parse(input).ok();
             match self.fetch_text(input).await {
                 Ok(body) => (base, body, true),
@@ -213,12 +221,17 @@ impl LinkGrabber {
         };
 
         let mut links = extract_links(base.as_ref(), &text);
+        if !is_page {
+            // Pasted text: every whitespace-separated http(s) URL is a candidate,
+            // whether or not its path carries a known file extension.
+            let mut direct = plain_text_urls(&text);
+            direct.retain(|u| !links.contains(u));
+            direct.extend(links);
+            links = direct;
+        }
 
         // If the input was a direct file URL (not an HTML page), include it.
         if is_page && looks_like_file(input) && !links.contains(&input.to_string()) {
-            links.insert(0, input.to_string());
-        }
-        if !is_page && is_url(input) && !links.contains(&input.to_string()) {
             links.insert(0, input.to_string());
         }
 
@@ -244,6 +257,12 @@ impl LinkGrabber {
             }
         }
 
+        if is_page {
+            // A page crawl lists files, not the page's own styles, scripts, fonts
+            // or links to other pages (`deep` has already followed those).
+            links.retain(|l| l == input || !is_page_asset(l));
+        }
+
         // Apply host/extension filters pre-probe (cheap).
         links.retain(|l| self.passes_cheap_filters(l, opts));
 
@@ -259,10 +278,12 @@ impl LinkGrabber {
                 .await
         };
 
-        // Size filters (post-probe).
+        // Size filters (post-probe). Links that turned out to be HTML pages are
+        // navigation, not downloads, when they came from crawling a page.
         let infos: Vec<LinkInfo> = infos
             .into_iter()
             .filter(|i| self.passes_size_filters(i, opts))
+            .filter(|i| !(is_page && is_html_mime(i.mime.as_deref())))
             .collect();
 
         Ok(group_packages(infos))
@@ -336,8 +357,57 @@ impl LinkGrabber {
     }
 }
 
-fn is_url(s: &str) -> bool {
-    s.starts_with("http://") || s.starts_with("https://")
+/// Whether the whole input is exactly one http(s) URL (no whitespace, parses).
+fn is_single_url(s: &str) -> bool {
+    !s.chars().any(char::is_whitespace) && parse_http_url(s).is_some()
+}
+
+fn parse_http_url(s: &str) -> Option<Url> {
+    Url::parse(s)
+        .ok()
+        .filter(|u| matches!(u.scheme(), "http" | "https") && u.host_str().is_some())
+}
+
+/// Every http(s) URL in free text, one per whitespace-separated token, with
+/// surrounding quotes/brackets and trailing punctuation removed. Order-preserving.
+pub fn plain_text_urls(text: &str) -> Vec<String> {
+    const OPEN: &[char] = &['"', '\'', '<', '(', '[', '{'];
+    const CLOSE: &[char] = &['"', '\'', '>', ')', ']', '}', ',', ';', '.', '!'];
+    let mut seen = HashSet::new();
+    let mut out = Vec::new();
+    for token in text.split_whitespace() {
+        let token = token.trim_start_matches(OPEN).trim_end_matches(CLOSE);
+        let Some(start) = token.find("http://").or_else(|| token.find("https://")) else {
+            continue;
+        };
+        if let Some(u) = parse_http_url(&token[start..]) {
+            let s = u.to_string();
+            if seen.insert(s.clone()) {
+                out.push(s);
+            }
+        }
+    }
+    out
+}
+
+fn is_page_asset(url: &str) -> bool {
+    let Some(u) = Url::parse(url).ok() else {
+        return true;
+    };
+    let ext = filename_from_url_path(&u).and_then(|n| n.rsplit_once('.').map(|(_, e)| e.to_lowercase()));
+    match ext {
+        Some(e) if PAGE_ASSET_EXTENSIONS.contains(&e.as_str()) => true,
+        Some(e) if COMMON_EXTENSIONS.contains(&e.as_str()) => false,
+        _ => is_html_page(url),
+    }
+}
+
+fn is_html_mime(mime: Option<&str>) -> bool {
+    mime.map(|m| {
+        let m = m.split(';').next().unwrap_or("").trim();
+        m.eq_ignore_ascii_case("text/html") || m.eq_ignore_ascii_case("application/xhtml+xml")
+    })
+    .unwrap_or(false)
 }
 
 fn is_html_page(url: &str) -> bool {
@@ -413,6 +483,40 @@ mod tests {
         assert!(links.contains(&"https://host.test/big.iso?token=1".to_string()));
         assert!(links.contains(&"https://host.test/song.mp3".to_string()));
         assert!(!links.iter().any(|l| l.ends_with("/page")));
+    }
+
+    #[test]
+    fn single_url_detection_rejects_multiline_text() {
+        assert!(is_single_url("https://example.com/a.zip"));
+        assert!(!is_single_url("https://example.com/a.zip\nhttps://example.com/b.zip"));
+        assert!(!is_single_url("see https://example.com/a.zip"));
+        assert!(!is_single_url("ftp://example.com/a.zip"));
+    }
+
+    #[test]
+    fn plain_text_urls_accepts_any_http_url_per_token() {
+        let text = "Links:\nhttps://proof.ovh.net/files/10Mb.dat\n(https://httpbin.org/bytes/512),\n<https://example.com/a.zip>. https://example.com/a.zip not-a-url";
+        assert_eq!(
+            plain_text_urls(text),
+            vec![
+                "https://proof.ovh.net/files/10Mb.dat".to_string(),
+                "https://httpbin.org/bytes/512".to_string(),
+                "https://example.com/a.zip".to_string(),
+            ]
+        );
+    }
+
+    #[test]
+    fn page_assets_and_pages_are_not_downloads() {
+        assert!(is_page_asset("https://proof.ovh.net/style.css"));
+        assert!(is_page_asset("https://proof.ovh.net/fonts/x.woff2?v=1"));
+        assert!(is_page_asset("https://proof.ovh.net/about"));
+        assert!(is_page_asset("https://proof.ovh.net/index.html"));
+        assert!(!is_page_asset("https://proof.ovh.net/files/10Mb.dat"));
+        assert!(!is_page_asset("https://example.com/setup.exe"));
+        assert!(is_html_mime(Some("text/html; charset=utf-8")));
+        assert!(!is_html_mime(Some("application/octet-stream")));
+        assert!(!is_html_mime(None));
     }
 
     #[test]
