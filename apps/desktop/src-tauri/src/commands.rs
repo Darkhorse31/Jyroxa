@@ -2,7 +2,8 @@ use std::path::PathBuf;
 use tauri::{AppHandle, State};
 
 use crate::engine::{AddDownloadArgs, AppSettings, DownloadView, EngineState, GrabOptionsDto};
-use crate::platform::{open_file_in_folder, open_folder};
+use crate::platform::reveal_in_file_manager;
+use tauri_plugin_opener::OpenerExt;
 use jyroxa_core::linkgrabber::{LinkInfo, Package};
 use jyroxa_core::ProbeInfo;
 
@@ -168,11 +169,86 @@ pub async fn default_category_dirs(
 }
 
 #[tauri::command]
-pub fn open_folder_cmd(path: String) -> Result<(), String> {
-    open_folder(PathBuf::from(path).as_path())
+pub async fn open_folder_cmd(
+    state: State<'_, EngineState>,
+    path: String,
+) -> Result<(), String> {
+    let settings = state.0.get_settings().await;
+    let fallback = settings.download_dir;
+    reveal_in_file_manager(PathBuf::from(&path).as_path(), Some(fallback.as_str()))
 }
 
 #[tauri::command]
-pub fn open_file(path: String) -> Result<(), String> {
-    open_file_in_folder(PathBuf::from(path).as_path())
+pub fn open_file(app: AppHandle, path: String) -> Result<(), String> {
+    let pb = PathBuf::from(&path);
+    if !pb.is_file() {
+        return Err(format!("File not found: {path}"));
+    }
+    app.opener()
+        .open_path(&path, None::<&str>)
+        .map_err(|e| format!("Could not open file: {e}"))
+}
+
+#[cfg(test)]
+mod command_arg_tests {
+    use crate::engine::{AddDownloadArgs, GrabOptionsDto};
+    use serde_json::json;
+
+    fn snake_from_camel(key: &str) -> String {
+        let mut out = String::new();
+        for (i, ch) in key.chars().enumerate() {
+            if ch.is_uppercase() {
+                if i > 0 {
+                    out.push('_');
+                }
+                out.push(ch.to_ascii_lowercase());
+            } else {
+                out.push(ch);
+            }
+        }
+        out
+    }
+
+    #[test]
+    fn remove_many_frontend_payload() {
+        let payload = json!({ "ids": [1u64, 2], "deleteFile": true });
+        let delete_file: bool = serde_json::from_value(payload["deleteFile"].clone()).unwrap();
+        let ids: Vec<u64> = serde_json::from_value(payload["ids"].clone()).unwrap();
+        assert!(delete_file);
+        assert_eq!(ids, vec![1, 2]);
+    }
+
+    #[test]
+    fn add_download_args_from_frontend() {
+        let args_val = json!({
+            "urls": ["https://proof.ovh.net/files/10Mb.dat"],
+            "output_dir": "C:\\Downloads",
+            "filename": "10Mb.dat",
+            "connections": 8,
+            "connections_auto": true
+        });
+        let args: AddDownloadArgs = serde_json::from_value(args_val).unwrap();
+        assert_eq!(args.urls.len(), 1);
+        assert!(args.connections_auto);
+    }
+
+    #[test]
+    fn grab_links_options_from_frontend() {
+        let options_val = json!({
+            "deep": true,
+            "no_probe": false,
+            "include_ext": ["zip", "dat"],
+            "host_filter": "example.com"
+        });
+        let options: GrabOptionsDto = serde_json::from_value(options_val).unwrap();
+        assert!(options.deep);
+        assert!(!options.no_probe);
+        assert_eq!(options.include_ext.as_ref().map(|v| v.len()), Some(2));
+    }
+
+    #[test]
+    fn camel_case_mapping_sample() {
+        assert_eq!(snake_from_camel("deleteFile"), "delete_file");
+        assert_eq!(snake_from_camel("outputDir"), "output_dir");
+    }
 }

@@ -1,5 +1,4 @@
 import { invoke } from "@tauri-apps/api/core";
-import { openPath, revealItemInDir } from "@tauri-apps/plugin-opener";
 import { writeText } from "@tauri-apps/plugin-clipboard-manager";
 
 export type TaskStatus =
@@ -165,10 +164,10 @@ export const api = {
   pauseMany: (ids: number[]) => invoke<number>("pause_many", { ids }),
   resumeMany: (ids: number[]) => invoke<number>("resume_many", { ids }),
   cancelMany: (ids: number[]) => invoke<number>("cancel_many", { ids }),
-  removeDownload: (id: number, deleteFile: boolean = false) =>
-    invoke<boolean>("remove_download", { id, deleteFile }),
-  removeMany: (ids: number[], deleteFile: boolean = false) =>
-    invoke<number>("remove_many", { ids, deleteFile }),
+  removeDownload: (id: number, deleteFile: boolean) =>
+    invoke<boolean>("remove_download", { id, deleteFile: Boolean(deleteFile) }),
+  removeMany: (ids: number[], deleteFile: boolean) =>
+    invoke<number>("remove_many", { ids, deleteFile: Boolean(deleteFile) }),
   retryDownload: (id: number) => invoke<boolean>("retry_download", { id }),
   grabLinks: (input: string, options: GrabOptionsDto) =>
     invoke<Package[]>("grab_links", { input, options }),
@@ -190,20 +189,9 @@ export async function openFolder(filePath: string): Promise<boolean> {
   try {
     await api.openFolderCmd(filePath);
     return true;
-  } catch (_e1) {
-    try {
-      await revealItemInDir(filePath);
-      return true;
-    } catch (_e2) {
-      try {
-        const parent = filePath.replace(/[/\\][^/\\]+$/, "");
-        await openPath(parent || filePath);
-        return true;
-      } catch (_e3) {
-        console.warn("Could not reveal file or open directory:", filePath);
-        return false;
-      }
-    }
+  } catch (e) {
+    console.warn("Could not open folder:", filePath, e);
+    return false;
   }
 }
 
@@ -211,18 +199,22 @@ export async function openDownloadedFile(filePath: string): Promise<boolean> {
   try {
     await api.openFile(filePath);
     return true;
-  } catch (_e1) {
-    try {
-      await openPath(filePath);
-      return true;
-    } catch (_e2) {
-      console.warn("Could not open file:", filePath);
-      return false;
-    }
+  } catch (e) {
+    console.warn("Could not open file:", filePath, e);
+    return false;
   }
 }
 
+// Text the app itself put on the clipboard (Copy URL / Copy path). The
+// backend clipboard monitor must not offer it back as a new download.
+let lastSelfCopied: string | null = null;
+
+export function isSelfCopied(text: string): boolean {
+  return lastSelfCopied !== null && text.trim() === lastSelfCopied.trim();
+}
+
 export async function copyToClipboard(text: string): Promise<boolean> {
+  lastSelfCopied = text;
   try {
     await writeText(text);
     return true;

@@ -555,6 +555,18 @@ button {
   border-color: var(--border-app);
 }
 
+.btn.danger {
+  background: var(--status-failed-bg);
+  border-color: var(--status-failed-border);
+  color: #ef4444;
+}
+
+.btn.danger:hover:not(:disabled) {
+  background: #ef4444;
+  border-color: #dc2626;
+  color: #fff;
+}
+
 .btn-mini {
   display: inline-flex;
   align-items: center;

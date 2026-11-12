@@ -1,6 +1,7 @@
 mod commands;
 mod engine;
 mod platform;
+mod shell_paths;
 
 use std::path::PathBuf;
 use serde::{Deserialize, Serialize};

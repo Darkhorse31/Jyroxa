@@ -5,6 +5,7 @@ import {
   api,
   openFolder,
   openDownloadedFile,
+  isSelfCopied,
   type AddDownloadArgs,
   type AppSettings,
   type DownloadFinishedPayload,
@@ -603,7 +604,7 @@ async function boot() {
       e.preventDefault();
       const selectedIds = downloadManager.getSelectedIds();
       if (selectedIds.length > 0) {
-        downloadManager.removeSelected(false);
+        void downloadManager.removeSelectedWithPrompt();
       }
     }
     // ?: Help shortcuts
@@ -617,6 +618,11 @@ async function boot() {
       else if (dlgClip.open) dlgClip.close();
       else if (dlgShortcuts.open) dlgShortcuts.close();
       else if (dlgAbout.open) dlgAbout.close();
+      else if (
+        (document.getElementById("dlg-remove") as HTMLDialogElement | null)?.open
+      ) {
+        (document.getElementById("dlg-remove") as HTMLDialogElement).close();
+      }
       else if (downloadManager.getSelectedIds().length > 0) {
         downloadManager.clearSelection();
       } else if (activeDrawer !== null) {
@@ -675,6 +681,7 @@ async function boot() {
 
   // Clipboard detected event
   await listen<string>("clipboard-url", (ev) => {
+    if (isSelfCopied(ev.payload) || dlgClip.open) return;
     clipTextEl.textContent = ev.payload;
     dlgClip.showModal();
   });

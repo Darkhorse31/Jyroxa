@@ -11,6 +11,7 @@ import { DownloadCard } from "./download-card";
 import { fmtSpeed } from "./formatters";
 import { icons } from "./icons";
 import type { SpeedGraph } from "./speed-graph";
+import { promptRemoveDownloads } from "./remove-dialog";
 import { showToast } from "./toast";
 
 export type StatusFilter = "all" | "downloading" | "completed" | "queued" | "failed";
@@ -211,19 +212,17 @@ export class DownloadManager {
       this.closeContextMenu();
     });
 
-    menu.querySelector('[data-action="remove-list"]')?.addEventListener("click", async () => {
-      if (this.contextTargetView) {
-        await this.removeDownloadItem(this.contextTargetView.id, false);
-      }
+    // The remove dialog is modal, and clicking it closes the context menu, which
+    // clears contextTargetView; capture the id before awaiting the user's choice.
+    const removeFromMenu = async () => {
+      const id = this.contextTargetView?.id;
       this.closeContextMenu();
-    });
-
-    menu.querySelector('[data-action="remove-file"]')?.addEventListener("click", async () => {
-      if (this.contextTargetView) {
-        await this.removeDownloadItem(this.contextTargetView.id, true);
-      }
-      this.closeContextMenu();
-    });
+      if (id === undefined) return;
+      const choice = await promptRemoveDownloads(1);
+      if (choice !== "cancel") await this.removeDownloadItem(id, choice === "remove-delete");
+    };
+    menu.querySelector('[data-action="remove-list"]')?.addEventListener("click", removeFromMenu);
+    menu.querySelector('[data-action="remove-file"]')?.addEventListener("click", removeFromMenu);
   }
 
   public async reload(): Promise<void> {
@@ -479,27 +478,19 @@ export class DownloadManager {
     }
   }
 
-  // Bulk remove dialog prompt
-  private promptRemoveMany(ids: number[]) {
-    const confirmed = window.confirm(
-      `Remove ${ids.length} selected download${ids.length === 1 ? "" : "s"}? Click OK to remove, or Cancel.`
-    );
-    if (!confirmed) return;
+  private async promptRemoveMany(ids: number[]) {
+    const choice = await promptRemoveDownloads(ids.length);
+    if (choice === "cancel") return;
 
-    const deleteFiles = window.confirm(
-      "Would you also like to delete the downloaded files from disk?"
-    );
-
-    api
-      .removeMany(ids, deleteFiles)
-      .then((n) => {
-        showToast(`Removed ${n} items`);
-        this.clearSelection();
-        return this.reload();
-      })
-      .catch((err) => {
-        showToast(`Remove failed: ${err}`);
-      });
+    const deleteFiles = choice === "remove-delete";
+    try {
+      const n = await api.removeMany(ids, deleteFiles);
+      showToast(deleteFiles ? `Removed ${n} items and deleted files` : `Removed ${n} items`);
+      this.clearSelection();
+      await this.reload();
+    } catch (err) {
+      showToast(`Remove failed: ${err}`);
+    }
   }
 
   // Filter setters
@@ -722,13 +713,10 @@ export class DownloadManager {
     }
   }
 
-  public removeSelected(deleteFiles = false): void {
+  public async removeSelectedWithPrompt(): Promise<void> {
     const ids = this.getSelectedIds();
     if (ids.length > 0) {
-      api.removeMany(ids, deleteFiles).then(() => {
-        this.clearSelection();
-        return this.reload();
-      });
+      await this.promptRemoveMany(ids);
     }
   }
 }
