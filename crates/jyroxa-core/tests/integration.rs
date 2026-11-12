@@ -184,6 +184,42 @@ fn test_engine() -> Downloader {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn manual_connection_count_opens_all_connections_immediately() {
+    let data = make_data(4 * 1024 * 1024);
+    let addr = spawn_server(data.clone()).await;
+    let dir = tempfile::tempdir().unwrap();
+    let out = dir.path().join("m.bin");
+
+    let mut req = DownloadRequest::new(format!("http://{addr}/file"), out.clone()).connections(8);
+    req.autotune = false;
+    let (tx, mut rx) = jyroxa_core::events::channel();
+    let outcome = test_engine()
+        .download(req, Some(tx), Control::new(), None)
+        .await
+        .expect("download should succeed");
+    assert_eq!(std::fs::read(&out).unwrap(), data);
+
+    let mut started = None;
+    let mut first_segments = None;
+    while let Ok(ev) = rx.try_recv() {
+        match ev {
+            jyroxa_core::ProgressEvent::Started { connections, .. } if started.is_none() => {
+                started = Some(connections)
+            }
+            jyroxa_core::ProgressEvent::Progress { segments: Some(s), .. } if first_segments.is_none() => {
+                first_segments = Some(s.len())
+            }
+            _ => {}
+        }
+    }
+    assert_eq!(started, Some(8), "manual 8 must start with 8 connections");
+    if let Some(n) = first_segments {
+        assert!(n >= 8, "first progress tick had only {n} segments");
+    }
+    assert_eq!(outcome.connections_used, 8);
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn multi_connection_download_is_correct() {
     let data = make_data(512 * 1024);
     let addr = spawn_server(data.clone()).await;

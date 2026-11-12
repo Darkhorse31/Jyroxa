@@ -549,7 +549,9 @@ impl DesktopEngine {
             };
             let id = self.next_id.fetch_add(1, Ordering::Relaxed);
             let connections = if item.connections_auto {
-                8
+                // Auto: let the tuner use up to the engine maximum; it starts
+                // wide for big files and only climbs when that is faster.
+                jyroxa_core::MAX_CONNECTIONS
             } else {
                 item.connections.clamp(1, jyroxa_core::MAX_CONNECTIONS)
             };
@@ -609,7 +611,7 @@ impl DesktopEngine {
         let id = self.next_id.fetch_add(1, Ordering::Relaxed);
         let output = PathBuf::from(&args.output_dir).join(&args.filename);
         let connections = if args.connections_auto {
-            8
+            jyroxa_core::MAX_CONNECTIONS
         } else {
             args.connections.clamp(1, jyroxa_core::MAX_CONNECTIONS)
         };
@@ -696,7 +698,7 @@ impl DesktopEngine {
         let engine = Arc::clone(self);
         tauri::async_runtime::spawn(async move {
             let control = Control::new();
-            let autotune = engine.settings.lock().await.autotune;
+            let global_autotune = engine.settings.lock().await.autotune;
             let speed_limit = engine.settings.lock().await.global_speed_limit;
             let request = {
                 let mut items = engine.items.lock().await;
@@ -713,7 +715,7 @@ impl DesktopEngine {
                     speed_limit,
                     sha256: v.sha256.clone(),
                     md5: v.md5.clone(),
-                    autotune,
+                    autotune: request_autotune(v.connections_auto, global_autotune),
                 }
             };
 
@@ -995,6 +997,14 @@ impl DesktopEngine {
 
 }
 
+/// Whether a download is auto-tuned. A per-download manual connection count
+/// (Auto unchecked) always wins: the engine must open exactly that many
+/// connections from the start. Before this, the global auto-tune setting was
+/// used for every download, so "8 connections, Auto off" still started at 1.
+pub(crate) fn request_autotune(connections_auto: bool, global_autotune: bool) -> bool {
+    connections_auto && global_autotune
+}
+
 fn show_native_notification(app: &AppHandle, title: &str, body: &str) {
     use tauri_plugin_notification::NotificationExt;
     let _ = app
@@ -1113,6 +1123,14 @@ pub fn clipboard_url_re() -> &'static regex::Regex {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn manual_connections_disable_autotune() {
+        assert!(!super::request_autotune(false, true));
+        assert!(!super::request_autotune(false, false));
+        assert!(super::request_autotune(true, true));
+        assert!(!super::request_autotune(true, false));
+    }
+
     use super::*;
 
     #[test]
