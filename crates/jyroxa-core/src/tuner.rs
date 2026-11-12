@@ -49,24 +49,37 @@ const THROTTLE_REPROBE_TICKS: usize = 40;
 /// A throttle-derived cap is relaxed after this many throttle-free ticks (~30 s).
 const CAP_RELAX_TICKS: usize = 60;
 /// Default first connection count when nothing is known about the host.
-pub const DEFAULT_START_CONNECTIONS: usize = 4;
+pub const DEFAULT_START_CONNECTIONS: usize = 8;
+
+/// Aggressive first connection count for a ranged download of `total` bytes,
+/// like IDM/Ghost Downloader: big files start wide instead of ramping from 1.
+pub fn initial_connections(total: u64, max_connections: usize) -> usize {
+    let want = if total >= 64 << 20 {
+        16
+    } else if total >= 16 << 20 {
+        8
+    } else if total >= 4 << 20 {
+        4
+    } else {
+        2
+    };
+    want.clamp(1, max_connections.max(1))
+}
 
 /// Throughput-driven connection tuner.
 ///
-/// It is a measured hill-climb: every connection count it tries is held for a
-/// short warm-up, then measured (median of several ticks). It walks upward by
-/// doubling while each step is clearly faster, and if the starting count turns
-/// out to be the best it also walks *down* (halving) while fewer connections are
-/// faster. It never settles on a count that measured slower than another count
-/// it has tried, so auto mode can't end up slower than one connection when one
-/// connection really is faster on a host.
+/// It starts wide (see [`initial_connections`]) and is a measured hill-climb
+/// from there: every count it tries is held for a short warm-up, then measured
+/// (median of several ticks). It doubles while each step is clearly faster and
+/// otherwise holds the fastest count measured. It never drops below the start
+/// count except on real throttling (429/503), so noisy samples can't collapse
+/// a download to a single slow connection.
 #[derive(Debug)]
 pub struct Tuner {
     target: usize,
     max_connections: usize,
     /// Current soft ceiling from throttle events (429/503).
     host_cap: usize,
-    start: usize,
     phase: Phase,
     /// Median throughput measured at each connection count.
     measured: HashMap<usize, f64>,
@@ -94,7 +107,6 @@ impl Tuner {
             target,
             max_connections,
             host_cap: cap,
-            start: target,
             phase: Phase::Measuring { ascending: true },
             measured: HashMap::new(),
             samples: Vec::new(),
@@ -244,7 +256,6 @@ impl Tuner {
         let prev_best = self.best_throughput();
         self.measured.insert(self.target, level_tp);
         let improved = prev_best <= 0.0 || level_tp >= prev_best * (1.0 + GAIN);
-        let faster = level_tp > prev_best;
 
         if !self.probing_viable(input) {
             self.hold_best();
@@ -261,23 +272,12 @@ impl Tuner {
                 }
                 return;
             }
-            // Going up did not help. If the start count is still the best, check
-            // whether fewer connections are faster (e.g. a host that slows down
-            // parallel streams), otherwise settle on the best count.
-            let best = self.best_connections();
-            if best == self.start && best > 1 && !self.measured.contains_key(&(best / 2).max(1)) {
-                self.switch_to((best / 2).max(1), Phase::Measuring { ascending: false });
-            } else {
-                self.hold_best();
-            }
+            // Going up did not help: settle on the fastest count measured, which
+            // is never below the starting count. Connections are only reduced on
+            // real throttling (429/503), not on noisy throughput.
+            self.hold_best();
         } else {
-            let next = (self.target / 2).max(1);
-            let clearly_faster = faster && level_tp >= prev_best * (1.0 + GAIN / 2.0);
-            if clearly_faster && next < self.target && !self.measured.contains_key(&next) {
-                self.switch_to(next, Phase::Measuring { ascending: false });
-            } else {
-                self.hold_best();
-            }
+            self.hold_best();
         }
     }
 
@@ -400,7 +400,7 @@ mod tests {
     #[test]
     fn starts_at_requested_count() {
         let t = Tuner::new(DEFAULT_START_CONNECTIONS, 16, None);
-        assert_eq!(t.target(), 4);
+        assert_eq!(t.target(), 8);
         let t = Tuner::new(4, 2, None);
         assert_eq!(t.target(), 2);
     }
@@ -422,37 +422,33 @@ mod tests {
     }
 
     #[test]
-    fn walks_down_when_one_connection_is_fastest() {
-        // A host that punishes parallel streams: 1 conn is fastest.
-        let model = |c: usize| match c {
-            1 => 17.5 * MB,
-            2 => 12.0 * MB,
-            4 => 7.0 * MB,
-            _ => 6.0 * MB,
-        };
-        let mut t = Tuner::new(4, 16, None);
-        run(&mut t, 80, model);
-        assert_eq!(t.target(), 1);
-        assert!(t.best_throughput() >= 17.0 * MB);
+    fn never_drops_below_start_without_throttle() {
+        // Throughput falls as connections rise; noise must not collapse the count.
+        let mut t = Tuner::new(16, 32, None);
+        run(&mut t, 200, |c| 40.0 * MB / c as f64);
+        assert_eq!(t.target(), 16);
     }
 
     #[test]
-    fn never_settles_slower_than_one_connection() {
-        // Whatever the shape, the held count must be at least as fast as 1 conn
-        // whenever 1 conn was measured.
+    fn aggressive_start_for_large_files() {
+        assert_eq!(initial_connections(100 << 20, 32), 16);
+        assert_eq!(initial_connections(100 << 20, 8), 8);
+        assert_eq!(initial_connections(20 << 20, 32), 8);
+        assert_eq!(initial_connections(1 << 20, 32), 2);
+        assert_eq!(initial_connections(1 << 30, 1), 1);
+    }
+
+    #[test]
+    fn holds_the_fastest_measured_count() {
         let shapes: Vec<Box<dyn Fn(usize) -> f64>> = vec![
-            Box::new(|c| if c == 1 { 10.0 * MB } else { 9.0 * MB }),
-            Box::new(|c| if c <= 2 { 10.0 * MB } else { 4.0 * MB }),
-            Box::new(|c| 5.0 * MB / c as f64),
             Box::new(|c| (c as f64 * MB).min(6.0 * MB)),
+            Box::new(|c| if c >= 8 { 10.0 * MB } else { 4.0 * MB }),
+            Box::new(|c| (c as f64 * 2.0 * MB).min(50.0 * MB)),
         ];
         for model in shapes {
-            let mut t = Tuner::new(4, 16, None);
-            run(&mut t, 120, &model);
+            let mut t = Tuner::new(4, 32, None);
+            run(&mut t, 150, &model);
             let held = model(t.target());
-            if let Some(one) = t.measured.get(&1) {
-                assert!(held >= *one, "held {held} < one-conn {one} at {}", t.target());
-            }
             for (_, tp) in t.measured.iter() {
                 assert!(held >= *tp * 0.999, "held {held} but measured {tp}");
             }

@@ -546,6 +546,9 @@ struct Ctx {
     target: AtomicUsize,
     recent_errors: AtomicU64,
     recent_throttles: AtomicU64,
+    /// Bytes received from the network (counted on arrival, before the
+    /// 2 MiB write buffer is flushed) so the tuner sees smooth throughput.
+    received: AtomicU64,
     global_fail_streak: AtomicUsize,
     global_fail_bound: usize,
     fatal: Arc<Mutex<Option<Error>>>,
@@ -747,11 +750,13 @@ impl Downloader {
         // Starting connection count: remembered best for the host, clamped by cap.
         let host_cap = self.host_stats.host_cap(&host);
         let initial_conn = if req.autotune {
-            // Start from the host's remembered best (if recent) or a sensible
-            // default; the tuner then measures up (and down) from there.
+            // Start wide (like IDM / Ghost Downloader) or at the host's recent
+            // best if that is higher; the tuner only climbs from there.
+            let wide = crate::tuner::initial_connections(total, max_conn);
             self.host_stats
                 .best_connections(&host)
-                .unwrap_or(crate::tuner::DEFAULT_START_CONNECTIONS)
+                .map(|b| b.max(wide))
+                .unwrap_or(wide)
                 .clamp(1, host_cap.unwrap_or(max_conn).clamp(1, max_conn))
         } else {
             max_conn
@@ -827,6 +832,7 @@ impl Downloader {
             target: AtomicUsize::new(initial_conn),
             recent_errors: AtomicU64::new(0),
             recent_throttles: AtomicU64::new(0),
+            received: AtomicU64::new(already),
             global_fail_streak: AtomicUsize::new(0),
             global_fail_bound,
             fatal: fatal_slot,
@@ -1472,6 +1478,7 @@ async fn run_segment(
                         }
                         write_buf.extend_from_slice(bytes);
                         pos += bytes.len() as u64;
+                        ctx.received.fetch_add(bytes.len() as u64, Ordering::Relaxed);
                         if write_buf.len() >= SEGMENT_WRITE_BUF {
                             flush_segment_buf(ctx, &mut write_buf, &mut write_at, seg, ctrl_rx)
                                 .await?;
@@ -1547,7 +1554,7 @@ async fn supervise(
     host_cap: Option<usize>,
     start: Instant,
 ) {
-    let mut last_bytes = ctx.downloaded.load(Ordering::Relaxed);
+    let mut last_bytes = ctx.received.load(Ordering::Relaxed);
     let mut last_time = Instant::now();
     let mut speed_ewma = 0.0f64;
     let speed_alpha = 0.35;
@@ -1577,12 +1584,13 @@ async fn supervise(
 
         let now = Instant::now();
         let bytes = ctx.downloaded.load(Ordering::Relaxed);
+        let net = ctx.received.load(Ordering::Relaxed);
         let dt = now
             .saturating_duration_since(last_time)
             .as_secs_f64()
             .max(1e-6);
-        let speed = (bytes.saturating_sub(last_bytes)) as f64 / dt;
-        last_bytes = bytes;
+        let speed = (net.saturating_sub(last_bytes)) as f64 / dt;
+        last_bytes = net;
         last_time = now;
 
         if speed_ewma <= 0.0 {
