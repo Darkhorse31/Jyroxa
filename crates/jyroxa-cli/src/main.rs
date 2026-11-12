@@ -130,7 +130,17 @@ async fn real_main() -> Result<()> {
             no_autotune,
         } => {
             let limit = limit.as_deref().map(parse_size).transpose()?;
-            run_get(url, connections, mirrors, output, sha256, md5, limit, !no_autotune).await
+            run_get(
+                url,
+                connections,
+                mirrors,
+                output,
+                sha256,
+                md5,
+                limit,
+                !no_autotune,
+            )
+            .await
         }
         Command::Grab {
             input,
@@ -170,7 +180,10 @@ async fn real_main() -> Result<()> {
             repeat,
             dir,
         } => {
-            if !modes.iter().any(|m| m.eq_ignore_ascii_case("16") || m == &connections.to_string()) {
+            if !modes
+                .iter()
+                .any(|m| m.eq_ignore_ascii_case("16") || m == &connections.to_string())
+            {
                 modes.push(connections.to_string());
             }
             run_bench(url, connections, modes, cooldown, repeat, dir).await
@@ -178,7 +191,11 @@ async fn real_main() -> Result<()> {
     }
 }
 
-fn make_engine(limit: Option<u64>, autotune: bool, fresh_host_stats: bool) -> Result<Arc<Downloader>> {
+fn make_engine(
+    limit: Option<u64>,
+    autotune: bool,
+    fresh_host_stats: bool,
+) -> Result<Arc<Downloader>> {
     let mut config = DownloadConfig::default();
     config.autotune = autotune;
     let host_stats = if fresh_host_stats {
@@ -250,8 +267,8 @@ async fn run_resume(statefile: PathBuf, connections: usize) -> Result<()> {
     );
 
     let engine = make_engine(None, true, false)?;
-    let mut req = DownloadRequest::new(state.urls[0].clone(), state.output.clone())
-        .connections(connections);
+    let mut req =
+        DownloadRequest::new(state.urls[0].clone(), state.output.clone()).connections(connections);
     for m in state.urls.iter().skip(1) {
         req = req.mirror(m.clone());
     }
@@ -298,13 +315,20 @@ async fn run_grab(input: String, json: bool, opts: GrabOptions) -> Result<()> {
     }
     for pkg in &packages {
         println!("\n📦 {} ({} links)", pkg.name, pkg.links.len());
-        println!("  {:<40}  {:>10}  {:<22}  {:>5}", "FILENAME", "SIZE", "TYPE", "RESUME");
+        println!(
+            "  {:<40}  {:>10}  {:<22}  {:>5}",
+            "FILENAME", "SIZE", "TYPE", "RESUME"
+        );
         println!("  {}", "-".repeat(84));
         for link in &pkg.links {
             let name = link
                 .filename
                 .clone()
-                .or_else(|| url::Url::parse(&link.url).ok().and_then(|u| filename_from_url(&u)))
+                .or_else(|| {
+                    url::Url::parse(&link.url)
+                        .ok()
+                        .and_then(|u| filename_from_url(&u))
+                })
                 .unwrap_or_else(|| link.url.clone());
             let size = link.size.map(human_bytes).unwrap_or_else(|| "?".into());
             let mime = link.mime.clone().unwrap_or_else(|| "-".into());
@@ -346,7 +370,11 @@ fn parse_bench_modes(specs: &[String], default_multi: usize) -> Vec<BenchMode> {
         }
     }
     if out.is_empty() {
-        out = vec![BenchMode::Auto, BenchMode::Fixed(1), BenchMode::Fixed(default_multi)];
+        out = vec![
+            BenchMode::Auto,
+            BenchMode::Fixed(1),
+            BenchMode::Fixed(default_multi),
+        ];
     }
     out
 }
@@ -455,9 +483,7 @@ async fn run_bench(
                 "  {label:<22}: min {min:>8.2}  median {med:>8.2}  max {max:>8.2} MB/s  (ended {last_used} conn)"
             );
         } else if autotune {
-            println!(
-                "  {label:<22}: {med:>8.2} MB/s  (ended {last_used} conn)"
-            );
+            println!("  {label:<22}: {med:>8.2} MB/s  (ended {last_used} conn)");
         } else {
             println!("  {label:<22}: {med:>8.2} MB/s");
         }
@@ -513,7 +539,9 @@ async fn render_events(rx: &mut events::EventReceiver) {
                 resumed_from,
                 supports_ranges,
             } => {
-                let size = total_size.map(human_bytes).unwrap_or_else(|| "unknown".into());
+                let size = total_size
+                    .map(human_bytes)
+                    .unwrap_or_else(|| "unknown".into());
                 eprintln!(
                     "  size={size} connections={connections} resumed_from={} ranges={}",
                     human_bytes(resumed_from),
@@ -570,7 +598,10 @@ async fn resolve_output(
 
     match output {
         Some(p) if p.is_dir() => {
-            let name = probe_name(engine, url).await.or(url_name).unwrap_or_else(|| "download.bin".into());
+            let name = probe_name(engine, url)
+                .await
+                .or(url_name)
+                .unwrap_or_else(|| "download.bin".into());
             Ok(p.join(name))
         }
         Some(p) => {

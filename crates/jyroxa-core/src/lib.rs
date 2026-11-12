@@ -23,7 +23,9 @@ pub mod state;
 pub mod trace;
 pub mod tuner;
 
-pub use download::{Control, DownloadConfig, DownloadOutcome, DownloadRequest, Downloader, RefreshFn};
+pub use download::{
+    Control, DownloadConfig, DownloadOutcome, DownloadRequest, Downloader, RefreshFn,
+};
 pub use error::{Error, Result};
 pub use events::ProgressEvent;
 pub use hoststats::HostStats;
@@ -83,7 +85,8 @@ pub fn build_segment_client_with(read_timeout: std::time::Duration) -> Result<re
     let client = reqwest::Client::builder()
         .user_agent(USER_AGENT)
         .http1_only()
-        .pool_max_idle_per_host(MAX_CONNECTIONS)
+        .pool_max_idle_per_host(1)
+        .pool_idle_timeout(std::time::Duration::from_secs(10))
         .tcp_nodelay(true)
         .tcp_keepalive(std::time::Duration::from_secs(30))
         .connect_timeout(std::time::Duration::from_secs(20))

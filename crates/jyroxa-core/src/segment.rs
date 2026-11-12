@@ -13,6 +13,11 @@ use std::sync::{Arc, Mutex};
 
 use crate::state::SegmentState;
 
+/// Do not start a probe when less than this remains in the download.
+pub const PROBE_MIN_REMAINING: u64 = 8 << 20;
+/// Bytes the primary worker should read before a probe may cap its range.
+pub const PROBE_LEAD: u64 = 4 << 20;
+
 /// Split a file of `total` bytes into `n` contiguous inclusive ranges.
 ///
 /// The final segment absorbs any remainder. Returns fewer than `n` segments if
@@ -46,6 +51,10 @@ pub struct Segment {
     pub current: AtomicU64,
     /// Set when the segment is fully downloaded.
     pub done: AtomicBool,
+    /// Inclusive byte cap for the primary worker (probe splits); 0 = none.
+    cap_end: AtomicU64,
+    /// True while a worker is actively downloading this segment.
+    in_use: AtomicBool,
 }
 
 impl Segment {
@@ -56,11 +65,53 @@ impl Segment {
             end: AtomicU64::new(end),
             current: AtomicU64::new(current),
             done: AtomicBool::new(current > end),
+            cap_end: AtomicU64::new(0),
+            in_use: AtomicBool::new(false),
         })
     }
 
     pub fn end(&self) -> u64 {
         self.end.load(Ordering::Acquire)
+    }
+
+    /// Last inclusive byte this worker may read (probe cap or full segment end).
+    pub fn download_end(&self) -> u64 {
+        let end = self.end();
+        let cap = self.cap_end.load(Ordering::Acquire);
+        if cap > 0 && cap < end {
+            cap
+        } else {
+            end
+        }
+    }
+
+    pub fn set_in_use(&self, active: bool) {
+        self.in_use.store(active, Ordering::Release);
+    }
+
+    pub fn is_in_use(&self) -> bool {
+        self.in_use.load(Ordering::Acquire)
+    }
+
+    /// Stop the primary stream at `cap` without shrinking `end` until the cap is reached.
+    pub fn set_cap_end(&self, cap: u64) {
+        self.cap_end.store(cap, Ordering::Release);
+    }
+
+    pub fn clear_cap_end(&self) {
+        self.cap_end.store(0, Ordering::Release);
+    }
+
+    /// Commit a probe cap into the permanent inclusive end.
+    pub fn apply_cap_if_due(&self, pos: u64) {
+        let cap = self.cap_end.load(Ordering::Acquire);
+        if cap == 0 {
+            return;
+        }
+        if pos > cap {
+            self.end.store(cap, Ordering::Release);
+            self.cap_end.store(0, Ordering::Release);
+        }
     }
     pub fn current(&self) -> u64 {
         self.current.load(Ordering::Acquire)
@@ -209,13 +260,75 @@ impl SegmentTable {
             .or_else(|| self.try_steal(self.min_steal.max(64 * 1024)))
     }
 
+    /// Queue work for an extra probe connection without re-ranging the active stream.
+    ///
+    /// Caps the largest in-flight segment at a chunk boundary ahead of its cursor and
+    /// enqueues the tail as a new segment.
+    pub fn try_queue_probe_split(&self, total_remaining: u64) -> bool {
+        if total_remaining < PROBE_MIN_REMAINING {
+            return false;
+        }
+        let min_tail = self.min_steal.saturating_mul(2).max(PROBE_LEAD);
+        let mut segs = self.all.lock().unwrap();
+        if segs.len() >= self.steal_cap {
+            return false;
+        }
+
+        let mut best: Option<(usize, u64, u64)> = None;
+        for (i, s) in segs.iter().enumerate() {
+            if s.is_done() {
+                continue;
+            }
+            let cur = s.current();
+            let end = s.end();
+            let rem = end.saturating_sub(cur).saturating_add(1);
+            if rem < min_tail.saturating_add(PROBE_LEAD) {
+                continue;
+            }
+            let replace = best.map(|(_, r, _)| rem > r).unwrap_or(true);
+            if replace {
+                best = Some((i, rem, cur));
+            }
+        }
+        let (victim_idx, _, cur) = match best {
+            Some(v) => v,
+            None => return false,
+        };
+        let victim = segs[victim_idx].clone();
+        let end = victim.end();
+        let rem = end.saturating_sub(cur).saturating_add(1);
+        let tail = rem / 2;
+        if tail < self.min_steal {
+            return false;
+        }
+        let mid = end.saturating_sub(tail);
+        if mid <= cur || cur.saturating_add(PROBE_LEAD) > mid {
+            return false;
+        }
+        if victim.cap_end.load(Ordering::Acquire) > 0 {
+            return false;
+        }
+
+        victim.set_cap_end(mid);
+        let new_index = self.next_index.fetch_add(1, Ordering::Relaxed) as usize;
+        let stolen = Segment::new(new_index, mid + 1, end, mid + 1);
+        segs.push(stolen.clone());
+        self.queue.lock().unwrap().push_back(stolen);
+        true
+    }
+
     /// Split the tail of a specific in-progress segment after a stall.
     pub fn split_tail(&self, victim: &Arc<Segment>) -> Option<Arc<Segment>> {
         let mut segs = self.all.lock().unwrap();
         if segs.len() >= self.steal_cap {
             return None;
         }
-        split_segment_tail(&mut segs, victim, self.min_steal.max(64 * 1024), &self.next_index)
+        split_segment_tail(
+            &mut segs,
+            victim,
+            self.min_steal.max(64 * 1024),
+            &self.next_index,
+        )
     }
 
     fn try_steal(&self, min_tail: u64) -> Option<Arc<Segment>> {
@@ -226,6 +339,9 @@ impl SegmentTable {
 
         let mut best: Option<(usize, u64, u64)> = None;
         for (i, s) in segs.iter().enumerate() {
+            if s.is_in_use() {
+                continue;
+            }
             let rem = s.remaining();
             if rem < min_tail {
                 continue;
@@ -340,10 +456,33 @@ mod tests {
     }
 
     #[test]
+    fn probe_split_caps_without_shrinking_end() {
+        let table = SegmentTable::from_ranges(&[(0, 16_777_215)], PROBE_LEAD, 16);
+        let victim = table.next_work(false).unwrap();
+        victim.current.store(0, Ordering::Release);
+        assert!(table.try_queue_probe_split(16 << 20));
+        assert!(victim.cap_end.load(Ordering::Relaxed) > 0);
+        assert_eq!(victim.end(), 16_777_215);
+        assert_eq!(table.queued(), 1);
+        let tail = table.queue.lock().unwrap().pop_front().unwrap();
+        assert!(tail.start > victim.download_end());
+    }
+
+    #[test]
     fn resume_queues_only_pending() {
         let segs = vec![
-            SegmentState { index: 0, start: 0, end: 99, downloaded: 100 }, // complete
-            SegmentState { index: 1, start: 100, end: 199, downloaded: 40 }, // pending
+            SegmentState {
+                index: 0,
+                start: 0,
+                end: 99,
+                downloaded: 100,
+            }, // complete
+            SegmentState {
+                index: 1,
+                start: 100,
+                end: 199,
+                downloaded: 40,
+            }, // pending
         ];
         let table = SegmentTable::from_state(&segs, 10, 16);
         assert_eq!(table.len(), 2);

@@ -10,8 +10,13 @@ static ENABLED: OnceLock<bool> = OnceLock::new();
 
 pub fn enabled() -> bool {
     *ENABLED.get_or_init(|| {
-        matches!(std::env::var("JYROXA_TRACE").as_deref(), Ok("1" | "true" | "yes"))
-            || matches!(std::env::var("SWIFTGET_TRACE").as_deref(), Ok("1" | "true" | "yes"))
+        matches!(
+            std::env::var("JYROXA_TRACE").as_deref(),
+            Ok("1" | "true" | "yes")
+        ) || matches!(
+            std::env::var("SWIFTGET_TRACE").as_deref(),
+            Ok("1" | "true" | "yes")
+        )
     })
 }
 

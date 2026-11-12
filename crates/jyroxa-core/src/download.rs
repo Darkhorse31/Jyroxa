@@ -21,8 +21,7 @@ use crate::tuner::{parse_retry_after, Tuner, TunerInput};
 
 /// A callback that, given an expired URL, asynchronously returns a fresh one.
 /// Used for links that return 403/410 after their signed-token expires.
-pub type RefreshFn =
-    Arc<dyn Fn(String) -> BoxFuture<'static, Option<String>> + Send + Sync>;
+pub type RefreshFn = Arc<dyn Fn(String) -> BoxFuture<'static, Option<String>> + Send + Sync>;
 
 /// Mirrors with penalty at or above this threshold are treated as dead until all are.
 const MIRROR_DEAD_PENALTY: i64 = 20;
@@ -91,6 +90,32 @@ async fn wait_runnable(rx: &mut watch::Receiver<Cmd>) -> Result<()> {
     }
 }
 
+/// Acquire rate tokens in small steps that respect pause/cancel.
+async fn acquire_rate(
+    limiter: &RateLimiter,
+    global: &RateLimiter,
+    nbytes: u64,
+    ctrl_rx: &mut watch::Receiver<Cmd>,
+) -> Result<()> {
+    let mut left = nbytes;
+    let poll_rx = ctrl_rx.clone();
+    let still_running = || matches!(*poll_rx.borrow(), Cmd::Run | Cmd::Paused);
+    while left > 0 {
+        wait_runnable(ctrl_rx).await?;
+        let step = left.min(32 * 1024);
+        limiter.acquire_until(step, still_running).await;
+        if matches!(*ctrl_rx.borrow(), Cmd::Cancelled) {
+            return Err(Error::Cancelled);
+        }
+        global.acquire_until(step, still_running).await;
+        if matches!(*ctrl_rx.borrow(), Cmd::Cancelled) {
+            return Err(Error::Cancelled);
+        }
+        left -= step;
+    }
+    Ok(())
+}
+
 /// Sleep that wakes promptly on pause, resume, or cancel.
 async fn interruptible_sleep(rx: &mut watch::Receiver<Cmd>, dur: Duration) -> Result<()> {
     if dur.is_zero() {
@@ -107,7 +132,7 @@ async fn interruptible_sleep(rx: &mut watch::Receiver<Cmd>, dur: Duration) -> Re
     }
 }
 
-const SEGMENT_WRITE_BUF: usize = 512 * 1024;
+const SEGMENT_WRITE_BUF: usize = 2 * 1024 * 1024;
 const RETRY_AFTER_CAP: Duration = Duration::from_secs(30);
 const PROGRESS_EMIT_INTERVAL: Duration = Duration::from_millis(250);
 const SEGMENT_STALL_TIMEOUT: Duration = Duration::from_secs(5);
@@ -145,8 +170,8 @@ impl Default for DownloadConfig {
     fn default() -> Self {
         DownloadConfig {
             max_connections: crate::MAX_CONNECTIONS,
-            initial_connections: 4,
-            min_segment_size: 1 << 20, // 1 MiB
+            initial_connections: 1,
+            min_segment_size: 2 << 20, // 2 MiB
             max_retries: 5,
             max_global_failures: 0,
             autotune: true,
@@ -222,7 +247,9 @@ struct Meta {
 }
 
 fn header_str(h: &reqwest::header::HeaderMap, name: reqwest::header::HeaderName) -> Option<String> {
-    h.get(name).and_then(|v| v.to_str().ok()).map(|s| s.to_string())
+    h.get(name)
+        .and_then(|v| v.to_str().ok())
+        .map(|s| s.to_string())
 }
 
 /// Parse `Content-Disposition` for a filename.
@@ -303,7 +330,11 @@ async fn probe_metadata(client: &reqwest::Client, url: &str, timeout: Duration) 
             meta.supports_ranges = true;
             // Content-Range: bytes 0-0/12345
             if let Some(cr) = header_str(&headers, h::CONTENT_RANGE) {
-                if let Some(total) = cr.rsplit('/').next().and_then(|s| s.trim().parse::<u64>().ok()) {
+                if let Some(total) = cr
+                    .rsplit('/')
+                    .next()
+                    .and_then(|s| s.trim().parse::<u64>().ok())
+                {
                     meta.size = Some(total);
                 }
             }
@@ -338,7 +369,8 @@ async fn probe_streaming_fallback(
         size: resp.content_length().filter(|&n| n > 0),
         etag: header_str(&headers, h::ETAG),
         last_modified: header_str(&headers, h::LAST_MODIFIED),
-        filename: header_str(&headers, h::CONTENT_DISPOSITION).and_then(|cd| filename_from_disposition(&cd)),
+        filename: header_str(&headers, h::CONTENT_DISPOSITION)
+            .and_then(|cd| filename_from_disposition(&cd)),
     };
     if meta.size.is_none() {
         if let Some(accept) = header_str(&headers, h::ACCEPT_RANGES) {
@@ -496,8 +528,7 @@ struct WriteChunk {
 }
 
 struct Ctx {
-    client: reqwest::Client,
-    writer: mpsc::Sender<WriteChunk>,
+    writer: Mutex<Option<mpsc::Sender<WriteChunk>>>,
     pool: MirrorPool,
     path: PathBuf,
     total: u64,
@@ -618,7 +649,6 @@ impl Ctx {
 #[derive(Clone)]
 pub struct Downloader {
     client: reqwest::Client,
-    segment_client: reqwest::Client,
     global_limiter: Arc<RateLimiter>,
     host_stats: Arc<HostStats>,
     config: DownloadConfig,
@@ -629,7 +659,6 @@ impl Downloader {
     pub fn new(config: DownloadConfig) -> Result<Self> {
         Ok(Downloader {
             client: crate::build_client_with(config.read_timeout)?,
-            segment_client: crate::build_segment_client_with(config.read_timeout)?,
             global_limiter: Arc::new(RateLimiter::unlimited()),
             host_stats: Arc::new(HostStats::in_memory()),
             config,
@@ -718,13 +747,8 @@ impl Downloader {
         // Starting connection count: remembered best for the host, clamped by cap.
         let host_cap = self.host_stats.host_cap(&host);
         let initial_conn = if req.autotune {
-            let cap = host_cap.unwrap_or(max_conn).min(max_conn);
-            let default_start = 4.min(cap);
-            let remember = self
-                .host_stats
-                .best_connections(&host)
-                .unwrap_or(default_start);
-            remember.clamp(1, cap)
+            // Always begin at a single connection; the tuner adds more only when they help.
+            1
         } else {
             max_conn
         };
@@ -780,8 +804,7 @@ impl Downloader {
         let writer = spawn_disk_writer(output.clone(), fatal_slot.clone(), write_pending.clone());
 
         let ctx = Arc::new(Ctx {
-            client: self.segment_client.clone(),
-            writer,
+            writer: Mutex::new(Some(writer)),
             pool: MirrorPool::new(&req.urls, events.clone()),
             path: output.clone(),
             total,
@@ -857,6 +880,18 @@ impl Downloader {
             let _ = tokio::time::timeout(Duration::from_millis(150), ctx.notify.notified()).await;
         }
         supervisor.abort();
+
+        if control.is_cancelled() {
+            *ctx.writer.lock().unwrap() = None;
+            ctx.notify.notify_waiters();
+            for _ in 0..200 {
+                if ctx.active_workers.load(Ordering::Acquire) == 0 {
+                    break;
+                }
+                ctx.notify.notify_waiters();
+                tokio::time::sleep(Duration::from_millis(25)).await;
+            }
+        }
 
         if ctx.range_fallback.load(Ordering::Acquire) && !control.is_cancelled() {
             ctx.target.store(0, Ordering::Release);
@@ -968,7 +1003,15 @@ impl Downloader {
 
             let url = req.urls[attempt % req.urls.len()].clone();
             match self
-                .single_attempt(&url, output, &limiter, &self.global_limiter, &control, &mut ctrl_rx, &events)
+                .single_attempt(
+                    &url,
+                    output,
+                    &limiter,
+                    &self.global_limiter,
+                    &control,
+                    &mut ctrl_rx,
+                    &events,
+                )
                 .await
             {
                 Ok(total) => {
@@ -1049,8 +1092,7 @@ impl Downloader {
                 return Err(Error::Cancelled);
             }
             let chunk = chunk?;
-            limiter.acquire(chunk.len() as u64).await;
-            global.acquire(chunk.len() as u64).await;
+            acquire_rate(limiter, global, chunk.len() as u64, ctrl_rx).await?;
             file.write_all(&chunk)?;
             written += chunk.len() as u64;
             if let Some(tx) = events {
@@ -1083,6 +1125,15 @@ impl Downloader {
 fn spawn_worker(ctx: Arc<Ctx>) {
     ctx.active_workers.fetch_add(1, Ordering::AcqRel);
     tokio::spawn(async move {
+        let client = match crate::build_segment_client_with(ctx.config.read_timeout) {
+            Ok(c) => c,
+            Err(e) => {
+                ctx.set_fatal(e);
+                ctx.active_workers.fetch_sub(1, Ordering::AcqRel);
+                ctx.notify.notify_waiters();
+                return;
+            }
+        };
         let mut ctrl_rx = ctx.control.subscribe();
         // Keep claiming work (queue, then stealing) until nothing remains.
         loop {
@@ -1098,17 +1149,22 @@ fn spawn_worker(ctx: Arc<Ctx>) {
                 // Over the connection target — retire without taking new work.
                 break;
             }
-            let idle = ctx.active_workers.load(Ordering::Acquire)
-                > ctx.busy_workers.load(Ordering::Acquire);
-            let Some(seg) = ctx.table.next_work(idle) else {
+            let target_now = ctx.target.load(Ordering::Acquire);
+            let active_now = ctx.active_workers.load(Ordering::Acquire);
+            let idle = active_now > ctx.busy_workers.load(Ordering::Acquire);
+            let allow_steal = idle && target_now > 1 && active_now > 1;
+            let Some(seg) = ctx.table.next_work(allow_steal) else {
                 if ctx.table.all_done() {
                     break;
                 }
-                let _ = tokio::time::timeout(Duration::from_millis(50), ctx.notify.notified()).await;
+                let _ =
+                    tokio::time::timeout(Duration::from_millis(50), ctx.notify.notified()).await;
                 continue;
             };
             ctx.busy_workers.fetch_add(1, Ordering::AcqRel);
-            let seg_result = run_segment(&ctx, &seg, &mut ctrl_rx).await;
+            seg.set_in_use(true);
+            let seg_result = run_segment(&ctx, &client, &seg, &mut ctrl_rx).await;
+            seg.set_in_use(false);
             ctx.busy_workers.fetch_sub(1, Ordering::AcqRel);
             match seg_result {
                 Ok(()) => {
@@ -1162,7 +1218,17 @@ fn reconcile_workers(ctx: &Arc<Ctx>) {
     let target = ctx.target.load(Ordering::Acquire);
     let active = ctx.active_workers.load(Ordering::Acquire);
     if active < target {
-        for _ in 0..target.saturating_sub(active) {
+        let need = target.saturating_sub(active);
+        let remaining = ctx
+            .total
+            .saturating_sub(ctx.downloaded.load(Ordering::Relaxed));
+        let want_queued = target.saturating_sub(1).max(ctx.table.queued());
+        while ctx.table.queued() < want_queued {
+            if !ctx.table.try_queue_probe_split(remaining) {
+                break;
+            }
+        }
+        for _ in 0..need {
             spawn_worker(ctx.clone());
         }
     }
@@ -1173,32 +1239,37 @@ async fn flush_segment_buf(
     buf: &mut Vec<u8>,
     at: &mut u64,
     seg: &Arc<Segment>,
+    ctrl_rx: &mut watch::Receiver<Cmd>,
 ) -> Result<()> {
+    wait_runnable(ctrl_rx).await?;
     if buf.is_empty() {
         return Ok(());
     }
     let len = buf.len();
-    ctx.limiter.acquire(len as u64).await;
-    ctx.global.acquire(len as u64).await;
+    acquire_rate(&ctx.limiter, &ctx.global, len as u64, ctrl_rx).await?;
     let offset = *at;
     let data = std::mem::take(buf);
     *at += len as u64;
     seg.current.store(*at, Ordering::Release);
     ctx.downloaded.fetch_add(len as u64, Ordering::Relaxed);
     ctx.write_pending.fetch_add(1, Ordering::AcqRel);
-    if ctx
-        .writer
-        .send(WriteChunk {
-            offset,
-            data,
-            seg: seg.clone(),
-        })
-        .await
-        .is_err()
-    {
+    let tx = ctx.writer.lock().unwrap().clone();
+    let send_err = match tx {
+        Some(tx) => tx
+            .send(WriteChunk {
+                offset,
+                data,
+                seg: seg.clone(),
+            })
+            .await
+            .is_err(),
+        None => true,
+    };
+    if send_err {
         ctx.write_pending.fetch_sub(1, Ordering::AcqRel);
         return Err(Error::other("disk writer stopped"));
     }
+    seg.apply_cap_if_due(*at);
     Ok(())
 }
 
@@ -1210,11 +1281,15 @@ async fn handle_read_stall(
     write_at: &mut u64,
     attempt: usize,
 ) -> Result<()> {
-    flush_segment_buf(ctx, write_buf, write_at, seg).await?;
+    flush_segment_buf(ctx, write_buf, write_at, seg, ctrl_rx).await?;
     ctx.recent_errors.fetch_add(1, Ordering::Relaxed);
-    if let Some(stolen) = ctx.table.split_tail(seg) {
-        ctx.table.requeue(stolen);
-        ctx.notify.notify_waiters();
+    let may_split =
+        ctx.target.load(Ordering::Acquire) > 1 && ctx.active_workers.load(Ordering::Acquire) > 1;
+    if may_split {
+        if let Some(stolen) = ctx.table.split_tail(seg) {
+            ctx.table.requeue(stolen);
+            ctx.notify.notify_waiters();
+        }
     }
     emit_retry(ctx, attempt + 1, "read stall");
     if seg.remaining() > 0 {
@@ -1227,6 +1302,7 @@ async fn handle_read_stall(
 /// Download a single segment (with retries, mirror selection, and link refresh).
 async fn run_segment(
     ctx: &Arc<Ctx>,
+    client: &reqwest::Client,
     seg: &Arc<Segment>,
     ctrl_rx: &mut watch::Receiver<Cmd>,
 ) -> Result<()> {
@@ -1236,9 +1312,10 @@ async fn run_segment(
         wait_runnable(ctrl_rx).await?;
 
         let begin = seg.current();
-        let end = seg.end();
+        let end = seg.download_end();
         if begin > end {
             seg.mark_done();
+            seg.clear_cap_end();
             return Ok(());
         }
 
@@ -1246,10 +1323,7 @@ async fn run_segment(
         let url = ctx.pool.url_of(&mirror);
         let range = format!("bytes={}-{}", begin, end);
 
-        let req_builder = ctx
-            .client
-            .get(&url)
-            .header(reqwest::header::RANGE, range);
+        let req_builder = client.get(&url).header(reqwest::header::RANGE, range);
 
         let resp = tokio::select! {
             res = req_builder.send() => res,
@@ -1278,9 +1352,7 @@ async fn run_segment(
         };
 
         let status = resp.status();
-        if status == reqwest::StatusCode::OK
-            && (begin > 0 || end < ctx.total.saturating_sub(1))
-        {
+        if status == reqwest::StatusCode::OK && (begin > 0 || end < ctx.total.saturating_sub(1)) {
             return Err(Error::RangeIgnored);
         }
         if status == reqwest::StatusCode::FORBIDDEN || status == reqwest::StatusCode::GONE {
@@ -1306,7 +1378,11 @@ async fn run_segment(
                 .and_then(|v| v.to_str().ok())
                 .and_then(|v| parse_retry_after(v, RETRY_AFTER_CAP))
                 .unwrap_or_else(|| backoff_delay(attempt + 1));
-            emit_retry(ctx, attempt + 1, &format!("HTTP {} (throttled)", status.as_u16()));
+            emit_retry(
+                ctx,
+                attempt + 1,
+                &format!("HTTP {} (throttled)", status.as_u16()),
+            );
             interruptible_sleep(ctrl_rx, delay).await?;
             let active = ctx.active_workers.load(Ordering::Acquire);
             let target = ctx.target.load(Ordering::Acquire);
@@ -1344,21 +1420,13 @@ async fn run_segment(
         let mut stream_err: Option<Error> = None;
         let mut write_buf = Vec::with_capacity(SEGMENT_WRITE_BUF);
         let mut write_at = pos;
-        let mut stall_deadline =
-            tokio::time::Instant::now() + SEGMENT_STALL_TIMEOUT;
+        let mut stall_deadline = tokio::time::Instant::now() + SEGMENT_STALL_TIMEOUT;
         let mut stalled = false;
 
         loop {
             let chunk_res = tokio::select! {
                 _ = tokio::time::sleep_until(stall_deadline) => {
-                    handle_read_stall(
-                        ctx,
-                        seg,
-                        ctrl_rx,
-                        &mut write_buf,
-                        &mut write_at,
-                        attempt,
-                    )
+                    handle_read_stall(ctx, seg, ctrl_rx, &mut write_buf, &mut write_at, attempt)
                     .await?;
                     stalled = true;
                     break;
@@ -1374,12 +1442,14 @@ async fn run_segment(
             };
             match chunk_res {
                 Some(Ok(chunk)) => {
+                    if matches!(*ctrl_rx.borrow(), Cmd::Paused) {
+                        wait_runnable(ctrl_rx).await?;
+                    }
                     if chunk.is_empty() {
                         continue;
                     }
-                    stall_deadline =
-                        tokio::time::Instant::now() + SEGMENT_STALL_TIMEOUT;
-                    let cur_end = seg.end();
+                    stall_deadline = tokio::time::Instant::now() + SEGMENT_STALL_TIMEOUT;
+                    let cur_end = seg.download_end();
                     let mut bytes: &[u8] = &chunk;
                     let last = pos + bytes.len() as u64 - 1;
                     let truncated = if last > cur_end {
@@ -1397,33 +1467,24 @@ async fn run_segment(
                         write_buf.extend_from_slice(bytes);
                         pos += bytes.len() as u64;
                         if write_buf.len() >= SEGMENT_WRITE_BUF {
-                            flush_segment_buf(ctx, &mut write_buf, &mut write_at, seg).await?;
+                            flush_segment_buf(ctx, &mut write_buf, &mut write_at, seg, ctrl_rx)
+                                .await?;
                         }
-                    }
-
-                    let target = ctx.target.load(Ordering::Acquire);
-                    let active = ctx.active_workers.load(Ordering::Acquire);
-                    if active > target {
-                        flush_segment_buf(ctx, &mut write_buf, &mut write_at, seg).await?;
-                        if seg.remaining() > 0 {
-                            ctx.table.requeue(seg.clone());
-                        }
-                        return Ok(());
                     }
 
                     if truncated || pos > cur_end {
-                        flush_segment_buf(ctx, &mut write_buf, &mut write_at, seg).await?;
+                        flush_segment_buf(ctx, &mut write_buf, &mut write_at, seg, ctrl_rx).await?;
                         break;
                     }
                 }
                 Some(Err(e)) => {
-                    flush_segment_buf(ctx, &mut write_buf, &mut write_at, seg).await?;
+                    flush_segment_buf(ctx, &mut write_buf, &mut write_at, seg, ctrl_rx).await?;
                     ctx.recent_errors.fetch_add(1, Ordering::Relaxed);
                     stream_err = Some(e.into());
                     break;
                 }
                 None => {
-                    flush_segment_buf(ctx, &mut write_buf, &mut write_at, seg).await?;
+                    flush_segment_buf(ctx, &mut write_buf, &mut write_at, seg, ctrl_rx).await?;
                     break;
                 }
             }
@@ -1485,9 +1546,7 @@ async fn supervise(
     let mut speed_ewma = 0.0f64;
     let speed_alpha = 0.35;
 
-    let cap = host_cap
-        .unwrap_or(max_conn)
-        .clamp(1, max_conn);
+    let cap = host_cap.unwrap_or(max_conn).clamp(1, max_conn);
     let mut tuner = if req.autotune {
         Some(Tuner::new(initial_conn, max_conn, Some(cap)))
     } else {
@@ -1495,14 +1554,27 @@ async fn supervise(
     };
     let mut target = initial_conn;
     ctx.target.store(target, Ordering::Release);
-    ctx.final_connections.store(target, Ordering::Release);
+    ctx.final_connections
+        .fetch_max(target, Ordering::Release);
 
+    let mut ctrl_rx = ctx.control.subscribe();
     loop {
-        tokio::time::sleep(ctx.config.tune_interval).await;
+        tokio::select! {
+            _ = tokio::time::sleep(ctx.config.tune_interval) => {}
+            res = ctrl_rx.changed() => {
+                if res.is_err() || ctx.control.is_cancelled() {
+                    break;
+                }
+                continue;
+            }
+        }
 
         let now = Instant::now();
         let bytes = ctx.downloaded.load(Ordering::Relaxed);
-        let dt = now.saturating_duration_since(last_time).as_secs_f64().max(1e-6);
+        let dt = now
+            .saturating_duration_since(last_time)
+            .as_secs_f64()
+            .max(1e-6);
         let speed = (bytes.saturating_sub(last_bytes)) as f64 / dt;
         last_bytes = bytes;
         last_time = now;
@@ -1573,16 +1645,19 @@ async fn supervise(
         );
 
         if let Some(t) = tuner.as_mut() {
+            let remaining = ctx.total.saturating_sub(bytes);
             let out = t.tick(&TunerInput {
                 throughput: speed,
                 active_connections: active.max(1),
                 throttle_events: throttles,
                 error_events: errors,
+                bytes_remaining: remaining,
             });
             if out.target != target {
                 target = out.target;
                 ctx.target.store(target, Ordering::Release);
-                ctx.final_connections.store(target, Ordering::Release);
+                ctx.final_connections
+                    .fetch_max(target, Ordering::Release);
                 ctx.emit(ProgressEvent::ConnectionsChanged {
                     count: target,
                     reason: if throttles > 0 {
@@ -1623,7 +1698,7 @@ async fn supervise(
                 host_stats.observe(&host, t.best_connections(), t.best_throughput());
             }
             ctx.final_connections
-                .store(t.best_connections().max(1), Ordering::Release);
+                .fetch_max(t.target().max(1), Ordering::Release);
         }
     }
 }

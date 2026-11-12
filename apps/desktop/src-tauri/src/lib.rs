@@ -3,12 +3,12 @@ mod engine;
 mod platform;
 mod shell_paths;
 
-use std::path::PathBuf;
+use engine::{init_engine, run_clipboard_monitor, EngineState};
 use serde::{Deserialize, Serialize};
+use std::path::PathBuf;
 use tauri::menu::{Menu, MenuItem};
 use tauri::tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent};
 use tauri::{Emitter, Manager, PhysicalPosition, PhysicalSize, WindowEvent};
-use engine::{init_engine, run_clipboard_monitor, EngineState};
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 struct WindowState {
@@ -107,14 +107,15 @@ pub fn run() {
         .find(|a| a.starts_with("http://") || a.starts_with("https://"))
         .cloned();
 
-    let _single_instance_guard = match platform::try_acquire_single_instance("JyroxaSingleInstanceMutex") {
-        Some(g) => g,
-        None => {
-            platform::send_to_first_instance(maybe_url.as_deref());
-            platform::focus_existing_window("jyroxa");
-            return;
-        }
-    };
+    let _single_instance_guard =
+        match platform::try_acquire_single_instance("JyroxaSingleInstanceMutex") {
+            Some(g) => g,
+            None => {
+                platform::send_to_first_instance(maybe_url.as_deref());
+                platform::focus_existing_window("jyroxa");
+                return;
+            }
+        };
 
     let start_minimized = args.iter().any(|a| a == "--minimized");
 
@@ -152,8 +153,7 @@ pub fn run() {
             let product = app.package_info().name.clone();
             let show_i = MenuItem::with_id(app, "show", "Show", true, None::<&str>)?;
             let pause_i = MenuItem::with_id(app, "pause_all", "Pause all", true, None::<&str>)?;
-            let resume_i =
-                MenuItem::with_id(app, "resume_all", "Resume all", true, None::<&str>)?;
+            let resume_i = MenuItem::with_id(app, "resume_all", "Resume all", true, None::<&str>)?;
             let quit_i = MenuItem::with_id(app, "quit", "Quit", true, None::<&str>)?;
             let menu = Menu::with_items(app, &[&show_i, &pause_i, &resume_i, &quit_i])?;
 
