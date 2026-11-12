@@ -198,7 +198,7 @@ impl Tuner {
         let _ = input.error_events;
 
         if input.throttle_events > 0 {
-            self.handle_throttle();
+            self.handle_throttle(input.throttle_events);
             return TunerOutput {
                 target: self.target,
             };
@@ -225,10 +225,15 @@ impl Tuner {
         }
     }
 
-    fn handle_throttle(&mut self) {
-        let cap_at = self.target.saturating_sub(1).max(1);
-        self.host_cap = self.host_cap.min(cap_at);
-        let next = (self.target / 2).max(1).min(self.host_cap);
+    fn handle_throttle(&mut self, throttled: u64) {
+        // The server refused `throttled` requests: drop exactly those
+        // connections (it is telling us its concurrency limit) rather than
+        // halving, and cap there until the cap relaxes.
+        let next = self
+            .target
+            .saturating_sub(throttled.max(1) as usize)
+            .max(1);
+        self.host_cap = self.host_cap.min(next);
         self.ticks_since_throttle = 0;
         // Measurements taken above the new cap no longer apply.
         let cap = self.host_cap;
@@ -475,14 +480,13 @@ mod tests {
     }
 
     #[test]
-    fn halves_on_throttle_and_respects_cap() {
-        let mut t = Tuner::new(8, 16, None);
-        t.tick(&input(5.0 * MB, 1));
-        assert_eq!(t.target(), 4);
-        assert!(t.host_cap() <= 7);
+    fn throttle_drops_refused_connections_and_caps() {
+        let mut t = Tuner::new(16, 32, None);
+        t.tick(&input(5.0 * MB, 6));
+        assert_eq!(t.target(), 10);
+        assert_eq!(t.host_cap(), 10);
         t.tick(&input(3.0 * MB, 1));
-        assert_eq!(t.target(), 2);
-        assert!(t.host_cap() <= 3);
+        assert_eq!(t.target(), 9);
         for _ in 0..50 {
             t.tick(&input(10.0 * MB, 0));
             assert!(t.target() <= t.host_cap());

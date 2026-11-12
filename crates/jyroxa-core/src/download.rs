@@ -1395,14 +1395,15 @@ async fn run_segment(
                 attempt + 1,
                 &format!("HTTP {} (throttled)", status.as_u16()),
             );
+            // Hand the range back right away so a connection the server *did*
+            // accept can carry on with it, instead of this segment sitting idle
+            // for the whole back-off (hosts that cap concurrent requests answer
+            // the extra ones with 429 and used to stall the download's tail).
+            seg.set_in_use(false);
+            ctx.table.requeue(seg.clone());
+            ctx.notify.notify_waiters();
             interruptible_sleep(ctrl_rx, delay).await?;
-            let active = ctx.active_workers.load(Ordering::Acquire);
-            let target = ctx.target.load(Ordering::Acquire);
-            if active > target && seg.remaining() > 0 {
-                ctx.table.requeue(seg.clone());
-                return Ok(());
-            }
-            continue;
+            return Ok(());
         }
         if status.is_server_error() {
             ctx.pool.demote(&mirror);
