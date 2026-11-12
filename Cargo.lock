@@ -2376,7 +2376,7 @@ dependencies = [
 
 [[package]]
 name = "jyroxa-cli"
-version = "0.1.1"
+version = "0.1.2"
 dependencies = [
  "anyhow",
  "clap",
@@ -2388,7 +2388,7 @@ dependencies = [
 
 [[package]]
 name = "jyroxa-core"
-version = "0.1.1"
+version = "0.1.2"
 dependencies = [
  "axum",
  "bytes",
@@ -2411,7 +2411,7 @@ dependencies = [
 
 [[package]]
 name = "jyroxa-desktop"
-version = "0.1.1"
+version = "0.1.2"
 dependencies = [
  "jyroxa-core",
  "regex",
@@ -2431,7 +2431,7 @@ dependencies = [
 
 [[package]]
 name = "jyroxa-ffi"
-version = "0.1.1"
+version = "0.1.2"
 dependencies = [
  "jni",
  "jyroxa-core",
