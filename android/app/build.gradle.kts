@@ -141,6 +141,9 @@ tasks.register<Exec>("buildCargoNdk") {
     val jniOutDir = file("${project.projectDir}/src/main/jniLibs")
 
     workingDir = ffiDir
+    // The GNU-host rustc wrapper in .cargo/config.toml is for Windows targets only.
+    environment("RUSTC_WRAPPER", "")
+    environment("CARGO_BUILD_RUSTC_WRAPPER", "")
     commandLine(
         "cargo", "ndk",
         "-t", "armeabi-v7a",
@@ -158,10 +161,9 @@ tasks.register<Exec>("buildCargoNdk") {
     }
 }
 
-afterEvaluate {
-    tasks.named("assembleRelease") {
-        dependsOn("buildCargoNdk")
-    }
+// Build the native library before any variant merges jniLibs (debug and release).
+tasks.named("preBuild") {
+    dependsOn("buildCargoNdk")
 }
 
 tasks.register<Copy>("exportReleaseApk") {
