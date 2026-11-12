@@ -30,202 +30,160 @@ pub struct TunerOutput {
 /// Phase of the tuner state machine.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Phase {
-    Probing,
+    /// Measuring a new connection count; `ascending` says which way we are walking.
+    Measuring { ascending: bool },
+    /// Holding the best count found; re-probes upward now and then.
     Holding,
 }
 
-/// Per-host throughput record at a given connection count.
-#[derive(Debug, Clone)]
-struct Sample {
-    connections: usize,
-    throughput: f64,
-}
+/// Ticks ignored after a connection-count change (new TCP/TLS streams ramping up).
+const WARMUP_TICKS: usize = 3;
+/// Ticks measured after the warm-up; their median is the level's throughput.
+const MEASURE_TICKS: usize = 4;
+/// A higher connection count must beat the best by this much to be kept.
+const GAIN: f64 = 0.08;
+/// Hold this many ticks between upward re-probes (~10 s at 500 ms ticks).
+const REPROBE_TICKS: usize = 20;
+/// After a throttle, wait this long before probing again (~20 s).
+const THROTTLE_REPROBE_TICKS: usize = 40;
+/// A throttle-derived cap is relaxed after this many throttle-free ticks (~30 s).
+const CAP_RELAX_TICKS: usize = 60;
+/// Default first connection count when nothing is known about the host.
+pub const DEFAULT_START_CONNECTIONS: usize = 4;
 
-/// Connection ramp used while probing upward.
-const PROBE_LADDER: &[usize] = &[4, 8, 12, 16];
-
-/// The tuner state machine.
+/// Throughput-driven connection tuner.
+///
+/// It is a measured hill-climb: every connection count it tries is held for a
+/// short warm-up, then measured (median of several ticks). It walks upward by
+/// doubling while each step is clearly faster, and if the starting count turns
+/// out to be the best it also walks *down* (halving) while fewer connections are
+/// faster. It never settles on a count that measured slower than another count
+/// it has tried, so auto mode can't end up slower than one connection when one
+/// connection really is faster on a host.
 #[derive(Debug)]
 pub struct Tuner {
     target: usize,
     max_connections: usize,
+    /// Current soft ceiling from throttle events (429/503).
     host_cap: usize,
-    best: Sample,
-    /// Best post-warmup smoothed throughput per configured target connection count.
-    per_count_best: HashMap<usize, f64>,
-    smoothed: f64,
-    alpha: f64,
+    start: usize,
     phase: Phase,
+    /// Median throughput measured at each connection count.
+    measured: HashMap<usize, f64>,
+    /// Raw samples taken at the current count, after warm-up.
+    samples: Vec<f64>,
     ticks_at_current: usize,
-    warmup_ticks: usize,
-    target_before_change: usize,
-    throughput_before_change: f64,
     hold_ticks: usize,
-    re_probe_interval: usize,
-    was_throttled: bool,
-    /// Best throughput measured at 1 connection (optional floor for fallbacks).
-    one_conn_floor: Option<f64>,
-    /// Recent raw throughput samples for median comparisons.
-    recent_tp: VecDeque<f64>,
-    /// Samples collected just before the last target increase.
-    baseline_tp: VecDeque<f64>,
+    reprobe_after: usize,
+    ticks_since_throttle: usize,
+    /// Recent samples while holding (rolling refresh of the held level).
+    recent: VecDeque<f64>,
 }
 
 impl Tuner {
+    /// `initial_target` is the first connection count (usually
+    /// [`DEFAULT_START_CONNECTIONS`] or the host's remembered best);
+    /// `host_cap` is a soft ceiling remembered from earlier throttling.
     pub fn new(initial_target: usize, max_connections: usize, host_cap: Option<usize>) -> Self {
+        let max_connections = max_connections.max(1);
         let cap = host_cap
             .unwrap_or(max_connections)
             .clamp(1, max_connections);
-        let target = initial_target.clamp(1, cap.min(max_connections));
+        let target = initial_target.clamp(1, cap);
         Tuner {
             target,
             max_connections,
             host_cap: cap,
-            best: Sample {
-                connections: target,
-                throughput: 0.0,
-            },
-            per_count_best: HashMap::new(),
-            smoothed: 0.0,
-            alpha: 0.3,
-            phase: Phase::Probing,
+            start: target,
+            phase: Phase::Measuring { ascending: true },
+            measured: HashMap::new(),
+            samples: Vec::new(),
             ticks_at_current: 0,
-            // ~2 s warmup at 500 ms supervisor ticks (ignore first ~1 s, then measure).
-            warmup_ticks: 4,
-            target_before_change: target,
-            throughput_before_change: 0.0,
             hold_ticks: 0,
-            // Re-probe about every 10 s.
-            re_probe_interval: 20,
-            was_throttled: false,
-            one_conn_floor: None,
-            recent_tp: VecDeque::new(),
-            baseline_tp: VecDeque::new(),
+            reprobe_after: REPROBE_TICKS,
+            ticks_since_throttle: 0,
+            recent: VecDeque::new(),
         }
-    }
-
-    fn push_sample(buf: &mut VecDeque<f64>, value: f64, cap: usize) {
-        if value <= 0.0 {
-            return;
-        }
-        buf.push_back(value);
-        while buf.len() > cap {
-            buf.pop_front();
-        }
-    }
-
-    fn median(samples: &[f64]) -> f64 {
-        if samples.is_empty() {
-            return 0.0;
-        }
-        let mut sorted: Vec<f64> = samples.to_vec();
-        sorted.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
-        sorted[sorted.len() / 2]
-    }
-
-    fn probing_viable(&self, input: &TunerInput) -> bool {
-        if input.bytes_remaining < PROBE_MIN_REMAINING {
-            return false;
-        }
-        if input.throughput > 0.0 && (input.bytes_remaining as f64 / input.throughput) < 2.0 {
-            return false;
-        }
-        true
     }
 
     pub fn target(&self) -> usize {
         self.target
     }
 
-    pub fn best_connections(&self) -> usize {
-        self.best.connections
-    }
-
-    pub fn best_throughput(&self) -> f64 {
-        self.best.throughput
-    }
-
     pub fn host_cap(&self) -> usize {
         self.host_cap
     }
 
-    fn effective_best_throughput(&self) -> f64 {
-        let mut floor = self.best.throughput;
-        if let Some(one) = self.one_conn_floor {
-            floor = floor.max(one);
-        }
-        floor
+    /// The fastest measured connection count (or the current one if none yet).
+    pub fn best_connections(&self) -> usize {
+        self.best().map(|(c, _)| c).unwrap_or(self.target)
     }
 
-    fn warmup_ticks_for_target(&self) -> usize {
-        // Short warm-up when stepping up from a single fast connection.
-        if self.target <= 2 {
-            2
-        } else {
-            self.warmup_ticks
-        }
+    /// Throughput measured at [`Self::best_connections`] (0 if none yet).
+    pub fn best_throughput(&self) -> f64 {
+        self.best().map(|(_, tp)| tp).unwrap_or(0.0)
     }
 
-    fn record_post_warmup_sample(&mut self) {
-        if self.ticks_at_current < self.warmup_ticks_for_target() || self.smoothed <= 0.0 {
-            return;
-        }
-        let count = self.target;
-        let entry = self.per_count_best.entry(count).or_insert(0.0);
-        if self.smoothed > *entry {
-            *entry = self.smoothed;
-        }
-        if self.smoothed > self.best.throughput {
-            self.best.throughput = self.smoothed;
-            self.best.connections = count;
-        }
-    }
-
-    fn best_measured_count(&self) -> usize {
-        self.per_count_best
+    fn best(&self) -> Option<(usize, f64)> {
+        self.measured
             .iter()
             .filter(|(c, tp)| **c <= self.host_cap && **tp > 0.0)
-            .max_by(|a, b| a.1.partial_cmp(b.1).unwrap_or(std::cmp::Ordering::Equal))
-            .map(|(c, _)| *c)
-            .unwrap_or(self.best.connections.max(1))
-            .clamp(1, self.host_cap)
+            .max_by(|a, b| {
+                a.1.partial_cmp(b.1)
+                    .unwrap_or(std::cmp::Ordering::Equal)
+                    // On a tie prefer fewer connections.
+                    .then(b.0.cmp(a.0))
+            })
+            .map(|(c, tp)| (*c, *tp))
     }
 
-    fn maybe_fallback(&mut self, best_tp: f64) -> bool {
-        if self.ticks_at_current < self.warmup_ticks_for_target() || best_tp <= 0.0 {
+    fn median(samples: &[f64]) -> f64 {
+        if samples.is_empty() {
+            return 0.0;
+        }
+        let mut sorted = samples.to_vec();
+        sorted.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+        let mid = sorted.len() / 2;
+        if sorted.len() % 2 == 0 {
+            (sorted[mid - 1] + sorted[mid]) / 2.0
+        } else {
+            sorted[mid]
+        }
+    }
+
+    /// Changing the connection count only pays off with enough data left.
+    fn probing_viable(&self, input: &TunerInput) -> bool {
+        if input.bytes_remaining < PROBE_MIN_REMAINING {
             return false;
         }
-        if self.smoothed < best_tp * 0.85 {
-            let fallback = self.best_measured_count();
-            if fallback != self.target {
-                self.target = fallback;
-                self.ticks_at_current = 0;
-                self.phase = Phase::Holding;
-                self.hold_ticks = 0;
-                return true;
-            }
-        }
-        false
+        let tp = self.best_throughput().max(input.throughput);
+        !(tp > 0.0 && (input.bytes_remaining as f64 / tp) < 3.0)
+    }
+
+    fn ceiling(&self) -> usize {
+        self.host_cap.min(self.max_connections).max(1)
+    }
+
+    fn switch_to(&mut self, count: usize, phase: Phase) {
+        let count = count.clamp(1, self.ceiling());
+        self.target = count;
+        self.phase = phase;
+        self.samples.clear();
+        self.recent.clear();
+        self.ticks_at_current = 0;
+        self.hold_ticks = 0;
+    }
+
+    fn hold_best(&mut self) {
+        let best = self.best_connections();
+        self.switch_to(best, Phase::Holding);
     }
 
     pub fn tick(&mut self, input: &TunerInput) -> TunerOutput {
-        if self.smoothed <= 0.0 {
-            self.smoothed = input.throughput;
-        } else {
-            self.smoothed = self.alpha * input.throughput + (1.0 - self.alpha) * self.smoothed;
-        }
-
-        if self.target == 1 && input.active_connections <= 1 && input.throughput > 0.0 {
-            self.one_conn_floor = Some(
-                self.one_conn_floor
-                    .map(|v| v.max(input.throughput))
-                    .unwrap_or(input.throughput),
-            );
-        }
-
         self.ticks_at_current += 1;
-        Self::push_sample(&mut self.recent_tp, input.throughput, 7);
-        self.record_post_warmup_sample();
+        // Generic transport errors are retried by the workers; they must not
+        // collapse the connection count.
+        let _ = input.error_events;
 
         if input.throttle_events > 0 {
             self.handle_throttle();
@@ -233,19 +191,11 @@ impl Tuner {
                 target: self.target,
             };
         }
-
-        // Generic transport errors must not collapse the target.
-        let _ = input.error_events;
-
-        let best_tp = self.effective_best_throughput();
-        if self.maybe_fallback(best_tp) {
-            return TunerOutput {
-                target: self.target,
-            };
-        }
+        self.ticks_since_throttle += 1;
+        self.relax_cap();
 
         match self.phase {
-            Phase::Probing => self.tick_probing(input),
+            Phase::Measuring { ascending } => self.tick_measuring(input, ascending),
             Phase::Holding => self.tick_holding(input),
         }
 
@@ -254,232 +204,112 @@ impl Tuner {
         }
     }
 
+    /// A throttle cap is a hint, not a life sentence: after a quiet period it
+    /// grows back toward the configured maximum.
+    fn relax_cap(&mut self) {
+        if self.host_cap < self.max_connections && self.ticks_since_throttle >= CAP_RELAX_TICKS {
+            self.host_cap = (self.host_cap + (self.host_cap / 2).max(1)).min(self.max_connections);
+            self.ticks_since_throttle = 0;
+        }
+    }
+
     fn handle_throttle(&mut self) {
-        let new_target = (self.target / 2).max(1);
         let cap_at = self.target.saturating_sub(1).max(1);
         self.host_cap = self.host_cap.min(cap_at);
-        self.target = new_target.min(self.host_cap);
-        self.was_throttled = true;
-        self.phase = Phase::Holding;
-        self.hold_ticks = 0;
-        self.ticks_at_current = 0;
-        // Wait longer before probing again after a throttle (≈20s at 500ms ticks).
-        self.re_probe_interval = 40;
+        let next = (self.target / 2).max(1).min(self.host_cap);
+        self.ticks_since_throttle = 0;
+        // Measurements taken above the new cap no longer apply.
+        let cap = self.host_cap;
+        self.measured.retain(|c, _| *c <= cap);
+        self.switch_to(next, Phase::Holding);
+        self.reprobe_after = THROTTLE_REPROBE_TICKS;
     }
 
-    fn next_ladder_target(&self) -> Option<usize> {
-        if self.target < 4 {
-            let next = (self.target + 1).min(4);
-            if next > self.target && next <= self.host_cap.min(self.max_connections) {
-                return Some(next);
-            }
-        }
-        for &step in PROBE_LADDER {
-            if step > self.target && step <= self.host_cap && step <= self.max_connections {
-                return Some(step);
-            }
-        }
-        None
-    }
-
-    fn tick_probing(&mut self, input: &TunerInput) {
-        if self.ticks_at_current < self.warmup_ticks_for_target() {
+    fn tick_measuring(&mut self, input: &TunerInput, ascending: bool) {
+        if self.ticks_at_current <= WARMUP_TICKS {
             return;
         }
+        if input.throughput > 0.0 {
+            self.samples.push(input.throughput);
+        }
+        if self.samples.len() < MEASURE_TICKS {
+            // Not enough data left to finish measuring: keep the best so far.
+            if !self.probing_viable(input) && !self.measured.is_empty() {
+                self.hold_best();
+            }
+            return;
+        }
+
+        let level_tp = Self::median(&self.samples);
+        let prev_best = self.best_throughput();
+        self.measured.insert(self.target, level_tp);
+        let improved = prev_best <= 0.0 || level_tp >= prev_best * (1.0 + GAIN);
+        let faster = level_tp > prev_best;
 
         if !self.probing_viable(input) {
-            self.phase = Phase::Holding;
-            self.hold_ticks = 0;
+            self.hold_best();
             return;
         }
 
-        const IMPROVEMENT: f64 = 0.06;
-        const MEDIAN_SAMPLES: usize = 5;
-
-        if self.target > self.target_before_change {
-            let recent: Vec<f64> = self.recent_tp.iter().copied().collect();
-            let baseline: Vec<f64> = self.baseline_tp.iter().copied().collect();
-            let recent_med = Self::median(&recent);
-            let base_med = Self::median(&baseline).max(self.throughput_before_change);
-            let improved = base_med > 0.0 && recent_med >= base_med * (1.0 + IMPROVEMENT);
-            if !improved {
-                let fallback = if self.one_conn_floor.is_some() {
-                    1
+        if ascending {
+            if improved {
+                let next = self.target.saturating_mul(2).min(self.ceiling());
+                if next > self.target {
+                    self.switch_to(next, Phase::Measuring { ascending: true });
                 } else {
-                    self.best_measured_count()
-                };
-                self.target = fallback;
-                self.phase = Phase::Holding;
-                self.hold_ticks = 0;
-                self.ticks_at_current = 0;
-                self.re_probe_interval = 40;
+                    self.hold_best();
+                }
                 return;
             }
-        }
-
-        if self.target == 1 {
-            if self.smoothed >= 50_000_000.0 {
-                self.phase = Phase::Holding;
-                self.hold_ticks = 0;
-                self.best.throughput = self.smoothed;
-                self.best.connections = 1;
-                return;
+            // Going up did not help. If the start count is still the best, check
+            // whether fewer connections are faster (e.g. a host that slows down
+            // parallel streams), otherwise settle on the best count.
+            let best = self.best_connections();
+            if best == self.start && best > 1 && !self.measured.contains_key(&(best / 2).max(1)) {
+                self.switch_to((best / 2).max(1), Phase::Measuring { ascending: false });
+            } else {
+                self.hold_best();
             }
-            if self.smoothed >= 2_000_000.0
-                && self.ticks_at_current < self.warmup_ticks_for_target() + MEDIAN_SAMPLES
-            {
-                return;
-            }
-            if let Some(floor) = self.one_conn_floor {
-                if self.smoothed >= 2_000_000.0 && self.smoothed < floor * 0.92 {
-                    return;
-                }
-                // Single stream already saturates a fast link — extra connections only hurt.
-                if self.smoothed >= 50_000_000.0 && self.smoothed >= floor * 0.97 {
-                    self.phase = Phase::Holding;
-                    self.hold_ticks = 0;
-                    self.best.throughput = self.smoothed;
-                    self.best.connections = 1;
-                    return;
-                }
-            }
-            if self.smoothed > 0.0
-                && self.smoothed < 2_000_000.0
-                && self.ticks_at_current >= self.warmup_ticks_for_target() + 2
-                && self.probing_viable(input)
-            {
-                let jump = self
-                    .max_connections
-                    .min(self.host_cap)
-                    .min(8)
-                    .max(2);
-                self.baseline_tp = self.recent_tp.clone();
-                self.throughput_before_change =
-                    Self::median(&self.baseline_tp.iter().copied().collect::<Vec<_>>());
-                self.target = jump;
-                self.target_before_change = jump;
-                self.ticks_at_current = 0;
-                return;
-            }
-        }
-
-        if self.target == 2 {
-            if let Some(floor) = self.one_conn_floor {
-                if self.ticks_at_current >= 3 {
-                    let recent_med =
-                        Self::median(&self.recent_tp.iter().copied().collect::<Vec<_>>());
-                    if recent_med < floor * 0.97 {
-                        self.target = 1;
-                        self.phase = Phase::Holding;
-                        self.hold_ticks = 0;
-                        self.ticks_at_current = 0;
-                        self.re_probe_interval = 40;
-                        return;
-                    }
-                }
-            }
-        }
-
-        if let Some(floor) = self.one_conn_floor {
-            let recent_med = Self::median(&self.recent_tp.iter().copied().collect::<Vec<_>>());
-            let scale_req = if floor < 10_000_000.0 { 0.85 } else { 0.95 };
-            if self.target >= 2
-                && self.probing_viable(input)
-                && recent_med >= floor * (self.target as f64) * scale_req
-            {
-                let doubled = if floor < 10_000_000.0 && self.target == 2 {
-                    self.max_connections.min(self.host_cap).min(8)
-                } else {
-                    self.target.saturating_mul(2)
-                };
-                let jump = doubled
-                    .min(self.host_cap)
-                    .min(self.max_connections)
-                    .max(self.target + 1);
-                if jump > self.target {
-                    self.baseline_tp = self.recent_tp.clone();
-                    self.throughput_before_change = recent_med;
-                    self.target = jump;
-                    // Saturation scale-up already validated aggregate throughput.
-                    self.target_before_change = jump;
-                    self.ticks_at_current = 0;
-                    return;
-                }
-            }
-        }
-
-        if let Some(next) = self.next_ladder_target() {
-            self.baseline_tp = self.recent_tp.clone();
-            self.throughput_before_change =
-                Self::median(&self.baseline_tp.iter().copied().collect::<Vec<_>>())
-                    .max(self.smoothed);
-            self.target_before_change = self.target;
-            self.target = next;
-            self.ticks_at_current = 0;
-        } else if self.target < self.host_cap && self.target < self.max_connections {
-            self.baseline_tp = self.recent_tp.clone();
-            self.throughput_before_change =
-                Self::median(&self.baseline_tp.iter().copied().collect::<Vec<_>>())
-                    .max(self.smoothed);
-            self.target_before_change = self.target;
-            self.target = (self.target + 2)
-                .min(self.host_cap)
-                .min(self.max_connections);
-            self.ticks_at_current = 0;
         } else {
-            self.phase = Phase::Holding;
-            self.hold_ticks = 0;
+            let next = (self.target / 2).max(1);
+            let clearly_faster = faster && level_tp >= prev_best * (1.0 + GAIN / 2.0);
+            if clearly_faster && next < self.target && !self.measured.contains_key(&next) {
+                self.switch_to(next, Phase::Measuring { ascending: false });
+            } else {
+                self.hold_best();
+            }
         }
     }
 
     fn tick_holding(&mut self, input: &TunerInput) {
         self.hold_ticks += 1;
-
-        let best_tp = self.effective_best_throughput();
-        if self.maybe_fallback(best_tp) {
-            return;
+        if self.ticks_at_current > WARMUP_TICKS && input.throughput > 0.0 {
+            self.recent.push_back(input.throughput);
+            while self.recent.len() > 8 {
+                self.recent.pop_front();
+            }
+            // Keep the held level's figure current so later comparisons are fair
+            // when the network changes under us.
+            if self.recent.len() >= MEASURE_TICKS {
+                let tp = Self::median(&self.recent.iter().copied().collect::<Vec<_>>());
+                self.measured.insert(self.target, tp);
+            }
         }
 
-        if self.hold_ticks >= self.re_probe_interval {
-            if !self.probing_viable(input) {
-                self.hold_ticks = 0;
-                return;
-            }
-            let tried_multi = self.per_count_best.keys().any(|c| *c > 1);
-            if tried_multi
-                && self.best.connections == 1
-                && self
-                    .one_conn_floor
-                    .map(|f| self.best.throughput >= f * 0.97)
-                    .unwrap_or(false)
-            {
-                self.hold_ticks = 0;
-                return;
-            }
-            self.baseline_tp = self.recent_tp.clone();
-            self.throughput_before_change =
-                Self::median(&self.baseline_tp.iter().copied().collect::<Vec<_>>())
-                    .max(self.smoothed);
-            self.target_before_change = self.target;
-            self.ticks_at_current = 0;
+        if self.hold_ticks < self.reprobe_after || !self.probing_viable(input) {
+            return;
+        }
+        self.reprobe_after = REPROBE_TICKS;
+        let next = self.target.saturating_mul(2).min(self.ceiling());
+        let tried_and_worse = self
+            .measured
+            .get(&next)
+            .map(|tp| *tp < self.best_throughput() * (1.0 + GAIN))
+            .unwrap_or(false);
+        if next > self.target && !tried_and_worse {
+            self.switch_to(next, Phase::Measuring { ascending: true });
+        } else {
             self.hold_ticks = 0;
-            self.re_probe_interval = 20;
-
-            if self.was_throttled {
-                self.was_throttled = false;
-                if self.target < self.host_cap && self.target < self.max_connections {
-                    self.target += 1;
-                    self.phase = Phase::Holding;
-                }
-            } else if let Some(next) = self.next_ladder_target() {
-                self.phase = Phase::Probing;
-                self.target = next;
-            } else if self.target < self.host_cap && self.target < self.max_connections {
-                self.phase = Phase::Probing;
-                self.target = (self.target + 2)
-                    .min(self.host_cap)
-                    .min(self.max_connections);
-            }
         }
     }
 }
@@ -547,150 +377,178 @@ fn parse_http_date_delay(value: &str) -> Option<Duration> {
 mod tests {
     use super::*;
 
-    fn input(throughput: f64, active: usize, throttle: u64, errors: u64) -> TunerInput {
+    fn input(throughput: f64, throttle: u64) -> TunerInput {
         TunerInput {
             throughput,
-            active_connections: active,
+            active_connections: 1,
             throttle_events: throttle,
-            error_events: errors,
-            bytes_remaining: 100 << 20,
+            error_events: 0,
+            bytes_remaining: 1 << 30,
         }
     }
 
-    fn warm_tick(tuner: &mut Tuner, tp: f64, active: usize) {
-        for _ in 0..4 {
-            tuner.tick(&input(tp, active, 0, 0));
+    /// Drive the tuner against a model of throughput per connection count.
+    fn run(tuner: &mut Tuner, ticks: usize, model: impl Fn(usize) -> f64) {
+        for _ in 0..ticks {
+            let tp = model(tuner.target());
+            tuner.tick(&input(tp, 0));
         }
-        tuner.tick(&input(tp, active, 0, 0));
+    }
+
+    const MB: f64 = 1_000_000.0;
+
+    #[test]
+    fn starts_at_requested_count() {
+        let t = Tuner::new(DEFAULT_START_CONNECTIONS, 16, None);
+        assert_eq!(t.target(), 4);
+        let t = Tuner::new(4, 2, None);
+        assert_eq!(t.target(), 2);
     }
 
     #[test]
-    fn ramps_up_while_throughput_rises() {
-        let mut tuner = Tuner::new(4, 16, None);
-        assert_eq!(tuner.target(), 4);
-
-        for tp in [1_000_000.0, 1_100_000.0, 1_200_000.0, 1_300_000.0] {
-            tuner.tick(&input(tp, 4, 0, 0));
-        }
-        let out = tuner.tick(&input(1_400_000.0, 4, 0, 0));
-        assert!(out.target >= 4, "expected ramp from 4, got {}", out.target);
+    fn ramps_up_while_more_connections_help() {
+        // Per-connection limited host: 2.5 MB/s each, link tops out at 40 MB/s.
+        let mut t = Tuner::new(4, 16, None);
+        run(&mut t, 60, |c| (c as f64 * 2.5 * MB).min(40.0 * MB));
+        assert_eq!(t.target(), 16);
     }
 
     #[test]
-    fn stops_and_reverts_when_throughput_plateaus() {
-        let mut tuner = Tuner::new(4, 16, None);
-
-        for _ in 0..6 {
-            tuner.tick(&input(5_000_000.0, 4, 0, 0));
-        }
-        tuner.tick(&input(5_500_000.0, 4, 0, 0));
-
-        let after_increase = tuner.target();
-        assert!(after_increase >= 4);
-
-        for _ in 0..8 {
-            tuner.tick(&input(5_050_000.0, after_increase, 0, 0));
-        }
-
-        assert!(tuner.target() <= after_increase.max(4));
+    fn stops_where_the_link_saturates() {
+        // 8 connections already fill the link; 16 adds nothing.
+        let mut t = Tuner::new(4, 16, None);
+        run(&mut t, 60, |c| (c as f64 * 3.0 * MB).min(24.0 * MB));
+        assert_eq!(t.target(), 8);
     }
 
     #[test]
-    fn no_premature_fallback_during_warmup_after_ramp() {
-        let mut tuner = Tuner::new(8, 16, None);
-        tuner.best.throughput = 8_000_000.0;
-        tuner.best.connections = 8;
-        tuner.per_count_best.insert(8, 8_000_000.0);
-        tuner.smoothed = 8_000_000.0;
-        tuner.phase = Phase::Holding;
-        tuner.ticks_at_current = 1;
+    fn walks_down_when_one_connection_is_fastest() {
+        // A host that punishes parallel streams: 1 conn is fastest.
+        let model = |c: usize| match c {
+            1 => 17.5 * MB,
+            2 => 12.0 * MB,
+            4 => 7.0 * MB,
+            _ => 6.0 * MB,
+        };
+        let mut t = Tuner::new(4, 16, None);
+        run(&mut t, 80, model);
+        assert_eq!(t.target(), 1);
+        assert!(t.best_throughput() >= 17.0 * MB);
+    }
 
-        for tp in [400_000.0, 350_000.0, 300_000.0] {
-            let out = tuner.tick(&input(tp, 8, 0, 0));
-            assert_eq!(
-                out.target, 8,
-                "smoothed<best fallback must not run during post-change warm-up"
-            );
+    #[test]
+    fn never_settles_slower_than_one_connection() {
+        // Whatever the shape, the held count must be at least as fast as 1 conn
+        // whenever 1 conn was measured.
+        let shapes: Vec<Box<dyn Fn(usize) -> f64>> = vec![
+            Box::new(|c| if c == 1 { 10.0 * MB } else { 9.0 * MB }),
+            Box::new(|c| if c <= 2 { 10.0 * MB } else { 4.0 * MB }),
+            Box::new(|c| 5.0 * MB / c as f64),
+            Box::new(|c| (c as f64 * MB).min(6.0 * MB)),
+        ];
+        for model in shapes {
+            let mut t = Tuner::new(4, 16, None);
+            run(&mut t, 120, &model);
+            let held = model(t.target());
+            if let Some(one) = t.measured.get(&1) {
+                assert!(held >= *one, "held {held} < one-conn {one} at {}", t.target());
+            }
+            for (_, tp) in t.measured.iter() {
+                assert!(held >= *tp * 0.999, "held {held} but measured {tp}");
+            }
         }
     }
 
     #[test]
-    fn fallback_picks_best_measured_count() {
-        let mut tuner = Tuner::new(8, 16, None);
-        tuner.per_count_best.insert(4, 9_000_000.0);
-        tuner.per_count_best.insert(8, 4_000_000.0);
-        tuner.best.throughput = 9_000_000.0;
-        tuner.best.connections = 4;
-        tuner.smoothed = 500_000.0;
-        tuner.ticks_at_current = tuner.warmup_ticks;
-
-        let out = tuner.tick(&input(500_000.0, 8, 0, 0));
-        assert_eq!(out.target, 4, "expected fallback to faster 4-conn sample");
-    }
-
-    #[test]
-    fn one_conn_floor_only_when_target_is_one() {
-        let mut tuner = Tuner::new(8, 16, None);
-        for _ in 0..10 {
-            tuner.tick(&input(500_000.0, 1, 0, 0));
+    fn noisy_samples_do_not_flap() {
+        // Alternating noise around a flat 10 MB/s: the tuner must settle.
+        let mut t = Tuner::new(4, 16, None);
+        let mut i = 0usize;
+        let mut changes = 0;
+        let mut last = t.target();
+        for _ in 0..200 {
+            i += 1;
+            let noise = if i % 2 == 0 { 1.04 } else { 0.96 };
+            t.tick(&input(10.0 * MB * noise, 0));
+            if t.target() != last {
+                changes += 1;
+                last = t.target();
+            }
         }
-        assert!(tuner.one_conn_floor.is_none());
-
-        let mut tuner = Tuner::new(1, 16, None);
-        warm_tick(&mut tuner, 900_000.0, 1);
-        assert!(tuner.one_conn_floor.is_some());
+        assert!(changes <= 12, "too many target changes: {changes}");
     }
 
     #[test]
     fn halves_on_throttle_and_respects_cap() {
-        let mut tuner = Tuner::new(8, 16, None);
-        assert_eq!(tuner.target(), 8);
-
-        let out = tuner.tick(&input(5_000_000.0, 8, 1, 0));
-        assert_eq!(out.target, 4);
-        assert!(tuner.host_cap() <= 7);
-
-        let out = tuner.tick(&input(3_000_000.0, 4, 1, 0));
-        assert_eq!(out.target, 2);
-        assert!(tuner.host_cap() <= 3);
-
+        let mut t = Tuner::new(8, 16, None);
+        t.tick(&input(5.0 * MB, 1));
+        assert_eq!(t.target(), 4);
+        assert!(t.host_cap() <= 7);
+        t.tick(&input(3.0 * MB, 1));
+        assert_eq!(t.target(), 2);
+        assert!(t.host_cap() <= 3);
         for _ in 0..50 {
-            tuner.tick(&input(10_000_000.0, 2, 0, 0));
+            t.tick(&input(10.0 * MB, 0));
+            assert!(t.target() <= t.host_cap());
         }
-        assert!(tuner.target() <= tuner.host_cap());
     }
 
     #[test]
-    fn throttle_cap_can_be_one() {
-        let mut tuner = Tuner::new(2, 16, None);
-        let out = tuner.tick(&input(1_000_000.0, 2, 1, 0));
-        assert_eq!(out.target, 1);
-        assert_eq!(tuner.host_cap(), 1);
-    }
-
-    #[test]
-    fn never_goes_below_one() {
-        let mut tuner = Tuner::new(1, 16, None);
+    fn throttle_cap_can_be_one_but_target_never_zero() {
+        let mut t = Tuner::new(2, 16, None);
+        t.tick(&input(1.0 * MB, 1));
+        assert_eq!(t.target(), 1);
+        assert_eq!(t.host_cap(), 1);
         for _ in 0..10 {
-            let out = tuner.tick(&input(100.0, 1, 1, 0));
-            assert!(out.target >= 1, "target went below 1: {}", out.target);
+            t.tick(&input(100.0, 1));
+            assert!(t.target() >= 1);
         }
     }
 
     #[test]
-    fn never_goes_above_cap() {
-        let mut tuner = Tuner::new(4, 16, Some(3));
-        for i in 0..30 {
-            tuner.tick(&input(1_000_000.0 * (i as f64 + 1.0), tuner.target(), 0, 0));
-        }
-        assert!(tuner.target() <= 3);
+    fn remembered_cap_is_soft_and_relaxes() {
+        // A stale cap of 1 from an old throttle must not pin the download at 1
+        // connection forever when the host no longer throttles.
+        let mut t = Tuner::new(4, 16, Some(1));
+        assert_eq!(t.target(), 1);
+        run(&mut t, 400, |c| c as f64 * 2.0 * MB);
+        assert!(t.host_cap() > 1, "cap never relaxed");
+        assert!(t.target() >= 4, "still at {} connections", t.target());
+    }
+
+    #[test]
+    fn never_goes_above_cap_or_max() {
+        let mut t = Tuner::new(4, 6, None);
+        run(&mut t, 100, |c| c as f64 * MB);
+        assert!(t.target() <= 6);
     }
 
     #[test]
     fn errors_do_not_drop_target() {
-        let mut tuner = Tuner::new(8, 16, None);
-        let out = tuner.tick(&input(5_000_000.0, 8, 0, 5));
+        let mut t = Tuner::new(8, 16, None);
+        let out = t.tick(&TunerInput {
+            throughput: 5.0 * MB,
+            active_connections: 8,
+            throttle_events: 0,
+            error_events: 5,
+            bytes_remaining: 1 << 30,
+        });
         assert_eq!(out.target, 8);
+    }
+
+    #[test]
+    fn small_remainder_does_not_probe() {
+        let mut t = Tuner::new(4, 16, None);
+        for _ in 0..20 {
+            t.tick(&TunerInput {
+                throughput: 5.0 * MB,
+                active_connections: 4,
+                throttle_events: 0,
+                error_events: 0,
+                bytes_remaining: 1 << 20,
+            });
+        }
+        assert_eq!(t.target(), 4);
     }
 
     #[test]

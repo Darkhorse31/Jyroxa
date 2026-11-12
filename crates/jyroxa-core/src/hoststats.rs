@@ -12,8 +12,12 @@ use serde::{Deserialize, Serialize};
 
 use crate::error::Result;
 
-/// Per-host throttle caps expire after this many seconds.
-pub const HOST_CAP_DECAY_SECS: u64 = 24 * 60 * 60;
+/// Per-host throttle caps expire this long after the last throttle event.
+/// Throttling is usually short-lived (rate windows, busy mirrors), and a stale
+/// cap would pin every later download from the host to too few connections.
+pub const HOST_CAP_DECAY_SECS: u64 = 60 * 60;
+/// A remembered best connection count is only trusted for this long.
+pub const BEST_DECAY_SECS: u64 = 7 * 24 * 60 * 60;
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct HostRecord {
@@ -27,6 +31,9 @@ pub struct HostRecord {
     /// Unix timestamp of the last throttle event (0 = never).
     #[serde(default)]
     pub last_throttle: u64,
+    /// Unix timestamp of the last `best_*` update (0 = unknown / legacy).
+    #[serde(default)]
+    pub best_updated: u64,
 }
 
 #[derive(Debug, Default, Serialize, Deserialize)]
@@ -62,16 +69,21 @@ impl HostStats {
         }
     }
 
-    /// The remembered best connection count for a host, if any.
+    /// The remembered best connection count for a host, if it is recent.
     pub fn best_connections(&self, host: &str) -> Option<usize> {
         let s = self.store.lock().unwrap();
         s.hosts.get(host).and_then(|r| {
-            if r.best_connections > 0 {
+            if r.best_connections > 0 && Self::best_still_valid(r) {
                 Some(r.best_connections)
             } else {
                 None
             }
         })
+    }
+
+    fn best_still_valid(rec: &HostRecord) -> bool {
+        rec.best_updated != 0
+            && Self::now_secs().saturating_sub(rec.best_updated) <= BEST_DECAY_SECS
     }
 
     fn now_secs() -> u64 {
@@ -85,8 +97,10 @@ impl HostStats {
         if rec.host_cap == 0 {
             return false;
         }
+        // Legacy records carry a cap without a timestamp; they can't be dated,
+        // so they are treated as expired instead of valid forever.
         if rec.last_throttle == 0 {
-            return true;
+            return false;
         }
         Self::now_secs().saturating_sub(rec.last_throttle) <= HOST_CAP_DECAY_SECS
     }
@@ -111,7 +125,7 @@ impl HostStats {
         {
             let mut s = self.store.lock().unwrap();
             let rec = s.hosts.entry(host.to_string()).or_default();
-            if rec.host_cap == 0 || cap < rec.host_cap {
+            if rec.host_cap == 0 || cap < rec.host_cap || !Self::cap_still_valid(rec) {
                 rec.host_cap = cap;
             }
             rec.last_throttle = Self::now_secs();
@@ -125,9 +139,12 @@ impl HostStats {
         {
             let mut s = self.store.lock().unwrap();
             let rec = s.hosts.entry(host.to_string()).or_default();
-            if throughput > rec.best_throughput {
+            // Replace the record when it is faster, or when the old one is stale
+            // (networks change; an old best is not evidence any more).
+            if throughput > rec.best_throughput || !Self::best_still_valid(rec) {
                 rec.best_throughput = throughput;
                 rec.best_connections = connections;
+                rec.best_updated = Self::now_secs();
             }
         }
         // Best-effort persistence; tuning data is advisory.
@@ -186,7 +203,7 @@ mod tests {
     }
 
     #[test]
-    fn throttle_cap_expires_after_24h() {
+    fn throttle_cap_expires_after_decay() {
         let now = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .unwrap()
@@ -200,6 +217,55 @@ mod tests {
             rec.last_throttle = now.saturating_sub(HOST_CAP_DECAY_SECS + 1);
         }
         assert_eq!(hs.host_cap("host.test"), None);
+    }
+
+    #[test]
+    fn legacy_cap_without_timestamp_is_ignored() {
+        // Exactly what an older build left behind for proof.ovh.net.
+        let dir = tempfile::tempdir().unwrap();
+        let p = dir.path().join("hoststats.json");
+        std::fs::write(
+            &p,
+            r#"{"hosts":{"proof.ovh.net":{"best_connections":1,"best_throughput":1.0,"host_cap":1}}}"#,
+        )
+        .unwrap();
+        let hs = HostStats::with_file(&p);
+        assert_eq!(hs.host_cap("proof.ovh.net"), None);
+        // Undated best is not trusted either.
+        assert_eq!(hs.best_connections("proof.ovh.net"), None);
+    }
+
+    #[test]
+    fn throttle_cap_expires_after_an_hour() {
+        let hs = HostStats::in_memory();
+        hs.record_throttle("h.test", 2);
+        assert_eq!(hs.host_cap("h.test"), Some(2));
+        {
+            let mut s = hs.store.lock().unwrap();
+            let rec = s.hosts.get_mut("h.test").unwrap();
+            rec.last_throttle = HostStats::now_secs() - 30 * 60;
+        }
+        assert_eq!(hs.host_cap("h.test"), Some(2), "still valid at 30 min");
+        {
+            let mut s = hs.store.lock().unwrap();
+            let rec = s.hosts.get_mut("h.test").unwrap();
+            rec.last_throttle = HostStats::now_secs() - HOST_CAP_DECAY_SECS - 1;
+        }
+        assert_eq!(hs.host_cap("h.test"), None);
+    }
+
+    #[test]
+    fn stale_best_is_replaced() {
+        let hs = HostStats::in_memory();
+        hs.observe("h.test", 16, 50.0e6);
+        {
+            let mut s = hs.store.lock().unwrap();
+            let rec = s.hosts.get_mut("h.test").unwrap();
+            rec.best_updated = HostStats::now_secs() - BEST_DECAY_SECS - 1;
+        }
+        assert_eq!(hs.best_connections("h.test"), None);
+        hs.observe("h.test", 4, 5.0e6);
+        assert_eq!(hs.best_connections("h.test"), Some(4));
     }
 
     #[test]

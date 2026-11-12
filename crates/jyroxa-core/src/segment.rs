@@ -158,7 +158,9 @@ pub struct SegmentTable {
     next_index: AtomicU64,
     /// Minimum size of each half for a split to be worthwhile.
     min_steal: u64,
-    /// Cap segment splits to avoid handshake storms on lossy links.
+    /// Cap on *unfinished* segments, to avoid handshake storms on lossy links.
+    /// Finished segments don't count, so idle workers can keep stealing work
+    /// until the end of the file.
     steal_cap: usize,
 }
 
@@ -270,7 +272,7 @@ impl SegmentTable {
         }
         let min_tail = self.min_steal.saturating_mul(2).max(PROBE_LEAD);
         let mut segs = self.all.lock().unwrap();
-        if segs.len() >= self.steal_cap {
+        if live_segments(&segs) >= self.steal_cap {
             return false;
         }
 
@@ -320,7 +322,7 @@ impl SegmentTable {
     /// Split the tail of a specific in-progress segment after a stall.
     pub fn split_tail(&self, victim: &Arc<Segment>) -> Option<Arc<Segment>> {
         let mut segs = self.all.lock().unwrap();
-        if segs.len() >= self.steal_cap {
+        if live_segments(&segs) >= self.steal_cap {
             return None;
         }
         split_segment_tail(
@@ -333,7 +335,7 @@ impl SegmentTable {
 
     fn try_steal(&self, min_tail: u64) -> Option<Arc<Segment>> {
         let mut segs = self.all.lock().unwrap();
-        if segs.len() >= self.steal_cap {
+        if live_segments(&segs) >= self.steal_cap {
             return None;
         }
 
@@ -359,6 +361,10 @@ impl SegmentTable {
         let victim = segs[victim_idx].clone();
         split_segment_tail(&mut segs, &victim, min_tail, &self.next_index)
     }
+}
+
+fn live_segments(segs: &[Arc<Segment>]) -> usize {
+    segs.iter().filter(|s| s.remaining() > 0).count()
 }
 
 fn split_segment_tail(
@@ -434,6 +440,32 @@ mod tests {
         assert_eq!(stolen.end(), 999);
         assert_eq!(first.end(), 499);
         assert_eq!(table.len(), 2);
+    }
+
+    #[test]
+    fn finished_segments_do_not_block_stealing() {
+        // Cap of 8 live segments; finish segments as we go and keep stealing.
+        let table = SegmentTable::from_ranges(&[(0, 1u64 << 40)], 10, 8);
+        let mut seg = table.next_work(true).unwrap();
+        for _ in 0..20 {
+            let stolen = table.next_work(true).expect("must still be able to steal");
+            // The victim finishes its (now shorter) range.
+            seg.current.store(seg.end() + 1, Ordering::Release);
+            seg.mark_done();
+            seg = stolen;
+        }
+        assert!(table.len() > 8, "total segments may exceed the live cap");
+    }
+
+    #[test]
+    fn live_cap_still_limits_concurrency() {
+        let table = SegmentTable::from_ranges(&[(0, 1_000_000)], 10, 8);
+        let mut held = vec![table.next_work(true).unwrap()];
+        while let Some(s) = table.next_work(true) {
+            held.push(s);
+            assert!(held.len() <= 8);
+        }
+        assert_eq!(held.len(), 8);
     }
 
     #[test]

@@ -747,11 +747,17 @@ impl Downloader {
         // Starting connection count: remembered best for the host, clamped by cap.
         let host_cap = self.host_stats.host_cap(&host);
         let initial_conn = if req.autotune {
-            // Always begin at a single connection; the tuner adds more only when they help.
-            1
+            // Start from the host's remembered best (if recent) or a sensible
+            // default; the tuner then measures up (and down) from there.
+            self.host_stats
+                .best_connections(&host)
+                .unwrap_or(crate::tuner::DEFAULT_START_CONNECTIONS)
+                .clamp(1, host_cap.unwrap_or(max_conn).clamp(1, max_conn))
         } else {
             max_conn
         };
+        // Allow enough live segments for the most connections this download may use.
+        let steal_cap = max_conn.saturating_mul(4).max(8);
 
         // Load resume state if validators still match.
         let mut resumed = false;
@@ -768,7 +774,7 @@ impl Downloader {
                 SegmentTable::from_state(
                     &st.segments,
                     self.config.min_segment_size,
-                    initial_conn.saturating_mul(4).max(8),
+                    steal_cap,
                 )
             }
             other => {
@@ -780,7 +786,7 @@ impl Downloader {
                 SegmentTable::from_ranges(
                     &ranges,
                     self.config.min_segment_size,
-                    initial_conn.saturating_mul(4).max(8),
+                    steal_cap,
                 )
             }
         };
