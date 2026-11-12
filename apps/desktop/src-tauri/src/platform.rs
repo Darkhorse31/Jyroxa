@@ -170,7 +170,7 @@ mod win {
     }
 
     pub async fn run_single_instance_server(app: tauri::AppHandle) {
-        use tauri::{Emitter, Manager};
+        use tauri::Emitter;
         use tokio::io::AsyncReadExt;
         use tokio::net::windows::named_pipe::ServerOptions;
 
@@ -189,11 +189,7 @@ mod win {
                 let n = server.read(&mut buf).await.unwrap_or(0);
                 let msg = String::from_utf8_lossy(&buf[..n]).trim().to_string();
 
-                if let Some(w) = app.get_webview_window("main") {
-                    let _ = w.unminimize();
-                    let _ = w.show();
-                    let _ = w.set_focus();
-                }
+                crate::bring_main_window_to_front(&app);
 
                 if msg.starts_with("http://") || msg.starts_with("https://") {
                     let _ = app.emit("external-url", msg);
