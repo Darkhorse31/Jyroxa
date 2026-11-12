@@ -1,41 +1,40 @@
 export type RemoveChoice = "cancel" | "remove" | "remove-delete";
 
+// Resolver for the prompt that is currently showing. Buttons settle it
+// directly: in the installed WebView2 build the dialog's "close" event was not
+// delivered after close() from these handlers, so waiting on it left every
+// Remove click unanswered.
+let settle: ((choice: RemoveChoice) => void) | null = null;
 let wired = false;
+
+function finish(dlg: HTMLDialogElement, choice: RemoveChoice): void {
+  const done = settle;
+  settle = null;
+  if (dlg.open) dlg.close();
+  done?.(choice);
+}
 
 function wireRemoveDialog(dlg: HTMLDialogElement): void {
   if (wired) return;
   wired = true;
 
-  const btnCancel = document.getElementById("remove-cancel");
-  const btnRemove = document.getElementById("remove-list-only");
-  const btnRemoveDelete = document.getElementById("remove-and-delete");
-  const closeBtn = document.getElementById("remove-close-btn");
-
-  const close = () => {
-    if (dlg.open) dlg.close();
-  };
-
-  btnCancel?.addEventListener("click", () => close());
-  closeBtn?.addEventListener("click", () => close());
+  const on = (id: string, choice: RemoveChoice) =>
+    document.getElementById(id)?.addEventListener("click", (e) => {
+      e.preventDefault();
+      finish(dlg, choice);
+    });
+  on("remove-cancel", "cancel");
+  on("remove-close-btn", "cancel");
+  on("remove-list-only", "remove");
+  on("remove-and-delete", "remove-delete");
 
   dlg.addEventListener("cancel", (e) => {
     e.preventDefault();
-    close();
+    finish(dlg, "cancel");
   });
-
+  // Closed some other way (Escape handler in main.ts): treat as Cancel.
   dlg.addEventListener("close", () => {
-    const primary = btnRemove as HTMLButtonElement | null;
-    primary?.blur();
-  });
-
-  // Store choice on buttons via data attribute before close
-  btnRemove?.addEventListener("click", () => {
-    dlg.dataset.choice = "remove";
-    close();
-  });
-  btnRemoveDelete?.addEventListener("click", () => {
-    dlg.dataset.choice = "remove-delete";
-    close();
+    if (settle) finish(dlg, "cancel");
   });
 }
 
@@ -50,6 +49,8 @@ export function promptRemoveDownloads(count: number): Promise<RemoveChoice> {
   }
 
   wireRemoveDialog(dlg);
+  // A prompt still pending (should not happen) is answered as Cancel.
+  if (settle) finish(dlg, "cancel");
 
   const title = document.getElementById("remove-dialog-title");
   const body = document.getElementById("remove-dialog-body");
@@ -64,23 +65,9 @@ export function promptRemoveDownloads(count: number): Promise<RemoveChoice> {
         : "Remove the selected items from the list, or also delete their files from disk.";
   }
 
-  delete dlg.dataset.choice;
-
   return new Promise((resolve) => {
-    const onClose = () => {
-      dlg.removeEventListener("close", onClose);
-      const choice = dlg.dataset.choice as RemoveChoice | undefined;
-      if (choice === "remove" || choice === "remove-delete") {
-        resolve(choice);
-      } else {
-        resolve("cancel");
-      }
-    };
-    dlg.addEventListener("close", onClose);
-    dlg.showModal();
-    const focusTarget = document.getElementById(
-      "remove-list-only"
-    ) as HTMLButtonElement | null;
-    focusTarget?.focus();
+    settle = resolve;
+    if (!dlg.open) dlg.showModal();
+    (document.getElementById("remove-list-only") as HTMLButtonElement | null)?.focus();
   });
 }
