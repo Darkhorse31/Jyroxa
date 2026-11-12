@@ -26,6 +26,24 @@ interface LinkItemState {
   isDirty: boolean;
 }
 
+/** A probed size, or null when the server did not report one. */
+function linkSize(link: LinkInfo): number | null {
+  return typeof link.size === "number" && link.size > 0 ? link.size : null;
+}
+
+function fmtLinkSize(link: LinkInfo): string {
+  const n = linkSize(link);
+  return n == null ? "Unknown size" : fmtBytes(n);
+}
+
+/** Sum of the known sizes; "+" marks a total that leaves out unknown sizes. */
+function fmtTotalSize(links: LinkInfo[]): string {
+  const known = links.map(linkSize).filter((n): n is number => n != null);
+  if (known.length === 0) return links.length ? "Unknown size" : fmtBytes(0);
+  const total = fmtBytes(known.reduce((a, b) => a + b, 0));
+  return known.length < links.length ? `${total}+` : total;
+}
+
 export class LinkGrabberView {
   private container: HTMLElement;
   private settings: AppSettings | null = null;
@@ -432,36 +450,30 @@ export class LinkGrabberView {
     let html = "";
     for (const [pkgName, items] of grouped.entries()) {
       const allSelected = items.every((i) => i.selected);
-      const totalPkgSize = items.reduce((sum, i) => sum + (i.link.size ?? 0), 0);
 
       const rowsHtml = items
         .map((item) => {
           const cat = item.category;
           const host = extractHost(item.link.url);
-          const sz = item.link.size != null ? fmtBytes(item.link.size) : "—";
           const resumablePill = item.link.resumable
             ? `<span class="pill-mini yes" title="Resume supported">${icons.check(11)} Resumable</span>`
             : `<span class="pill-mini no" title="Resume unsupported">Non-resumable</span>`;
 
           return `
-            <tr class="grab-row ${item.selected ? "selected" : ""}" data-url="${this.escapeHtml(item.link.url)}">
-              <td class="col-check">
-                <input type="checkbox" class="form-checkbox item-checkbox" ${item.selected ? "checked" : ""} />
-              </td>
-              <td class="col-icon">
-                ${getCategoryIcon(cat, 18)}
-              </td>
-              <td class="col-filename">
+            <div class="grab-row ${item.selected ? "selected" : ""}" data-url="${this.escapeHtml(item.link.url)}">
+              <input type="checkbox" class="form-checkbox item-checkbox" ${item.selected ? "checked" : ""} aria-label="Select ${this.escapeHtml(item.filename)}" />
+              <span class="grab-row-icon">${getCategoryIcon(cat, 18)}</span>
+              <div class="grab-row-main">
                 <input type="text" class="form-input input-filename-edit" value="${this.escapeHtml(item.filename)}" title="${this.escapeHtml(item.filename)}" />
-                <span class="category-pill-mini cat-${cat.toLowerCase()}">${cat}</span>
-              </td>
-              <td class="col-size">${sz}</td>
-              <td class="col-resumable">${resumablePill}</td>
-              <td class="col-host code" title="${this.escapeHtml(item.link.url)}">${this.escapeHtml(host)}</td>
-              <td class="col-actions">
-                <button type="button" class="btn-icon btn-remove-item" title="Remove link">${icons.x(14)}</button>
-              </td>
-            </tr>
+                <div class="grab-row-meta">
+                  <span class="category-pill-mini cat-${cat.toLowerCase()}">${cat}</span>
+                  <span class="grab-size ${linkSize(item.link) == null ? "unknown" : ""}">${fmtLinkSize(item.link)}</span>
+                  ${resumablePill}
+                  <span class="grab-host code" title="${this.escapeHtml(item.link.url)}">${this.escapeHtml(host)}</span>
+                </div>
+              </div>
+              <button type="button" class="btn-icon btn-remove-item" title="Remove link" aria-label="Remove link">${icons.x(14)}</button>
+            </div>
           `;
         })
         .join("");
@@ -469,20 +481,14 @@ export class LinkGrabberView {
       html += `
         <div class="package-card">
           <div class="package-header">
-            <div class="pkg-header-left">
+            <label class="pkg-header-left">
               <input type="checkbox" class="form-checkbox pkg-checkbox" ${allSelected ? "checked" : ""} />
               <span class="pkg-title">${this.escapeHtml(pkgName)}</span>
-              <span class="pkg-count">(${items.length} file${items.length === 1 ? "" : "s"})</span>
-            </div>
-            <div class="pkg-header-right">
-              <span class="pkg-total-size">${fmtBytes(totalPkgSize)}</span>
-            </div>
+              <span class="pkg-count">${items.length} file${items.length === 1 ? "" : "s"}</span>
+            </label>
+            <span class="pkg-total-size">${fmtTotalSize(items.map((i) => i.link))}</span>
           </div>
-          <div class="package-table-wrap">
-            <table class="grab-table">
-              <tbody>${rowsHtml}</tbody>
-            </table>
-          </div>
+          <div class="package-rows">${rowsHtml}</div>
         </div>
       `;
     }
@@ -501,7 +507,7 @@ export class LinkGrabberView {
       });
     });
 
-    listEl.querySelectorAll<HTMLTableRowElement>(".grab-row").forEach((row) => {
+    listEl.querySelectorAll<HTMLElement>(".grab-row").forEach((row) => {
       const url = row.dataset.url;
       const item = this.itemStates.find((i) => i.link.url === url);
       if (!item) return;
@@ -532,10 +538,8 @@ export class LinkGrabberView {
   private updateSelectionSummary() {
     const selected = this.itemStates.filter((i) => i.selected);
     const badge = this.container.querySelector("#grab-selection-badge");
-    const totalSelectedBytes = selected.reduce((sum, i) => sum + (i.link.size ?? 0), 0);
-
     if (badge) {
-      badge.textContent = `${selected.length} of ${this.itemStates.length} selected (${fmtBytes(totalSelectedBytes)})`;
+      badge.textContent = `${selected.length} of ${this.itemStates.length} selected (${fmtTotalSize(selected.map((i) => i.link))})`;
     }
 
     const queueBtn = this.container.querySelector("#grab-queue-selected") as HTMLButtonElement;

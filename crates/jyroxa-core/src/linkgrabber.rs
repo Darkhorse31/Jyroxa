@@ -152,13 +152,18 @@ pub fn extract_links(base: Option<&Url>, text: &str) -> Vec<String> {
         {
             return;
         }
+        // Template placeholders from page scripts (`https://{host}/x`,
+        // `${base}/file.zip`) are not real links.
+        if is_template_placeholder(raw) {
+            return;
+        }
         let resolved = match Url::parse(raw) {
             Ok(u) => Some(u),
             Err(url::ParseError::RelativeUrlWithoutBase) => base.and_then(|b| b.join(raw).ok()),
             Err(_) => None,
         };
         if let Some(u) = resolved {
-            if u.scheme() == "http" || u.scheme() == "https" {
+            if (u.scheme() == "http" || u.scheme() == "https") && has_real_host(&u) {
                 let s = u.to_string();
                 if seen.insert(s.clone()) {
                     out.push(s);
@@ -175,11 +180,96 @@ pub fn extract_links(base: Option<&Url>, text: &str) -> Vec<String> {
             push(m.as_str(), &mut out, &mut seen);
         }
     }
+
     for m in bare_re().find_iter(text) {
         push(m.as_str(), &mut out, &mut seen);
     }
 
     out
+}
+
+fn tag_attr_re() -> &'static Regex {
+    static RE: OnceLock<Regex> = OnceLock::new();
+    RE.get_or_init(|| {
+        Regex::new(
+            r#"(?is)<([a-z][a-z0-9-]*)\b[^>]*?\s(?:href|src|data-src|data-href)\s*=\s*["']([^"'<>]+)["']"#,
+        )
+        .unwrap()
+    })
+}
+
+fn og_media_re() -> &'static Regex {
+    static RE: OnceLock<Regex> = OnceLock::new();
+    RE.get_or_init(|| {
+        Regex::new(
+            r#"(?i)<meta[^>]*?(?:property|name)\s*=\s*["']og:(?:video|audio)(?::url|:secure_url)?["'][^>]*?content\s*=\s*["']([^"']+)["']|<meta[^>]*?content\s*=\s*["']([^"']+)["'][^>]*?(?:property|name)\s*=\s*["']og:(?:video|audio)(?::url|:secure_url)?["']"#,
+        )
+        .unwrap()
+    })
+}
+
+/// Tags whose link is something the page offers the visitor (a download, a
+/// video/audio source), as opposed to the page's own furniture (`<img>`,
+/// `<link rel=stylesheet|icon>`, `<script>`, `<iframe>`).
+const OFFERED_TAGS: &[&str] = &["a", "area", "source", "video", "audio", "embed", "track", "object"];
+
+/// Links a crawled HTML page *offers*: anchors and media sources, plus
+/// `og:video`/`og:audio`. Page decoration (images, icons, styles, scripts and
+/// `og:image`) is left out. Also returns `<include-fragment>` URLs, which pages
+/// such as GitHub releases use to load their file lists.
+pub fn extract_page_links(base: Option<&Url>, html: &str) -> (Vec<String>, Vec<String>) {
+    let mut offered = String::new();
+    let mut fragments = String::new();
+    for cap in tag_attr_re().captures_iter(html) {
+        let tag = cap[1].to_ascii_lowercase();
+        let url = &cap[2];
+        if OFFERED_TAGS.contains(&tag.as_str()) {
+            offered.push_str(&format!("<a href=\"{url}\">\n"));
+        } else if tag == "include-fragment" {
+            fragments.push_str(&format!("<a href=\"{url}\">\n"));
+        }
+    }
+    for cap in og_media_re().captures_iter(html) {
+        if let Some(m) = cap.get(1).or_else(|| cap.get(2)) {
+            offered.push_str(&format!("<a href=\"{}\">\n", m.as_str()));
+        }
+    }
+    let links = extract_links(base, &offered);
+    let frags = extract_links(base, &fragments)
+        .into_iter()
+        .filter(|f| {
+            // Only same-host fragments; never wander off-site automatically.
+            let fh = Url::parse(f).ok().and_then(|u| u.host_str().map(str::to_string));
+            let bh = base.and_then(|b| b.host_str().map(str::to_string));
+            fh.is_some() && fh == bh
+        })
+        .collect();
+    (links, frags)
+}
+
+/// `{host}`, `${x}`, `{{x}}` and their percent-encoded forms.
+fn is_template_placeholder(raw: &str) -> bool {
+    raw.contains('{')
+        || raw.contains('}')
+        || raw.contains("${")
+        || raw.to_ascii_lowercase().contains("%7b")
+        || raw.to_ascii_lowercase().contains("%7d")
+}
+
+/// A host that can actually be resolved: an IP, or a DNS name made of
+/// letters, digits, `-`, `_` and dots.
+fn has_real_host(u: &Url) -> bool {
+    match u.host() {
+        Some(url::Host::Ipv4(_)) | Some(url::Host::Ipv6(_)) => true,
+        Some(url::Host::Domain(d)) => {
+            !d.is_empty()
+                && d.chars()
+                    .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '.' || c == '_')
+                && !d.starts_with('.')
+                && !d.contains("..")
+        }
+        None => false,
+    }
 }
 
 /// Whether a URL very likely points at a downloadable file (by extension).
@@ -220,7 +310,29 @@ impl LinkGrabber {
             (None, input.to_string(), false)
         };
 
-        let mut links = extract_links(base.as_ref(), &text);
+        let mut links = if is_page {
+            let (mut links, fragments) = extract_page_links(base.as_ref(), &text);
+            // Bare file URLs in the page text (e.g. listed in a <pre> block).
+            for l in bare_re().find_iter(&text) {
+                let l = l.as_str().to_string();
+                if !is_template_placeholder(&l) && !links.contains(&l) {
+                    links.push(l);
+                }
+            }
+            for frag in fragments.into_iter().take(4) {
+                if let Ok(body) = self.fetch_text(&frag).await {
+                    let b = Url::parse(&frag).ok();
+                    for l in extract_page_links(b.as_ref(), &body).0 {
+                        if !links.contains(&l) {
+                            links.push(l);
+                        }
+                    }
+                }
+            }
+            links
+        } else {
+            extract_links(base.as_ref(), &text)
+        };
         if !is_page {
             // Pasted text: every whitespace-separated http(s) URL is a candidate,
             // whether or not its path carries a known file extension.
@@ -247,7 +359,7 @@ impl LinkGrabber {
             for page in pages {
                 if let Ok(body) = self.fetch_text(&page).await {
                     let b = Url::parse(&page).ok();
-                    extra.extend(extract_links(b.as_ref(), &body));
+                    extra.extend(extract_page_links(b.as_ref(), &body).0);
                 }
             }
             for l in extra {
@@ -260,7 +372,26 @@ impl LinkGrabber {
         if is_page {
             // A page crawl lists files, not the page's own styles, scripts, fonts
             // or links to other pages (`deep` has already followed those).
-            links.retain(|l| l == input || !is_page_asset(l));
+            // Extensionless links may still be downloads (served with
+            // `Content-Disposition: attachment`), so a bounded number of them is
+            // probed and kept only if they turn out not to be HTML.
+            let mut extensionless = 0usize;
+            links.retain(|l| {
+                if l == input {
+                    return true;
+                }
+                if has_asset_extension(l) || has_page_extension(l) {
+                    return false;
+                }
+                if has_file_extension(l) {
+                    return true;
+                }
+                if is_same_page(l, input) {
+                    return false;
+                }
+                extensionless += 1;
+                extensionless <= MAX_EXTENSIONLESS_PROBES
+            });
         }
 
         // Apply host/extension filters pre-probe (cheap).
@@ -380,7 +511,10 @@ pub fn plain_text_urls(text: &str) -> Vec<String> {
         let Some(start) = token.find("http://").or_else(|| token.find("https://")) else {
             continue;
         };
-        if let Some(u) = parse_http_url(&token[start..]) {
+        if is_template_placeholder(&token[start..]) {
+            continue;
+        }
+        if let Some(u) = parse_http_url(&token[start..]).filter(has_real_host) {
             let s = u.to_string();
             if seen.insert(s.clone()) {
                 out.push(s);
@@ -390,6 +524,42 @@ pub fn plain_text_urls(text: &str) -> Vec<String> {
     out
 }
 
+/// Upper bound on extensionless page links probed for attachments.
+const MAX_EXTENSIONLESS_PROBES: usize = 40;
+
+fn url_extension(url: &str) -> Option<String> {
+    let u = Url::parse(url).ok()?;
+    let name = filename_from_url_path(&u)?;
+    name.rsplit_once('.').map(|(_, e)| e.to_lowercase())
+}
+
+fn has_asset_extension(url: &str) -> bool {
+    url_extension(url)
+        .map(|e| PAGE_ASSET_EXTENSIONS.contains(&e.as_str()))
+        .unwrap_or(false)
+}
+
+fn has_page_extension(url: &str) -> bool {
+    url_extension(url)
+        .map(|e| matches!(e.as_str(), "html" | "htm" | "shtml" | "xhtml" | "php" | "asp" | "aspx" | "jsp"))
+        .unwrap_or(false)
+}
+
+fn has_file_extension(url: &str) -> bool {
+    url_extension(url)
+        .map(|e| COMMON_EXTENSIONS.contains(&e.as_str()) || e.len() <= 5 && e.chars().all(|c| c.is_ascii_alphanumeric()) && !e.chars().all(|c| c.is_ascii_digit()))
+        .unwrap_or(false)
+}
+
+/// The same page with a different fragment/query (e.g. `?lang=fr`).
+fn is_same_page(link: &str, page: &str) -> bool {
+    match (Url::parse(link), Url::parse(page)) {
+        (Ok(a), Ok(b)) => a.host_str() == b.host_str() && a.path().trim_end_matches('/') == b.path().trim_end_matches('/'),
+        _ => false,
+    }
+}
+
+#[cfg(test)]
 fn is_page_asset(url: &str) -> bool {
     let Some(u) = Url::parse(url).ok() else {
         return true;
@@ -517,6 +687,58 @@ mod tests {
         assert!(is_html_mime(Some("text/html; charset=utf-8")));
         assert!(!is_html_mime(Some("application/octet-stream")));
         assert!(!is_html_mime(None));
+    }
+
+    #[test]
+    fn page_extraction_keeps_offered_files_only() {
+        let base = Url::parse("https://proof.ovh.net/").unwrap();
+        let html = r#"
+            <link rel="icon" href="/icon.svg"><link rel="apple-touch-icon" href="/apple-touch-icon.png">
+            <link rel="stylesheet" href="/style.css"><script src="/app.js"></script>
+            <img src="/logo_com.png" alt="">
+            <meta property="og:image" content="https://cdn.ovh.net/og-image.png">
+            <a href="/files/10Mb.dat">10 MB</a>
+            <a href="/files/1Gb.dat">1 GB</a>
+            <video><source src="/media/clip.mp4"></video>
+            <a href="https://{host}/files/1Mb.dat">template</a>
+            <script>const u = `https://${host}/files/100Mb.dat`;</script>
+        "#;
+        let (links, frags) = extract_page_links(Some(&base), html);
+        assert_eq!(
+            links,
+            vec![
+                "https://proof.ovh.net/files/10Mb.dat".to_string(),
+                "https://proof.ovh.net/files/1Gb.dat".to_string(),
+                "https://proof.ovh.net/media/clip.mp4".to_string(),
+            ]
+        );
+        assert!(frags.is_empty());
+    }
+
+    #[test]
+    fn template_and_bogus_hosts_are_rejected() {
+        let links = extract_links(None, r#"<a href="https://{host}/a.zip"> <a href="https://%7Bhost%7D/b.zip"> https://ok.test/c.zip"#);
+        assert_eq!(links, vec!["https://ok.test/c.zip".to_string()]);
+        assert!(plain_text_urls("https://{host}/a.zip https://ok.test/d.bin").iter().all(|u| u.starts_with("https://ok.test/")));
+    }
+
+    #[test]
+    fn include_fragments_same_host_only() {
+        let base = Url::parse("https://github.com/o/r/releases/tag/v1").unwrap();
+        let html = r#"<include-fragment loading="lazy" src="https://github.com/o/r/releases/expanded_assets/v1"></include-fragment>
+                      <include-fragment src="https://evil.test/x"></include-fragment>"#;
+        let (_, frags) = extract_page_links(Some(&base), html);
+        assert_eq!(frags, vec!["https://github.com/o/r/releases/expanded_assets/v1".to_string()]);
+    }
+
+    #[test]
+    fn page_link_classification() {
+        assert!(has_asset_extension("https://h.test/a.css?v=2"));
+        assert!(has_page_extension("https://h.test/index.html"));
+        assert!(has_file_extension("https://h.test/wget-1.25.0.tar.gz"));
+        assert!(has_file_extension("https://h.test/files/10Mb.dat"));
+        assert!(!has_file_extension("https://h.test/software/wget/"));
+        assert!(is_same_page("https://h.test/a/?lang=fr", "https://h.test/a"));
     }
 
     #[test]
