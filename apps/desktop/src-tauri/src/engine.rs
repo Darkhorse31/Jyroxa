@@ -746,11 +746,11 @@ impl DesktopEngine {
                 }
             });
 
-            let result = {
-                let dl = downloader.read().await;
-                dl.download(request, Some(tx), control.clone(), None)
-                    .await
-            };
+            // Snapshot the downloader so the read lock is not held for the whole
+            // transfer; set_settings needs the write lock and would otherwise hang
+            // until every running download finished.
+            let dl = downloader.read().await.clone();
+            let result = dl.download(request, Some(tx), control.clone(), None).await;
 
             let _ = consumer.await;
 

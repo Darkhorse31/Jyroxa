@@ -53,7 +53,7 @@ pub async fn probe_url(
     let mut content_disposition = None;
     let mut protocol = "HTTP/1.1".to_string();
 
-    if let Ok(resp) = client.head(url).timeout(timeout).send().await {
+    if let Ok(resp) = client.head(url).timeout(timeout.min(crate::download::HEAD_TIMEOUT)).send().await {
         if resp.status().is_success() || resp.status() == reqwest::StatusCode::METHOD_NOT_ALLOWED {
             final_url = resp.url().to_string();
             protocol = protocol_label(resp.version());

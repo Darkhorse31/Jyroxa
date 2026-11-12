@@ -111,6 +111,8 @@ const SEGMENT_WRITE_BUF: usize = 512 * 1024;
 const RETRY_AFTER_CAP: Duration = Duration::from_secs(30);
 const PROGRESS_EMIT_INTERVAL: Duration = Duration::from_millis(250);
 const SEGMENT_STALL_TIMEOUT: Duration = Duration::from_secs(5);
+/// Upper bound for the metadata HEAD; the ranged GET fallback covers servers that stall on HEAD.
+pub(crate) const HEAD_TIMEOUT: Duration = Duration::from_secs(8);
 
 // ---------------------------------------------------------------------------
 // Configuration and request/outcome types
@@ -253,7 +255,9 @@ async fn probe_metadata(client: &reqwest::Client, url: &str, timeout: Duration) 
     };
 
     // 1. HEAD for size / validators / filename.
-    if let Ok(resp) = client.head(url).timeout(timeout).send().await {
+    // Some servers never answer HEAD (the request just hangs); cap it so the
+    // ranged GET below gets a turn instead of the task sitting at Starting.
+    if let Ok(resp) = client.head(url).timeout(timeout.min(HEAD_TIMEOUT)).send().await {
         if resp.status().is_success() {
             let headers = resp.headers().clone();
             meta.final_url = resp.url().to_string();
@@ -611,6 +615,7 @@ impl Ctx {
 // ---------------------------------------------------------------------------
 
 /// The download engine. Cheap to clone-share via the owned client.
+#[derive(Clone)]
 pub struct Downloader {
     client: reqwest::Client,
     segment_client: reqwest::Client,
