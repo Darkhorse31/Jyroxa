@@ -780,7 +780,9 @@ async fn multi_connection_beats_one_under_per_conn_rate_limit_and_stall() {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn autotune_matches_single_connection_on_unlimited_server() {
-    let data = make_data(12 * 1024 * 1024);
+    // 48 MiB so the run measures throughput, not the few ms of extra
+    // connection setup that dominate a 12 MiB loopback transfer (~40 ms).
+    let data = make_data(48 * 1024 * 1024);
     let addr = spawn_server(data.clone()).await;
     let url = format!("http://{addr}/file");
     let dir = tempfile::tempdir().unwrap();
