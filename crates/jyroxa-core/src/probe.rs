@@ -112,11 +112,8 @@ pub async fn probe_url(
         }
     }
 
-    let suggested_name = suggest_filename(
-        &final_url,
-        content_disposition.as_deref(),
-        mime.as_deref(),
-    );
+    let suggested_name =
+        suggest_filename(&final_url, content_disposition.as_deref(), mime.as_deref());
     let server = Url::parse(&final_url)
         .ok()
         .and_then(|u| u.host_str().map(|s| s.to_string()))

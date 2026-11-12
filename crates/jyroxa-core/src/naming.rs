@@ -166,12 +166,9 @@ pub fn category_for(name: &str, mime: Option<&str>) -> Category {
     ];
     let music_ext = ["mp3", "m4a", "flac", "wav", "aac", "ogg", "opus", "wma"];
     let doc_ext = [
-        "pdf", "doc", "docx", "xls", "xlsx", "ppt", "pptx", "txt", "csv", "rtf",
-        "epub",
+        "pdf", "doc", "docx", "xls", "xlsx", "ppt", "pptx", "txt", "csv", "rtf", "epub",
     ];
-    let arch_ext = [
-        "zip", "rar", "7z", "gz", "tgz", "bz2", "xz", "tar", "iso",
-    ];
+    let arch_ext = ["zip", "rar", "7z", "gz", "tgz", "bz2", "xz", "tar", "iso"];
     let prog_ext = ["exe", "msi", "apk", "dmg", "deb", "rpm", "appimage"];
 
     if mime.starts_with("video/") || video_ext.contains(&ext.as_str()) {
@@ -238,7 +235,8 @@ fn extension_for_mime(ct: &str) -> Option<&'static str> {
 
 fn has_extension(name: &str) -> bool {
     let base = strip_path_components(name);
-    base.rsplit_once('.').is_some_and(|(stem, ext)| !stem.is_empty() && !ext.is_empty())
+    base.rsplit_once('.')
+        .is_some_and(|(stem, ext)| !stem.is_empty() && !ext.is_empty())
 }
 
 fn split_name_ext(name: &str) -> (String, String) {
@@ -294,9 +292,28 @@ fn is_reserved_windows_name(name: &str) -> bool {
     let stem = upper.rsplit_once('.').map(|(s, _)| s).unwrap_or(&upper);
     matches!(
         stem,
-        "CON" | "PRN" | "AUX" | "NUL"
-            | "COM1" | "COM2" | "COM3" | "COM4" | "COM5" | "COM6" | "COM7" | "COM8" | "COM9"
-            | "LPT1" | "LPT2" | "LPT3" | "LPT4" | "LPT5" | "LPT6" | "LPT7" | "LPT8" | "LPT9"
+        "CON"
+            | "PRN"
+            | "AUX"
+            | "NUL"
+            | "COM1"
+            | "COM2"
+            | "COM3"
+            | "COM4"
+            | "COM5"
+            | "COM6"
+            | "COM7"
+            | "COM8"
+            | "COM9"
+            | "LPT1"
+            | "LPT2"
+            | "LPT3"
+            | "LPT4"
+            | "LPT5"
+            | "LPT6"
+            | "LPT7"
+            | "LPT8"
+            | "LPT9"
     )
 }
 
@@ -326,7 +343,10 @@ mod tests {
     #[test]
     fn url_path_decoded_no_query() {
         let u = Url::parse("https://host.test/dir/hello%20world.bin?x=1#frag").unwrap();
-        assert_eq!(filename_from_url_path(&u).as_deref(), Some("hello world.bin"));
+        assert_eq!(
+            filename_from_url_path(&u).as_deref(),
+            Some("hello world.bin")
+        );
     }
 
     #[test]
@@ -337,7 +357,11 @@ mod tests {
 
     #[test]
     fn octet_stream_does_not_add_extension() {
-        let name = suggest_filename("https://h.test/data", None, Some("application/octet-stream"));
+        let name = suggest_filename(
+            "https://h.test/data",
+            None,
+            Some("application/octet-stream"),
+        );
         assert_eq!(name, "data");
     }
 

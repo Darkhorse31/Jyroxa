@@ -36,7 +36,10 @@ mod win {
 
     #[link(name = "user32")]
     extern "system" {
-        pub fn FindWindowW(lpClassName: *const u16, lpWindowName: *const u16) -> *mut std::ffi::c_void;
+        pub fn FindWindowW(
+            lpClassName: *const u16,
+            lpWindowName: *const u16,
+        ) -> *mut std::ffi::c_void;
         pub fn ShowWindow(hWnd: *mut std::ffi::c_void, nCmdShow: i32) -> i32;
         pub fn SetForegroundWindow(hWnd: *mut std::ffi::c_void) -> i32;
     }
@@ -97,9 +100,7 @@ mod win {
     }
 
     pub fn open_folder(path: &Path) -> Result<(), String> {
-        let path = path
-            .canonicalize()
-            .unwrap_or_else(|_| path.to_path_buf());
+        let path = path.canonicalize().unwrap_or_else(|_| path.to_path_buf());
         std::process::Command::new("explorer")
             .arg(path.as_os_str())
             .spawn()
@@ -108,9 +109,7 @@ mod win {
     }
 
     pub fn open_file_in_folder(path: &Path) -> Result<(), String> {
-        let path = path
-            .canonicalize()
-            .unwrap_or_else(|_| path.to_path_buf());
+        let path = path.canonicalize().unwrap_or_else(|_| path.to_path_buf());
         std::process::Command::new("explorer")
             .arg("/select,")
             .arg(path.as_os_str())
@@ -137,7 +136,10 @@ mod win {
         use std::ffi::OsStr;
         use std::os::windows::ffi::OsStrExt;
 
-        let wide: Vec<u16> = OsStr::new(name).encode_wide().chain(std::iter::once(0)).collect();
+        let wide: Vec<u16> = OsStr::new(name)
+            .encode_wide()
+            .chain(std::iter::once(0))
+            .collect();
         unsafe {
             let handle = CreateMutexW(std::ptr::null(), 1, wide.as_ptr());
             if handle.is_null() {
@@ -155,7 +157,10 @@ mod win {
         use std::ffi::OsStr;
         use std::os::windows::ffi::OsStrExt;
 
-        let wide: Vec<u16> = OsStr::new(title).encode_wide().chain(std::iter::once(0)).collect();
+        let wide: Vec<u16> = OsStr::new(title)
+            .encode_wide()
+            .chain(std::iter::once(0))
+            .collect();
         unsafe {
             let hwnd = FindWindowW(std::ptr::null(), wide.as_ptr());
             if !hwnd.is_null() {
@@ -168,8 +173,8 @@ mod win {
     pub const SINGLE_INSTANCE_PIPE: &str = r"\\.\pipe\JyroxaSingleInstancePipe";
 
     pub fn send_to_first_instance(url: Option<&str>) -> bool {
-        use std::io::Write;
         use std::fs::OpenOptions;
+        use std::io::Write;
 
         if let Ok(mut file) = OpenOptions::new().write(true).open(SINGLE_INSTANCE_PIPE) {
             let msg = url.unwrap_or("");
@@ -186,7 +191,10 @@ mod win {
         use tokio::net::windows::named_pipe::ServerOptions;
 
         let pipe_name = SINGLE_INSTANCE_PIPE;
-        let mut server = match ServerOptions::new().first_pipe_instance(true).create(pipe_name) {
+        let mut server = match ServerOptions::new()
+            .first_pipe_instance(true)
+            .create(pipe_name)
+        {
             Ok(s) => s,
             Err(e) => {
                 tracing::warn!("Failed to create single instance pipe server: {}", e);
@@ -242,7 +250,9 @@ mod win {
         Some(SingleInstanceGuard)
     }
     pub fn focus_existing_window(_title: &str) {}
-    pub fn send_to_first_instance(_url: Option<&str>) -> bool { false }
+    pub fn send_to_first_instance(_url: Option<&str>) -> bool {
+        false
+    }
     pub async fn run_single_instance_server(_app: tauri::AppHandle) {}
 }
 

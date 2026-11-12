@@ -86,7 +86,42 @@ impl RateLimiter {
             let deficit = want - b.tokens;
             let wait = deficit / b.rate;
             drop(b);
-            tokio::time::sleep(Duration::from_secs_f64(wait.clamp(0.0, 5.0))).await;
+            tokio::time::sleep(Duration::from_secs_f64(wait.clamp(0.0, 0.05))).await;
+        }
+    }
+
+    /// Like [`acquire`](Self::acquire), but stops early when `continue_fn` returns false
+    /// (e.g. download cancelled).
+    pub async fn acquire_until<F>(&self, n: u64, mut continue_fn: F)
+    where
+        F: FnMut() -> bool,
+    {
+        let Some(bucket) = &self.inner else {
+            return;
+        };
+        let mut remaining = n as f64;
+        while remaining > 0.0 {
+            if !continue_fn() {
+                return;
+            }
+            let mut b = bucket.lock().await;
+            let want = remaining.min(b.capacity);
+            let now = Instant::now();
+            let elapsed = now.saturating_duration_since(b.last).as_secs_f64();
+            b.tokens = (b.tokens + elapsed * b.rate).min(b.capacity);
+            b.last = now;
+            if b.tokens >= want {
+                b.tokens -= want;
+                remaining -= want;
+                continue;
+            }
+            let deficit = want - b.tokens;
+            let wait = deficit / b.rate;
+            drop(b);
+            if !continue_fn() {
+                return;
+            }
+            tokio::time::sleep(Duration::from_secs_f64(wait.clamp(0.0, 0.05))).await;
         }
     }
 }

@@ -92,12 +92,7 @@ pub struct Scheduler {
 /// Decide execution order: highest priority first, stable within a priority.
 pub fn order_indices(specs: &[TaskSpec]) -> Vec<usize> {
     let mut idx: Vec<usize> = (0..specs.len()).collect();
-    idx.sort_by(|&a, &b| {
-        specs[b]
-            .priority
-            .cmp(&specs[a].priority)
-            .then(a.cmp(&b))
-    });
+    idx.sort_by(|&a, &b| specs[b].priority.cmp(&specs[a].priority).then(a.cmp(&b)));
     idx
 }
 

@@ -170,8 +170,18 @@ mod tests {
             supports_ranges: true,
             connections: 4,
             segments: vec![
-                SegmentState { index: 0, start: 0, end: 499, downloaded: 100 },
-                SegmentState { index: 1, start: 500, end: 999, downloaded: 500 },
+                SegmentState {
+                    index: 0,
+                    start: 0,
+                    end: 499,
+                    downloaded: 100,
+                },
+                SegmentState {
+                    index: 1,
+                    start: 500,
+                    end: 999,
+                    downloaded: 500,
+                },
             ],
         };
         assert_eq!(st.bytes_downloaded(), 600);
@@ -211,7 +221,12 @@ mod tests {
 
     #[test]
     fn completeness() {
-        let seg = SegmentState { index: 0, start: 0, end: 9, downloaded: 10 };
+        let seg = SegmentState {
+            index: 0,
+            start: 0,
+            end: 9,
+            downloaded: 10,
+        };
         assert!(seg.is_complete());
         assert_eq!(seg.len(), 10);
         assert_eq!(seg.cursor(), 10);

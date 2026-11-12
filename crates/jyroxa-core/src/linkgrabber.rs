@@ -16,15 +16,15 @@ use serde::{Deserialize, Serialize};
 use url::Url;
 
 use crate::error::Result;
-use crate::naming::{suggest_filename, filename_from_url_path};
+use crate::naming::{filename_from_url_path, suggest_filename};
 use crate::probe::probe_url;
 
 /// Common downloadable file extensions used by the bare-URL and filter logic.
 pub const COMMON_EXTENSIONS: &[&str] = &[
     "zip", "rar", "7z", "tar", "gz", "tgz", "bz2", "xz", "iso", "exe", "msi", "dmg", "pkg", "deb",
-    "rpm", "apk", "appimage", "bin", "img", "mp4", "mkv", "avi", "mov", "webm", "flv", "wmv", "m4v",
-    "mp3", "flac", "wav", "aac", "ogg", "opus", "m4a", "pdf", "epub", "mobi", "doc", "docx", "xls",
-    "xlsx", "ppt", "pptx", "csv", "jpg", "jpeg", "png", "gif", "webp", "svg", "torrent",
+    "rpm", "apk", "appimage", "bin", "img", "mp4", "mkv", "avi", "mov", "webm", "flv", "wmv",
+    "m4v", "mp3", "flac", "wav", "aac", "ogg", "opus", "m4a", "pdf", "epub", "mobi", "doc", "docx",
+    "xls", "xlsx", "ppt", "pptx", "csv", "jpg", "jpeg", "png", "gif", "webp", "svg", "torrent",
 ];
 
 /// Metadata discovered for a single link.
@@ -50,14 +50,11 @@ impl LinkInfo {
 
     /// The file extension (lowercase) implied by the filename or URL.
     pub fn extension(&self) -> Option<String> {
-        let name = self
-            .filename
-            .clone()
-            .or_else(|| {
-                Url::parse(&self.url)
-                    .ok()
-                    .and_then(|u| filename_from_url_path(&u))
-            })?;
+        let name = self.filename.clone().or_else(|| {
+            Url::parse(&self.url)
+                .ok()
+                .and_then(|u| filename_from_url_path(&u))
+        })?;
         name.rsplit_once('.').map(|(_, ext)| ext.to_lowercase())
     }
 }

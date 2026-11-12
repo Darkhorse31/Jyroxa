@@ -8,13 +8,13 @@ use std::time::Duration;
 use sha2::{Digest, Sha256};
 
 use axum::body::Body;
-use bytes::Bytes;
-use futures::stream::unfold;
 use axum::extract::State;
 use axum::http::{header, HeaderMap, StatusCode};
 use axum::response::Response;
 use axum::routing::get;
 use axum::Router;
+use bytes::Bytes;
+use futures::stream::unfold;
 
 use jyroxa_core::download::{preallocate, Control};
 use jyroxa_core::events::{self, ProgressEvent};
@@ -190,7 +190,8 @@ async fn multi_connection_download_is_correct() {
     let dir = tempfile::tempdir().unwrap();
     let out = dir.path().join("f.bin");
 
-    let req = DownloadRequest::new(format!("http://{addr}/file"), out.clone()).connections(8);
+    let mut req = DownloadRequest::new(format!("http://{addr}/file"), out.clone()).connections(8);
+    req.autotune = false;
     let outcome = test_engine()
         .download(req, None, Control::new(), None)
         .await
@@ -198,7 +199,6 @@ async fn multi_connection_download_is_correct() {
 
     assert_eq!(outcome.total_size, data.len() as u64);
     assert_eq!(std::fs::read(&out).unwrap(), data);
-    // Work-stealing should have produced more segments than the 4 we started with.
     assert!(outcome.connections_used >= 4);
     // State sidecar removed on success.
     assert!(!DownloadState::state_path(&out).exists());
@@ -268,8 +268,18 @@ async fn resume_completes_and_matches() {
         supports_ranges: true,
         connections: 4,
         segments: vec![
-            SegmentState { index: 0, start: 0, end: half - 1, downloaded: half },
-            SegmentState { index: 1, start: half, end: total - 1, downloaded: 0 },
+            SegmentState {
+                index: 0,
+                start: 0,
+                end: half - 1,
+                downloaded: half,
+            },
+            SegmentState {
+                index: 1,
+                start: half,
+                end: total - 1,
+                downloaded: 0,
+            },
         ],
     };
     st.save(&DownloadState::state_path(&out)).unwrap();
@@ -347,6 +357,7 @@ async fn pause_stops_writes_quickly() {
     let out = dir.path().join("pause.bin");
     let control = Control::new();
     let mut req = DownloadRequest::new(format!("http://{addr}/file"), out.clone()).connections(4);
+    req.autotune = false;
     req.speed_limit = Some(200_000); // 200 KiB/s so pause is observable
     let engine = test_engine();
     let (tx, mut rx) = events::channel();
@@ -392,6 +403,7 @@ async fn cancel_removes_partial_and_state() {
     let out = dir.path().join("cancel.bin");
     let control = Control::new();
     let mut req = DownloadRequest::new(format!("http://{addr}/file"), out.clone()).connections(4);
+    req.autotune = false;
     req.speed_limit = Some(150_000);
     let engine = test_engine();
     let (tx, mut rx) = events::channel();
@@ -400,8 +412,10 @@ async fn cancel_removes_partial_and_state() {
         tokio::select! {
             ev = rx.recv() => {
                 let Some(ev) = ev else { panic!("channel closed before start"); };
-                if matches!(ev, ProgressEvent::Started { .. }) {
-                    break;
+                if let ProgressEvent::Progress { downloaded, .. } = ev {
+                    if downloaded > 32 * 1024 {
+                        break;
+                    }
                 }
             }
             r = dl.as_mut() => panic!("download finished early: {r:?}"),
@@ -423,8 +437,7 @@ async fn throttle_429_download_completes() {
     let addr = spawn_throttle_server(data.clone()).await;
     let dir = tempfile::tempdir().unwrap();
     let out = dir.path().join("throttle.bin");
-    let req = DownloadRequest::new(format!("http://{addr}/throttle"), out.clone())
-        .connections(4);
+    let req = DownloadRequest::new(format!("http://{addr}/throttle"), out.clone()).connections(4);
     let outcome = test_engine()
         .download(req, None, Control::new(), None)
         .await
@@ -490,9 +503,7 @@ async fn spawn_slow_server(data: Vec<u8>) -> SocketAddr {
     let st = SlowState {
         data: Arc::new(data),
     };
-    let app = Router::new()
-        .route("/slow", get(serve_slow))
-        .with_state(st);
+    let app = Router::new().route("/slow", get(serve_slow)).with_state(st);
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let addr = listener.local_addr().unwrap();
     tokio::spawn(async move {
@@ -586,7 +597,8 @@ async fn throttle_429_autotune_stays_at_least_one_connection() {
     let addr = spawn_throttle_server(data.clone()).await;
     let dir = tempfile::tempdir().unwrap();
     let out = dir.path().join("throttle_auto.bin");
-    let mut req = DownloadRequest::new(format!("http://{addr}/throttle"), out.clone()).connections(8);
+    let mut req =
+        DownloadRequest::new(format!("http://{addr}/throttle"), out.clone()).connections(8);
     req.autotune = true;
     let outcome = test_engine()
         .download(req, None, Control::new(), None)
@@ -624,22 +636,28 @@ async fn serve_rate_stall(State(st): State<RateStallState>, headers: HeaderMap) 
 
     // ~2 MiB/s per connection: 256 KiB every 125 ms.
     let body_len = slice.len();
-    let stream = unfold((slice, 0usize, stall), move |(data, off, stall)| async move {
-        let pace = Duration::from_millis(125);
-        let chunk = 256 * 1024usize;
-        if off >= data.len() {
-            return None;
-        }
-        if stall && off > data.len() / 4 {
-            // Stall mid-body indefinitely until the client gives up and re-steals.
-            tokio::time::sleep(Duration::from_secs(60)).await;
-            return None;
-        }
-        tokio::time::sleep(pace).await;
-        let end = (off + chunk).min(data.len());
-        let piece = Bytes::copy_from_slice(&data[off..end]);
-        Some((Ok::<Bytes, std::convert::Infallible>(piece), (data, end, stall)))
-    });
+    let stream = unfold(
+        (slice, 0usize, stall),
+        move |(data, off, stall)| async move {
+            let pace = Duration::from_millis(125);
+            let chunk = 256 * 1024usize;
+            if off >= data.len() {
+                return None;
+            }
+            if stall && off > data.len() / 4 {
+                // Stall mid-body indefinitely until the client gives up and re-steals.
+                tokio::time::sleep(Duration::from_secs(60)).await;
+                return None;
+            }
+            tokio::time::sleep(pace).await;
+            let end = (off + chunk).min(data.len());
+            let piece = Bytes::copy_from_slice(&data[off..end]);
+            Some((
+                Ok::<Bytes, std::convert::Infallible>(piece),
+                (data, end, stall),
+            ))
+        },
+    );
     let body = Body::from_stream(stream);
 
     if let Some(r) = range {
@@ -715,12 +733,177 @@ async fn multi_connection_beats_one_under_per_conn_rate_limit_and_stall() {
 
     assert_eq!(std::fs::read(&eight).unwrap(), data);
     assert_eq!(std::fs::read(&one).unwrap(), data);
-  // 8 connections on ~2 MiB/s per link should finish much faster than 1.
+    // 8 connections on ~2 MiB/s per link should finish much faster than 1.
     assert!(
         t8 < t1 / 2,
         "8-conn {:?} should be < half of 1-conn {:?}",
         t8,
         t1
+    );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn autotune_matches_single_connection_on_unlimited_server() {
+    let data = make_data(12 * 1024 * 1024);
+    let addr = spawn_server(data.clone()).await;
+    let url = format!("http://{addr}/file");
+    let dir = tempfile::tempdir().unwrap();
+
+    let config = DownloadConfig {
+        min_segment_size: 64 * 1024,
+        max_connections: 16,
+        tune_interval: Duration::from_millis(50),
+        ..DownloadConfig::default()
+    };
+
+    let one = dir.path().join("one.bin");
+    let t0 = std::time::Instant::now();
+    let eng = Downloader::new(config.clone()).unwrap();
+    let mut req1 = DownloadRequest::new(url.clone(), one.clone()).connections(1);
+    req1.autotune = false;
+    eng.download(req1, None, Control::new(), None)
+        .await
+        .expect("1-conn");
+    let t1 = t0.elapsed();
+
+    let auto = dir.path().join("auto.bin");
+    let t0 = std::time::Instant::now();
+    let eng = Downloader::new(config).unwrap();
+    let mut req_auto = DownloadRequest::new(url, auto.clone()).connections(16);
+    req_auto.autotune = true;
+    eng.download(req_auto, None, Control::new(), None)
+        .await
+        .expect("auto");
+    let t_auto = t0.elapsed();
+
+    assert_eq!(std::fs::read(&auto).unwrap(), data);
+    let bps_one = data.len() as f64 / t1.as_secs_f64();
+    let bps_auto = data.len() as f64 / t_auto.as_secs_f64();
+    assert!(
+        bps_auto >= bps_one * 0.97,
+        "auto {bps_auto} B/s should be >= 97% of 1-conn {bps_one} B/s (wall {:?} vs {:?})",
+        t_auto,
+        t1
+    );
+}
+
+#[derive(Clone)]
+struct PerConnCapState {
+    data: Arc<Vec<u8>>,
+}
+
+async fn serve_per_conn_cap(State(st): State<PerConnCapState>, headers: HeaderMap) -> Response {
+    let range = headers.get(header::RANGE).and_then(|v| v.to_str().ok());
+    let total = st.data.len() as u64;
+    let slice = if let Some(r) = range {
+        let Some((s, e)) = parse_range(r, total) else {
+            return Response::builder()
+                .status(StatusCode::RANGE_NOT_SATISFIABLE)
+                .body(Body::empty())
+                .unwrap();
+        };
+        st.data[s as usize..=e as usize].to_vec()
+    } else {
+        st.data.to_vec()
+    };
+
+    // ~200 KiB/s per TCP connection: 32 KiB every 160 ms.
+    let body_len = slice.len();
+    let stream = unfold(slice, move |data| async move {
+        let pace = Duration::from_millis(160);
+        let chunk = 32 * 1024usize;
+        if data.is_empty() {
+            return None;
+        }
+        tokio::time::sleep(pace).await;
+        let end = chunk.min(data.len());
+        let piece = Bytes::copy_from_slice(&data[..end]);
+        let rest = data[end..].to_vec();
+        Some((Ok::<Bytes, std::convert::Infallible>(piece), rest))
+    });
+    let body = Body::from_stream(stream);
+
+    if let Some(r) = range {
+        if let Some((s, e)) = parse_range(r, total) {
+            return Response::builder()
+                .status(StatusCode::PARTIAL_CONTENT)
+                .header(header::CONTENT_RANGE, format!("bytes {s}-{e}/{total}"))
+                .header(header::ACCEPT_RANGES, "bytes")
+                .header(header::CONTENT_LENGTH, body_len.to_string())
+                .body(body)
+                .unwrap();
+        }
+    }
+
+    Response::builder()
+        .status(StatusCode::OK)
+        .header(header::CONTENT_LENGTH, body_len.to_string())
+        .body(body)
+        .unwrap()
+}
+
+async fn spawn_per_conn_cap_server(data: Vec<u8>) -> SocketAddr {
+    let st = PerConnCapState {
+        data: Arc::new(data),
+    };
+    let app = Router::new()
+        .route("/cap", get(serve_per_conn_cap))
+        .with_state(st);
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    tokio::spawn(async move {
+        axum::serve(listener, app).await.unwrap();
+    });
+    addr
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn autotune_scales_on_per_connection_rate_cap() {
+    let data = make_data(12 * 1024 * 1024);
+    let addr = spawn_per_conn_cap_server(data.clone()).await;
+    let url = format!("http://{addr}/cap");
+    let dir = tempfile::tempdir().unwrap();
+
+    let config = DownloadConfig {
+        min_segment_size: 64 * 1024,
+        max_connections: 8,
+        tune_interval: Duration::from_millis(50),
+        ..DownloadConfig::default()
+    };
+
+    let one = dir.path().join("one.bin");
+    let t0 = std::time::Instant::now();
+    let eng = Downloader::new(config.clone()).unwrap();
+    let mut req1 = DownloadRequest::new(url.clone(), one.clone()).connections(1);
+    req1.autotune = false;
+    eng.download(req1, None, Control::new(), None)
+        .await
+        .expect("1-conn");
+    let t1 = t0.elapsed();
+
+    let auto = dir.path().join("auto.bin");
+    let t0 = std::time::Instant::now();
+    let eng = Downloader::new(config).unwrap();
+    let mut req_auto = DownloadRequest::new(url, auto.clone()).connections(8);
+    req_auto.autotune = true;
+    let outcome = eng
+        .download(req_auto, None, Control::new(), None)
+        .await
+        .expect("auto");
+    let t_auto = t0.elapsed();
+
+    assert_eq!(std::fs::read(&auto).unwrap(), data);
+    let bps_one = data.len() as f64 / t1.as_secs_f64();
+    let bps_auto = data.len() as f64 / t_auto.as_secs_f64();
+    assert!(
+        outcome.connections_used >= 2,
+        "auto should scale past 1 connection on per-conn caps, used {}",
+        outcome.connections_used
+    );
+    assert!(
+        bps_auto >= bps_one * 1.9,
+        "auto {bps_auto} B/s ({} conns) should clearly beat 1-conn {bps_one} B/s",
+        outcome.connections_used,
     );
 }
 

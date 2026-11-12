@@ -5,12 +5,12 @@ use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Weak};
 
-use serde::{Deserialize, Serialize};
 use jyroxa_core::download::{Control, DownloadConfig, DownloadRequest, Downloader};
 use jyroxa_core::events::ProgressEvent;
 use jyroxa_core::linkgrabber::{GrabOptions, LinkGrabber, LinkInfo, Package};
 use jyroxa_core::state::SegmentState;
 use jyroxa_core::{build_client, HostStats, Result as CoreResult};
+use serde::{Deserialize, Serialize};
 use tauri::{AppHandle, Emitter, Manager};
 use tauri_plugin_clipboard_manager::ClipboardExt;
 use tokio::sync::{Mutex, RwLock};
@@ -501,7 +501,10 @@ impl DesktopEngine {
             let v = &inner.view;
             if matches!(
                 v.status,
-                TaskStatus::Queued | TaskStatus::Paused | TaskStatus::Running | TaskStatus::Starting
+                TaskStatus::Queued
+                    | TaskStatus::Paused
+                    | TaskStatus::Running
+                    | TaskStatus::Starting
             ) {
                 persisted.push(PersistedItem {
                     urls: v.urls.clone(),
@@ -676,12 +679,7 @@ impl DesktopEngine {
                 let items = engine.items.lock().await;
                 items
                     .get(&id)
-                    .map(|i| {
-                        matches!(
-                            i.view.status,
-                            TaskStatus::Running | TaskStatus::Starting
-                        )
-                    })
+                    .map(|i| matches!(i.view.status, TaskStatus::Running | TaskStatus::Starting))
                     .unwrap_or(false)
             };
             if already_running {
@@ -748,8 +746,7 @@ impl DesktopEngine {
 
             let result = {
                 let dl = downloader.read().await;
-                dl.download(request, Some(tx), control.clone(), None)
-                    .await
+                dl.download(request, Some(tx), control.clone(), None).await
             };
 
             let _ = consumer.await;
@@ -773,10 +770,8 @@ impl DesktopEngine {
                             };
                             let _ = app.emit("download-finished", finished);
                             if notifications_on {
-                                native_toast = Some((
-                                    "Download complete".into(),
-                                    inner.view.filename.clone(),
-                                ));
+                                native_toast =
+                                    Some(("Download complete".into(), inner.view.filename.clone()));
                             }
                         }
                         Err(jyroxa_core::Error::Cancelled) => {
@@ -976,11 +971,7 @@ impl DesktopEngine {
         }
     }
 
-    pub async fn grab_links(
-        &self,
-        input: &str,
-        opts: &GrabOptionsDto,
-    ) -> CoreResult<Vec<Package>> {
+    pub async fn grab_links(&self, input: &str, opts: &GrabOptionsDto) -> CoreResult<Vec<Package>> {
         self.linkgrabber.grab(input, &opts.into()).await
     }
 
@@ -992,17 +983,11 @@ impl DesktopEngine {
         }
         out
     }
-
 }
 
 fn show_native_notification(app: &AppHandle, title: &str, body: &str) {
     use tauri_plugin_notification::NotificationExt;
-    let _ = app
-        .notification()
-        .builder()
-        .title(title)
-        .body(body)
-        .show();
+    let _ = app.notification().builder().title(title).body(body).show();
 }
 
 #[derive(Clone, Serialize)]
