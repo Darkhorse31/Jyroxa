@@ -174,7 +174,7 @@ impl Default for DownloadConfig {
         DownloadConfig {
             max_connections: crate::MAX_CONNECTIONS,
             initial_connections: crate::tuner::DEFAULT_START_CONNECTIONS,
-            min_segment_size: 2 << 20, // 2 MiB
+            min_segment_size: 512 << 10, // 512 KiB tails; writes still batch at 2 MiB.
             max_retries: 5,
             max_global_failures: 0,
             autotune: true,
@@ -541,6 +541,7 @@ struct WriteChunk {
 }
 
 struct Ctx {
+    client: reqwest::Client,
     writer: Mutex<Option<mpsc::Sender<WriteChunk>>>,
     pool: MirrorPool,
     path: PathBuf,
@@ -655,6 +656,7 @@ impl Ctx {
 #[derive(Clone)]
 pub struct Downloader {
     client: reqwest::Client,
+    segment_client: reqwest::Client,
     global_limiter: Arc<RateLimiter>,
     host_stats: Arc<HostStats>,
     config: DownloadConfig,
@@ -665,6 +667,7 @@ impl Downloader {
     pub fn new(config: DownloadConfig) -> Result<Self> {
         Ok(Downloader {
             client: crate::build_client_with(config.read_timeout)?,
+            segment_client: crate::build_segment_client_with(config.read_timeout)?,
             global_limiter: Arc::new(RateLimiter::unlimited()),
             host_stats: Arc::new(HostStats::in_memory()),
             config,
@@ -750,16 +753,11 @@ impl Downloader {
 
         let total = meta.size.unwrap();
 
-        // Starting connection count: remembered best for the host, clamped by cap.
+        // Always open eight immediately; history only supplies a real error cap.
         let host_cap = self.host_stats.host_cap(&host);
         let initial_conn = if req.autotune {
-            // Start at eight, or a recent measured best, bounded by the cap.
             let wide = crate::tuner::initial_connections(total, max_conn);
-            self.host_stats
-                .best_connections(&host)
-                .map(|b| b.max(wide))
-                .unwrap_or(wide)
-                .clamp(1, host_cap.unwrap_or(max_conn).clamp(1, max_conn))
+            wide.clamp(1, host_cap.unwrap_or(max_conn).clamp(1, max_conn))
         } else {
             max_conn
         };
@@ -809,6 +807,7 @@ impl Downloader {
         let writer = spawn_disk_writer(output.clone(), fatal_slot.clone(), write_pending.clone());
 
         let ctx = Arc::new(Ctx {
+            client: self.segment_client.clone(),
             writer: Mutex::new(Some(writer)),
             pool: MirrorPool::new(&req.urls, events.clone()),
             path: output.clone(),
@@ -1155,15 +1154,7 @@ impl Downloader {
 fn spawn_worker(ctx: Arc<Ctx>) {
     ctx.active_workers.fetch_add(1, Ordering::AcqRel);
     tokio::spawn(async move {
-        let client = match crate::build_segment_client_with(ctx.config.read_timeout) {
-            Ok(c) => c,
-            Err(e) => {
-                ctx.set_fatal(e);
-                ctx.active_workers.fetch_sub(1, Ordering::AcqRel);
-                ctx.notify.notify_waiters();
-                return;
-            }
-        };
+        let client = ctx.client.clone();
         let mut ctrl_rx = ctx.control.subscribe();
         // Keep claiming work (queue, then stealing) until nothing remains.
         loop {
@@ -1299,9 +1290,7 @@ async fn flush_segment_buf(
     }
     // Publish completion only once the buffer is accounted for and queued;
     // otherwise the download can finish before its final write is submitted.
-    seg.current.store(*at, Ordering::Release);
     ctx.downloaded.fetch_add(len as u64, Ordering::Relaxed);
-    seg.apply_cap_if_due(*at);
     Ok(())
 }
 
@@ -1324,9 +1313,6 @@ async fn handle_read_stall(
         }
     }
     emit_retry(ctx, attempt + 1, "read stall");
-    if seg.remaining() > 0 {
-        ctx.table.requeue(seg.clone());
-    }
     let _ = interruptible_sleep(ctrl_rx, Duration::from_millis(50)).await;
     Ok(())
 }
@@ -1482,32 +1468,31 @@ async fn run_segment(
                         continue;
                     }
                     stall_deadline = tokio::time::Instant::now() + SEGMENT_STALL_TIMEOUT;
-                    let cur_end = seg.download_end();
-                    let mut bytes: &[u8] = &chunk;
-                    let last = pos + bytes.len() as u64 - 1;
-                    let truncated = if last > cur_end {
+                    // A stealer may shorten this range while the response is
+                    // open. Publish the network cursor under the same lock as
+                    // splitting, including bytes still in the write buffer.
+                    let reached_end = {
+                        let _bounds = seg.bounds.lock().unwrap();
+                        let cur_end = seg.download_end();
                         let keep = (cur_end + 1).saturating_sub(pos) as usize;
-                        bytes = &bytes[..keep.min(bytes.len())];
-                        true
-                    } else {
-                        false
+                        let bytes = &chunk[..keep.min(chunk.len())];
+                        if !bytes.is_empty() {
+                            if write_buf.is_empty() {
+                                write_at = pos;
+                            }
+                            write_buf.extend_from_slice(bytes);
+                            pos += bytes.len() as u64;
+                            ctx.received
+                                .fetch_add(bytes.len() as u64, Ordering::Relaxed);
+                            seg.current.store(pos, Ordering::Release);
+                        }
+                        pos > cur_end
                     };
-
-                    if !bytes.is_empty() {
-                        if write_buf.is_empty() {
-                            write_at = pos;
-                        }
-                        write_buf.extend_from_slice(bytes);
-                        pos += bytes.len() as u64;
-                        ctx.received
-                            .fetch_add(bytes.len() as u64, Ordering::Relaxed);
-                        if write_buf.len() >= SEGMENT_WRITE_BUF {
-                            flush_segment_buf(ctx, &mut write_buf, &mut write_at, seg, ctrl_rx)
-                                .await?;
-                        }
+                    if write_buf.len() >= SEGMENT_WRITE_BUF {
+                        flush_segment_buf(ctx, &mut write_buf, &mut write_at, seg, ctrl_rx).await?;
                     }
 
-                    if truncated || pos > cur_end {
+                    if reached_end {
                         flush_segment_buf(ctx, &mut write_buf, &mut write_at, seg, ctrl_rx).await?;
                         break;
                     }
@@ -1526,6 +1511,10 @@ async fn run_segment(
         }
 
         if stalled {
+            attempt += 1;
+            if attempt > ctx.config.max_retries {
+                return Err(Error::other("segment repeatedly stalled"));
+            }
             continue;
         }
 
@@ -1750,20 +1739,7 @@ fn persist_state(
         last_modified: meta.last_modified.clone(),
         supports_ranges: true,
         connections,
-        segments: ctx
-            .table
-            .segments()
-            .iter()
-            .map(|seg| {
-                let mut snapshot = seg.snapshot();
-                snapshot.downloaded = seg
-                    .committed
-                    .load(Ordering::Acquire)
-                    .min(snapshot.end.saturating_add(1))
-                    .saturating_sub(snapshot.start);
-                snapshot
-            })
-            .collect(),
+        segments: ctx.table.committed_snapshot(),
     };
     let _ = st.save(state_path);
 }
