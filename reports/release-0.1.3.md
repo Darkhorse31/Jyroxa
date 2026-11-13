@@ -48,7 +48,7 @@ The portable ZIP uses the same two files as v0.1.2. Gradle's exported `Jyroxa-0.
 
 ## Artifact inventory
 
-Local artifacts prepared for upload; publication verification follows below.
+All four artifacts below were uploaded successfully. GitHub reports state `uploaded`; each remote byte size and SHA-256 digest matches the local file.
 
 | Artifact | Size (bytes) | SHA-256 |
 | --- | ---: | --- |
@@ -59,11 +59,22 @@ Local artifacts prepared for upload; publication verification follows below.
 
 ## Publication
 
-Release target: https://github.com/Darkhorse31/Jyroxa/releases/tag/v0.1.3. Builds and local artifacts verified; publication is pending at this source commit. The final uploaded-asset verification is recorded in the report on `main` after publication.
+Release URL: https://github.com/Darkhorse31/Jyroxa/releases/tag/v0.1.3
+
+- Release source/tag commit: `914848c2ef3a4c97e91ff5b65ca16b765350c158`.
+- `gh auth switch -u Darkhorse31`: PASS.
+- `git push origin main`: PASS.
+- `git tag v0.1.3` and `git push origin v0.1.3`: PASS; remote tag matches the release source commit.
+- `gh release create v0.1.3 -R Darkhorse31/Jyroxa --latest --verify-tag` with four artifacts and the prepared release notes: PASS.
+- Release API verification: published, not a draft or prerelease; `/releases/latest` returns `v0.1.3`. All four remote asset names, sizes and SHA-256 digests match the local inventory.
+- Release notes lead with the measured speed table and the chart embedded from the versioned source tag.
+- Author and committer for release and report commits: `Prateek Kumar <81240621+Darkhorse31@users.noreply.github.com>`; no co-author trailer.
+- Verification completed: 2026-11-13T17:50:07.7833860+05:30.
+- GitHub CLI account restoration to `prateeksamadhandigitech` runs after the final report push; its result is checked in the task completion response.
 
 ## Failures and limitations
 
-No test or build failed. Publication verification is pending at this source commit.
+No test, build, signing verification, push, tag or release publication failed. The initial staged whitespace check flagged trailing whitespace in captured build logs; it was removed and the check passed before committing.
 
 - The Android build reports a pre-existing deprecated `android.defaults.buildfeatures.buildconfig=true` option.
 - Android's `stripReleaseDebugSymbols` could not strip `libjyroxa_ffi.so`; Gradle packaged the libraries as-is and completed release compilation, lint, signing and export successfully.
