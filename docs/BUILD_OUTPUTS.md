@@ -30,7 +30,7 @@ JNI libraries (`libjyroxa_ffi.so`) are built into `android/app/src/main/jniLibs/
 | NSIS installer | `target/release/bundle/nsis/Jyroxa_0.1.4_x64-setup.exe` |
 | Native messaging host | `target/release/jyroxa-native-host.exe` (bundled beside desktop via `tauri.conf.json` resources) |
 
-Build the native host before the Tauri bundle: `cargo build --release -p jyroxa-native-host`.
+Build the native host before the Tauri bundle: `cargo build --release -p jyroxa-native-host`, then copy `target/release/jyroxa-native-host.exe` to `apps/desktop/src-tauri/` for `bundle.resources`.
 
 Portable zip: run `apps/desktop/package-portable.ps1` after `build-gnu.ps1` (includes `jyroxa-native-host.exe` when present).
 
