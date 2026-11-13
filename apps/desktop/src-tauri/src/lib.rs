@@ -366,6 +366,12 @@ pub fn run() {
             commands::default_category_dirs,
             commands::open_folder_cmd,
             commands::open_file,
+            commands::telegram_status,
+            commands::telegram_set_credentials,
+            commands::telegram_begin_login,
+            commands::telegram_submit_code,
+            commands::telegram_submit_password,
+            commands::telegram_sign_out,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

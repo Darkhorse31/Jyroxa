@@ -153,6 +153,20 @@ export interface ProgressPayload {
   event: BackendProgressEvent;
 }
 
+export interface TelegramAccountView {
+  connected: boolean;
+  phone?: string | null;
+  display_name?: string | null;
+  api_id?: number | null;
+}
+
+export type TelegramLoginStep =
+  | "need_api_credentials"
+  | "need_phone"
+  | { step: "need_code"; phone: string }
+  | "need_password"
+  | "done";
+
 export const api = {
   getSettings: () => invoke<AppSettings>("get_settings"),
   setSettings: (s: AppSettings) => invoke<void>("set_settings", { settings: s }),
@@ -183,6 +197,16 @@ export const api = {
     invoke<void>("open_folder_cmd", { path }),
   openFile: (path: string) =>
     invoke<void>("open_file", { path }),
+  telegramStatus: () => invoke<TelegramAccountView>("telegram_status"),
+  telegramSetCredentials: (apiId: number, apiHash: string) =>
+    invoke<void>("telegram_set_credentials", { apiId, apiHash }),
+  telegramBeginLogin: (phone: string) =>
+    invoke<TelegramLoginStep>("telegram_begin_login", { phone }),
+  telegramSubmitCode: (code: string) =>
+    invoke<TelegramLoginStep>("telegram_submit_code", { code }),
+  telegramSubmitPassword: (password: string) =>
+    invoke<TelegramLoginStep>("telegram_submit_password", { password }),
+  telegramSignOut: () => invoke<void>("telegram_sign_out"),
 };
 
 export async function openFolder(filePath: string): Promise<boolean> {

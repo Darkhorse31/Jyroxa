@@ -179,6 +179,67 @@ pub async fn open_folder_cmd(
 }
 
 #[tauri::command]
+pub async fn telegram_status(
+    state: State<'_, EngineState>,
+) -> Result<jyroxa_core::TelegramAccountView, String> {
+    Ok(state.0.telegram().account_view().await)
+}
+
+#[tauri::command]
+pub async fn telegram_set_credentials(
+    state: State<'_, EngineState>,
+    api_id: i32,
+    api_hash: String,
+) -> Result<(), String> {
+    state.0.telegram().set_api_credentials(api_id, api_hash).await;
+    Ok(())
+}
+
+#[tauri::command]
+pub async fn telegram_begin_login(
+    state: State<'_, EngineState>,
+    phone: String,
+) -> Result<jyroxa_core::TelegramLoginStep, String> {
+    state
+        .0
+        .telegram()
+        .begin_login(phone)
+        .await
+        .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub async fn telegram_submit_code(
+    state: State<'_, EngineState>,
+    code: String,
+) -> Result<jyroxa_core::TelegramLoginStep, String> {
+    state
+        .0
+        .telegram()
+        .submit_code(code)
+        .await
+        .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub async fn telegram_submit_password(
+    state: State<'_, EngineState>,
+    password: String,
+) -> Result<jyroxa_core::TelegramLoginStep, String> {
+    state
+        .0
+        .telegram()
+        .submit_password(password)
+        .await
+        .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub async fn telegram_sign_out(state: State<'_, EngineState>) -> Result<(), String> {
+    state.0.telegram().sign_out().await.map_err(|e| e.to_string())
+}
+
+#[tauri::command]
 pub fn open_file(app: AppHandle, path: String) -> Result<(), String> {
     let pb = PathBuf::from(&path);
     if !pb.is_file() {

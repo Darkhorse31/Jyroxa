@@ -311,7 +311,7 @@ async function boot() {
   // Live URL Probing and Auto-naming in Add Modal
   async function triggerProbe(url: string) {
     const trimmed = url.trim();
-    if (!trimmed || !trimmed.startsWith("http")) {
+    if (!trimmed || (!trimmed.startsWith("http") && !trimmed.includes("t.me"))) {
       addProbeCard.classList.add("hidden");
       return;
     }

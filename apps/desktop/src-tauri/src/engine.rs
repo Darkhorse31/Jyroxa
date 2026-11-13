@@ -175,6 +175,7 @@ pub struct DesktopEngine {
     /// Cached `close_to_tray` for synchronous window close handling (no async lock).
     close_to_tray_cached: AtomicBool,
     data_dir: PathBuf,
+    telegram: Arc<jyroxa_core::TelegramClientPool>,
     weak: Weak<Self>,
 }
 
@@ -190,7 +191,8 @@ impl DesktopEngine {
                 .with_client(client.clone())
                 .with_host_stats(host_stats),
         ));
-        let linkgrabber = Arc::new(LinkGrabber::new(client));
+        let linkgrabber = Arc::new(LinkGrabber::new(client.clone()));
+        let telegram = Arc::new(jyroxa_core::TelegramClientPool::new(&data_dir));
 
         let mut settings = AppSettings::default();
         let settings_path = data_dir.join("settings.json");
@@ -219,6 +221,7 @@ impl DesktopEngine {
             settings: Arc::new(Mutex::new(settings)),
             close_to_tray_cached: AtomicBool::new(close_to_tray),
             data_dir,
+            telegram,
             weak: weak.clone(),
         });
         Ok(engine)
@@ -299,8 +302,34 @@ impl DesktopEngine {
     }
 
     pub async fn probe_url(&self, url: &str) -> CoreResult<jyroxa_core::ProbeInfo> {
+        let normalized = normalize_user_url(url);
+        if jyroxa_core::is_telegram_post_url(&normalized) {
+            let client = build_client()?;
+            let item = jyroxa_core::probe_post(&client, &normalized)
+                .await
+                .map_err(|e| jyroxa_core::Error::other(e.to_string()))?;
+            if item.needs_login {
+                if let (Some(chat), Some(msg)) = (item.private_chat_id, item.private_message_id) {
+                    if let Ok(items) = self
+                        .telegram
+                        .resolve_private_media(chat, msg, &normalized)
+                        .await
+                    {
+                        if let Some(refined) = items.into_iter().next() {
+                            return Ok(telegram_item_to_probe(&refined, &normalized));
+                        }
+                    }
+                }
+                return Ok(telegram_item_to_probe(&item, &normalized));
+            }
+            return Ok(telegram_item_to_probe(&item, &normalized));
+        }
         let client = build_client()?;
-        jyroxa_core::probe_url(&client, url, std::time::Duration::from_secs(10)).await
+        jyroxa_core::probe_url(&client, &normalized, std::time::Duration::from_secs(10)).await
+    }
+
+    pub fn telegram(&self) -> Arc<jyroxa_core::TelegramClientPool> {
+        Arc::clone(&self.telegram)
     }
 
     pub async fn pause_many(&self, app: AppHandle, ids: &[u64]) -> usize {
@@ -603,9 +632,30 @@ impl DesktopEngine {
         out
     }
 
-    pub async fn add_download(&self, app: AppHandle, args: AddDownloadArgs) -> CoreResult<u64> {
+    pub async fn add_download(&self, app: AppHandle, mut args: AddDownloadArgs) -> CoreResult<u64> {
         if args.urls.is_empty() {
             return Err(jyroxa_core::Error::other("at least one URL required"));
+        }
+        let first = normalize_user_url(&args.urls[0]);
+        if jyroxa_core::is_telegram_post_url(&first) {
+            let client = build_client()?;
+            let items = jyroxa_core::resolve_post(&client, &first).await
+                .map_err(|e| jyroxa_core::Error::other(e.to_string()))?;
+            let item = items
+                .into_iter()
+                .next()
+                .ok_or_else(|| jyroxa_core::Error::other("no media in telegram post"))?;
+            if item.needs_login {
+                args.urls = vec![first];
+                if args.filename.is_empty() {
+                    args.filename = item.filename;
+                }
+            } else {
+                args.urls = vec![item.download_url];
+                if args.filename.is_empty() {
+                    args.filename = item.filename;
+                }
+            }
         }
         let settings = self.settings.lock().await.clone();
         let id = self.next_id.fetch_add(1, Ordering::Relaxed);
@@ -751,8 +801,32 @@ impl DesktopEngine {
             // Snapshot the downloader so the read lock is not held for the whole
             // transfer; set_settings needs the write lock and would otherwise hang
             // until every running download finished.
-            let dl = downloader.read().await.clone();
-            let result = dl.download(request, Some(tx), control.clone(), None).await;
+            let telegram_private = request.urls.first().and_then(|u| {
+                jyroxa_core::parse_telegram_link(u).ok().and_then(|p| match p {
+                    jyroxa_core::TelegramPostRef::Private {
+                        chat_id,
+                        message_id,
+                        ..
+                    } => Some((chat_id, message_id)),
+                    _ => None,
+                })
+            });
+
+            let result = if let Some((chat_id, message_id)) = telegram_private {
+                engine
+                    .run_telegram_mtproto_download(
+                        chat_id,
+                        message_id,
+                        &request.output,
+                        &tx,
+                        control.clone(),
+                    )
+                    .await
+            } else {
+                let dl = downloader.read().await.clone();
+                dl.download(request, Some(tx), control.clone(), None)
+                    .await
+            };
 
             let _ = consumer.await;
 
@@ -995,6 +1069,56 @@ impl DesktopEngine {
         out
     }
 
+    async fn run_telegram_mtproto_download(
+        &self,
+        chat_id: i64,
+        message_id: u32,
+        output: &Path,
+        tx: &jyroxa_core::events::EventSender,
+        control: Control,
+    ) -> CoreResult<jyroxa_core::DownloadOutcome> {
+        use jyroxa_core::events::ProgressEvent;
+        use std::time::Instant;
+
+        if control.is_cancelled() {
+            return Err(jyroxa_core::Error::Cancelled);
+        }
+        let _ = tx.send(ProgressEvent::Progress {
+            downloaded: 0,
+            total: None,
+            speed_bps: 0.0,
+            connections: 1,
+            eta_secs: None,
+            avg_speed_bps: None,
+            elapsed_secs: None,
+            active_connections: Some(1),
+            status: Some("connecting".into()),
+            resumable: Some(true),
+            server: Some("Telegram".into()),
+            protocol: Some("MTProto".into()),
+            segments: None,
+        });
+        let started = Instant::now();
+        let size = self
+            .telegram
+            .download_private_media(chat_id, message_id, output)
+            .await
+            .map_err(|e| jyroxa_core::Error::other(e.to_string()))?;
+        let elapsed = started.elapsed();
+        let _ = tx.send(ProgressEvent::Completed {
+            total_size: size,
+            average_bps: size as f64 / elapsed.as_secs_f64().max(0.001),
+            elapsed_secs: elapsed.as_secs_f64(),
+        });
+        Ok(jyroxa_core::DownloadOutcome {
+            output: output.to_path_buf(),
+            total_size: size,
+            elapsed,
+            average_bps: size as f64 / elapsed.as_secs_f64().max(0.001),
+            connections_used: 1,
+            resumed: false,
+        })
+    }
 }
 
 /// Whether a download is auto-tuned. A per-download manual connection count
@@ -1088,6 +1212,38 @@ async fn apply_event(items: &Mutex<HashMap<u64, InnerItem>>, id: u64, ev: &Progr
     }
 }
 
+fn normalize_user_url(url: &str) -> String {
+    let trimmed = url.trim();
+    if trimmed.starts_with("http://") || trimmed.starts_with("https://") {
+        trimmed.to_string()
+    } else if trimmed.starts_with("t.me/") || trimmed.starts_with("telegram.me/") {
+        format!("https://{trimmed}")
+    } else {
+        trimmed.to_string()
+    }
+}
+
+fn telegram_item_to_probe(
+    item: &jyroxa_core::TelegramMediaItem,
+    display_url: &str,
+) -> jyroxa_core::ProbeInfo {
+    let category = jyroxa_core::category_for(&item.filename, item.mime.as_deref());
+    jyroxa_core::ProbeInfo {
+        final_url: display_url.to_string(),
+        suggested_name: item.filename.clone(),
+        size: item.size,
+        mime: item.mime.clone(),
+        resumable: item.resumable,
+        category,
+        server: "Telegram".into(),
+        protocol: if item.needs_login {
+            "MTProto".into()
+        } else {
+            "HTTPS".into()
+        },
+    }
+}
+
 /// Shared Tauri state wrapper (async mutex).
 pub struct EngineState(pub Arc<DesktopEngine>);
 
@@ -1115,6 +1271,9 @@ pub async fn init_engine(app: &AppHandle) -> CoreResult<()> {
         .await
         .set_global_limit(settings.global_speed_limit);
     app.manage(EngineState(engine.clone()));
+    if let Err(e) = engine.telegram().bootstrap().await {
+        tracing::warn!("telegram session bootstrap: {e}");
+    }
     if engine.get_settings().await.auto_resume {
         engine.restore_queue(app.clone()).await?;
     }

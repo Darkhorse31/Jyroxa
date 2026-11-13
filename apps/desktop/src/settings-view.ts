@@ -1,5 +1,5 @@
 import { open } from "@tauri-apps/plugin-dialog";
-import { api, type AppSettings } from "./api";
+import { api, type AppSettings, type TelegramAccountView } from "./api";
 import { APP_NAME } from "./brand";
 import { icons } from "./icons";
 import { requestNotificationPermission, showToast } from "./toast";
@@ -10,7 +10,8 @@ export type SettingsTab =
   | "speed"
   | "scheduler"
   | "clipboard"
-  | "theme";
+  | "theme"
+  | "telegram";
 
 export class SettingsView {
   private container: HTMLElement;
@@ -67,6 +68,10 @@ export class SettingsView {
         <button type="button" class="settings-tab-btn ${this.activeTab === "theme" ? "active" : ""}" data-tab="theme" role="tab">
           ${icons.sun(14)}
           <span>Theme</span>
+        </button>
+        <button type="button" class="settings-tab-btn ${this.activeTab === "telegram" ? "active" : ""}" data-tab="telegram" role="tab">
+          ${icons.clipboard(14)}
+          <span>Telegram</span>
         </button>
       </div>
 
@@ -402,6 +407,46 @@ export class SettingsView {
             </div>
           </div>
         </div>
+
+        <div class="settings-section ${this.activeTab === "telegram" ? "" : "hidden"}" id="sec-telegram">
+          <div class="settings-card">
+            <h4 class="settings-group-title">Telegram</h4>
+            <p class="setting-desc">
+              Public <code>t.me/channel/id</code> posts download without login. Private <code>t.me/c/…</code> posts use your own account (API credentials from <a href="https://my.telegram.org" target="_blank" rel="noreferrer">my.telegram.org</a>).
+            </p>
+            <p id="tg-status-line" class="setting-desc">Checking connection…</p>
+
+            <div class="setting-item">
+              <label class="setting-title" for="tg-api-id">API ID</label>
+              <input type="number" id="tg-api-id" class="form-input" placeholder="12345678" />
+            </div>
+            <div class="setting-item">
+              <label class="setting-title" for="tg-api-hash">API hash</label>
+              <input type="text" id="tg-api-hash" class="form-input" placeholder="0123456789abcdef0123456789abcdef" />
+            </div>
+            <button type="button" id="tg-save-creds" class="btn secondary">Save API credentials</button>
+
+            <div class="setting-item">
+              <label class="setting-title" for="tg-phone">Phone (international)</label>
+              <input type="text" id="tg-phone" class="form-input" placeholder="+1234567890" />
+            </div>
+            <button type="button" id="tg-send-code" class="btn secondary">Send login code</button>
+
+            <div class="setting-item">
+              <label class="setting-title" for="tg-code">Login code</label>
+              <input type="text" id="tg-code" class="form-input" placeholder="12345" />
+            </div>
+            <button type="button" id="tg-verify-code" class="btn secondary">Verify code</button>
+
+            <div class="setting-item">
+              <label class="setting-title" for="tg-password">2FA password (if enabled)</label>
+              <input type="password" id="tg-password" class="form-input" />
+            </div>
+            <button type="button" id="tg-verify-password" class="btn secondary">Submit 2FA password</button>
+
+            <button type="button" id="tg-sign-out" class="btn danger" style="margin-top: 12px;">Sign out</button>
+          </div>
+        </div>
       </div>
 
       <div class="settings-footer">
@@ -412,6 +457,33 @@ export class SettingsView {
     `;
 
     this.wireListeners();
+    if (this.activeTab === "telegram") {
+      void this.refreshTelegramStatus();
+    }
+  }
+
+  private async refreshTelegramStatus() {
+    const line = this.container.querySelector("#tg-status-line");
+    if (!line) return;
+    try {
+      const st: TelegramAccountView = await api.telegramStatus();
+      if (st.connected) {
+        const who = st.display_name || st.phone || "Connected";
+        line.textContent = `Connected as ${who}`;
+      } else {
+        line.textContent = "Not connected — required for private t.me/c/… links only.";
+      }
+      if (st.api_id) {
+        const apiId = this.container.querySelector("#tg-api-id") as HTMLInputElement;
+        if (apiId && !apiId.value) apiId.value = String(st.api_id);
+      }
+      if (st.phone) {
+        const phone = this.container.querySelector("#tg-phone") as HTMLInputElement;
+        if (phone && !phone.value) phone.value = st.phone;
+      }
+    } catch (e) {
+      line.textContent = `Telegram status error: ${e}`;
+    }
   }
 
   private wireListeners() {
@@ -478,6 +550,76 @@ export class SettingsView {
     // Save button
     const saveBtn = this.container.querySelector("#btn-save-settings") as HTMLButtonElement;
     saveBtn?.addEventListener("click", () => this.handleSave());
+
+    const tgSaveCreds = this.container.querySelector("#tg-save-creds");
+    tgSaveCreds?.addEventListener("click", async () => {
+      const apiId = Number((this.container.querySelector("#tg-api-id") as HTMLInputElement)?.value);
+      const apiHash = (this.container.querySelector("#tg-api-hash") as HTMLInputElement)?.value.trim();
+      if (!apiId || !apiHash) {
+        showToast("Enter API ID and API hash from my.telegram.org");
+        return;
+      }
+      try {
+        await api.telegramSetCredentials(apiId, apiHash);
+        showToast("Telegram API credentials saved");
+      } catch (e) {
+        showToast(`Failed: ${e}`);
+      }
+    });
+
+    this.container.querySelector("#tg-send-code")?.addEventListener("click", async () => {
+      const phone = (this.container.querySelector("#tg-phone") as HTMLInputElement)?.value.trim();
+      if (!phone) {
+        showToast("Enter phone number with country code");
+        return;
+      }
+      try {
+        const step = await api.telegramBeginLogin(phone);
+        showToast(`Telegram: ${JSON.stringify(step)}`);
+      } catch (e) {
+        showToast(`Login failed: ${e}`);
+      }
+    });
+
+    this.container.querySelector("#tg-verify-code")?.addEventListener("click", async () => {
+      const code = (this.container.querySelector("#tg-code") as HTMLInputElement)?.value.trim();
+      if (!code) {
+        showToast("Enter the SMS/Telegram code");
+        return;
+      }
+      try {
+        const step = await api.telegramSubmitCode(code);
+        showToast(`Telegram: ${JSON.stringify(step)}`);
+        await this.refreshTelegramStatus();
+      } catch (e) {
+        showToast(`Code rejected: ${e}`);
+      }
+    });
+
+    this.container.querySelector("#tg-verify-password")?.addEventListener("click", async () => {
+      const password = (this.container.querySelector("#tg-password") as HTMLInputElement)?.value;
+      if (!password) {
+        showToast("Enter your 2FA password");
+        return;
+      }
+      try {
+        const step = await api.telegramSubmitPassword(password);
+        showToast(`Telegram: ${JSON.stringify(step)}`);
+        await this.refreshTelegramStatus();
+      } catch (e) {
+        showToast(`2FA failed: ${e}`);
+      }
+    });
+
+    this.container.querySelector("#tg-sign-out")?.addEventListener("click", async () => {
+      try {
+        await api.telegramSignOut();
+        showToast("Signed out of Telegram");
+        await this.refreshTelegramStatus();
+      } catch (e) {
+        showToast(`Sign out failed: ${e}`);
+      }
+    });
   }
 
   private async handleSave() {
