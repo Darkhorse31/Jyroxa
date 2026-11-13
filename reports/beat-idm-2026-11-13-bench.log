@@ -1,0 +1,17 @@
+
+=== https://sin-speed.hetzner.com/100MB.bin ===
+Jyroxa benchmark for https://sin-speed.hetzner.com/100MB.bin
+
+  autotune (16 max)     : min    13.33  median    21.60  max    21.79 MB/s  (ended 8 conn)
+  8 connection(s)       : min     1.24  median     2.73  max     3.68 MB/s  (ended 8 conn)
+  16 connection(s)      : min     1.32  median     1.41  max     1.52 MB/s  (ended 16 conn)
+=== https://fsn1-speed.hetzner.com/100MB.bin ===
+Jyroxa benchmark for https://fsn1-speed.hetzner.com/100MB.bin
+
+  autotune (16 max)     : min    10.25  median    10.37  max    11.81 MB/s  (ended 8 conn)
+  8 connection(s)       : min     1.86  median     2.30  max     4.15 MB/s  (ended 8 conn)
+  16 connection(s)      : min     1.13  median     1.15  max     1.21 MB/s  (ended 16 conn)
+=== https://proof.ovh.net/files/100Mb.dat ===
+Jyroxa benchmark for https://proof.ovh.net/files/100Mb.dat
+
+  autotune (16 max)     : min     0.18  median     2.55  max     2.99 MB/s  (ended 8 conn)

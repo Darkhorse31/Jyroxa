@@ -1,0 +1,36 @@
+
+> jyroxa-desktop@0.1.3 tauri
+> tauri build --ci
+
+        Info Looking up installed tauri packages to check mismatched versions...
+        Warn The bundle identifier "com.jyroxa.app" set in `"tauri.conf.json" identifier` ends with `.app`. This is not recommended because it conflicts with the application bundle extension on macOS.
+     Running beforeBuildCommand `npm run build`
+
+> jyroxa-desktop@0.1.3 build
+> npm run check && tsc && vite build
+
+
+> jyroxa-desktop@0.1.3 check
+> node scripts/check-contract.mjs
+
+Contract OK (20 commands, 19 invoke sites, 12 TS files)
+vite v6.4.6 building for production...
+transforming...
+✓ 23 modules transformed.
+rendering chunks...
+computing gzip size...
+dist/assets/logo-Cq1MGl1z.svg     1.17 kB │ gzip:  0.38 kB
+dist/index.html                  44.27 kB │ gzip:  6.38 kB
+dist/assets/index-D5lcXIlT.css   40.08 kB │ gzip:  7.65 kB
+dist/assets/app-DJ9RV5N5.js       1.85 kB │ gzip:  0.72 kB
+dist/assets/index-aAZFORMB.js   105.54 kB │ gzip: 26.57 kB
+✓ built in 438ms
+   Compiling jyroxa-desktop v0.1.3 (C:\Users\lenovo\Desktop\Jyroxa\apps\desktop\src-tauri)
+   Compiling jyroxa-core v0.1.3 (C:\Users\lenovo\Desktop\Jyroxa\crates\jyroxa-core)
+    Finished `release` profile [optimized] target(s) in 9m 50s
+       Built application at: C:\Users\lenovo\Desktop\Jyroxa\target\release\jyroxa-desktop.exe
+        Info Patching C:\Users\lenovo\Desktop\Jyroxa\target\release\jyroxa-desktop.exe with bundle type information: nsis
+        Info Target: x64
+     Running makensis to produce C:\Users\lenovo\Desktop\Jyroxa\target\release\bundle\nsis\Jyroxa_0.1.3_x64-setup.exe
+    Finished 1 bundle at:
+        C:\Users\lenovo\Desktop\Jyroxa\target\release\bundle\nsis\Jyroxa_0.1.3_x64-setup.exe (3.65 MiB)

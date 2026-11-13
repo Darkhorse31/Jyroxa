@@ -374,7 +374,7 @@ fun SettingsScreen(
             val appName = stringResource(R.string.app_name)
             SettingsSectionCard(title = "About $appName", icon = Icons.Default.Info) {
                 Text(
-                    text = "$appName for Android v0.1.1",
+                    text = "$appName for Android v0.1.3",
                     style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.Bold)
                 )
                 Text(
