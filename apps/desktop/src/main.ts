@@ -27,14 +27,13 @@ import { dispatchSystemNotification, showToast } from "./toast";
 
 const THEME_KEY = "jyroxa-theme";
 
-// Theme Controller
 function getInitialTheme(): "dark" | "light" {
   const saved = localStorage.getItem(THEME_KEY) || localStorage.getItem("swiftget-theme");
   if (saved === "light" || saved === "dark") return saved;
-  if (window.matchMedia && window.matchMedia("(prefers-color-scheme: light)").matches) {
-    return "light";
+  if (window.matchMedia && window.matchMedia("(prefers-color-scheme: dark)").matches) {
+    return "dark";
   }
-  return "dark";
+  return "light";
 }
 
 function setTheme(theme: "dark" | "light", graph?: SpeedGraph) {
@@ -46,12 +45,11 @@ function setTheme(theme: "dark" | "light", graph?: SpeedGraph) {
 }
 
 function toggleTheme(graph: SpeedGraph) {
-  const current = document.body.getAttribute("data-theme") === "light" ? "light" : "dark";
+  const current = document.body.getAttribute("data-theme") === "dark" ? "dark" : "light";
   const next = current === "dark" ? "light" : "dark";
   setTheme(next, graph);
 }
 
-// App Entry Point
 async function boot() {
   // Set window & brand titles
   document.title = APP_NAME;
