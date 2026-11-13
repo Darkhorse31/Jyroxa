@@ -248,6 +248,27 @@ pub fn extract_page_links(base: Option<&Url>, html: &str) -> (Vec<String>, Vec<S
 }
 
 /// `{host}`, `${x}`, `{{x}}` and their percent-encoded forms.
+/// File URLs written as plain text in an HTML page, ignoring anything inside
+/// tags, comments, `<script>`, `<style>`, `<noscript>` and `<template>`.
+fn visible_text_urls(html: &str) -> Vec<String> {
+    static BLOCKS: OnceLock<Regex> = OnceLock::new();
+    static TAGS: OnceLock<Regex> = OnceLock::new();
+    let blocks = BLOCKS.get_or_init(|| {
+        Regex::new(r"(?is)<!--.*?-->|<script\b.*?</script\s*>|<style\b.*?</style\s*>|<noscript\b.*?</noscript\s*>|<template\b.*?</template\s*>").unwrap()
+    });
+    let tags = TAGS.get_or_init(|| Regex::new(r"(?s)<[^>]*>").unwrap());
+    let without_blocks = blocks.replace_all(html, " ");
+    let text = tags.replace_all(&without_blocks, " ");
+    let mut out: Vec<String> = Vec::new();
+    for m in bare_re().find_iter(&text) {
+        let l = m.as_str().replace("&amp;", "&");
+        if !is_template_placeholder(&l) && !out.contains(&l) {
+            out.push(l);
+        }
+    }
+    out
+}
+
 fn is_template_placeholder(raw: &str) -> bool {
     raw.contains('{')
         || raw.contains('}')
@@ -312,10 +333,11 @@ impl LinkGrabber {
 
         let mut links = if is_page {
             let (mut links, fragments) = extract_page_links(base.as_ref(), &text);
-            // Bare file URLs in the page text (e.g. listed in a <pre> block).
-            for l in bare_re().find_iter(&text) {
-                let l = l.as_str().to_string();
-                if !is_template_placeholder(&l) && !links.contains(&l) {
+            // Bare file URLs in the page's visible text (e.g. listed in a
+            // <pre> block). URLs inside tags, scripts and styles are page
+            // decoration (icons, og:image, inline JSON), not offered files.
+            for l in visible_text_urls(&text) {
+                if !links.contains(&l) {
                     links.push(l);
                 }
             }
@@ -369,6 +391,7 @@ impl LinkGrabber {
             }
         }
 
+        let mut extensionless_links: HashSet<String> = HashSet::new();
         if is_page {
             // A page crawl lists files, not the page's own styles, scripts, fonts
             // or links to other pages (`deep` has already followed those).
@@ -376,6 +399,7 @@ impl LinkGrabber {
             // `Content-Disposition: attachment`), so a bounded number of them is
             // probed and kept only if they turn out not to be HTML.
             let mut extensionless = 0usize;
+            let probed_extensionless = &mut extensionless_links;
             links.retain(|l| {
                 if l == input {
                     return true;
@@ -390,7 +414,11 @@ impl LinkGrabber {
                     return false;
                 }
                 extensionless += 1;
-                extensionless <= MAX_EXTENSIONLESS_PROBES
+                let keep = extensionless <= MAX_EXTENSIONLESS_PROBES;
+                if keep {
+                    probed_extensionless.insert(l.clone());
+                }
+                keep
             });
         }
 
@@ -415,6 +443,9 @@ impl LinkGrabber {
             .into_iter()
             .filter(|i| self.passes_size_filters(i, opts))
             .filter(|i| !(is_page && is_html_mime(i.mime.as_deref())))
+            // An extensionless page link is only a download if the probe
+            // confirmed it; unreachable ones (HEAD refused, 404) are dropped.
+            .filter(|i| !(extensionless_links.contains(&i.url) && i.mime.is_none() && i.size.is_none()))
             .collect();
 
         Ok(group_packages(infos))
@@ -713,6 +744,27 @@ mod tests {
             ]
         );
         assert!(frags.is_empty());
+    }
+
+    #[test]
+    fn bare_urls_only_from_visible_text() {
+        let html = r#"
+            <link rel="icon" href="https://assets.test/favicon.png">
+            <meta property="og:image" content="https://cdn.test/og-image.png">
+            <picture><img srcset="https://assets.test/hero.png 1x"></picture>
+            <script type="application/json">{"u":"https://assets.test/data.zip"}</script>
+            <style>body{background:url(https://assets.test/bg.png)}</style>
+            <!-- https://old.test/gone.zip -->
+            <pre>https://mirror.test/pub/tool-1.0.tar.gz
+https://mirror.test/pub/tool-1.0.zip</pre>
+        "#;
+        assert_eq!(
+            visible_text_urls(html),
+            vec![
+                "https://mirror.test/pub/tool-1.0.tar.gz".to_string(),
+                "https://mirror.test/pub/tool-1.0.zip".to_string(),
+            ]
+        );
     }
 
     #[test]
