@@ -6,11 +6,9 @@ use std::path::{Path, PathBuf};
 use jyroxa_native_host::handoff::{handoff_to_headers, BrowserHandoff, PipeEnvelope, PipeMessage};
 use jyroxa_native_host::{NATIVE_HOST_NAME, HANDOFF_PIPE_NAME};
 use serde::{Deserialize, Serialize};
-use tauri::{AppHandle, Emitter};
+use tauri::{AppHandle, Emitter, Manager};
 
-use crate::engine::{
-    AddDownloadArgs, AppSettings, BrowserIntegrationSettings, EngineState,
-};
+use crate::engine::{AddDownloadArgs, BrowserIntegrationSettings, EngineState};
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct BrowserIntegrationStatus {

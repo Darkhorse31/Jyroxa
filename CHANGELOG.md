@@ -1,5 +1,27 @@
 # Changelog
 
+## 0.1.4 — 2026-11-13
+
+### Desktop UI
+
+- New square, flat design (design/v2): denser task list, slim navigation, thin progress lines, and refined light/dark themes.
+- Settings reorganized into tabs with consistent cards and thin borders.
+
+### Browser integration
+
+- WebExtension for Chrome, Edge, and Firefox intercepts downloads and forwards them to the desktop app via native messaging.
+- Settings → Browser tab: enable integration, file-type filters, extension IDs, and one-click native host install.
+- Release bundles `jyroxa-native-host.exe` beside the desktop app and in the portable ZIP; `dist/jyroxa-browser-extension.zip` ships the unpacked extension.
+
+### Engine (unchanged from 0.1.3 speed work)
+
+- Adaptive auto mode, benchmark showcase in README, and v0.1.3 throughput improvements remain on this branch.
+
+### Distribution
+
+- Workspace, desktop, and Android version 0.1.4; Android versionCode 5.
+- Windows NSIS installer, portable ZIP (with native host), browser extension ZIP, signed Android universal APK, and SHA-256 checksums.
+
 ## 0.1.3 — 2026-11-13
 
 ### Speed

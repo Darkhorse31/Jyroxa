@@ -113,6 +113,7 @@ fn start_impl(urls: Vec<String>, output: String, connections: usize) -> i64 {
                 sha256: None,
                 md5: None,
                 autotune: true,
+                extra_headers: None,
             };
             match engine.download(req, Some(tx), control, None).await {
                 Ok(_) => {

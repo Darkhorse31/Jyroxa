@@ -15,7 +15,7 @@ default-members = [
 # apps/desktop (Tauri) lives under apps/desktop; build separately (see docs/BUILD_WINDOWS_GNU.md).
 
 [workspace.package]
-version = "0.1.3"
+version = "0.1.4"
 edition = "2021"
 license = "MIT"
 authors = ["Prateek Kumar"]
