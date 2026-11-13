@@ -26,6 +26,7 @@ import { SpeedGraph } from "./speed-graph";
 import { dispatchSystemNotification, showToast } from "./toast";
 
 const THEME_KEY = "jyroxa-theme";
+let pendingBrowserHeaders: Record<string, string> | undefined;
 
 // Theme Controller
 function getInitialTheme(): "dark" | "light" {
@@ -479,10 +480,12 @@ async function boot() {
       connections_auto,
       sha256,
       md5,
+      http_headers: pendingBrowserHeaders,
     };
 
     try {
       await api.addDownload(args);
+      pendingBrowserHeaders = undefined;
       dlgAdd.close();
       showToast(`Download queued: ${filename}`);
       await downloadManager.reload();
@@ -684,6 +687,36 @@ async function boot() {
     if (isSelfCopied(ev.payload) || dlgClip.open) return;
     clipTextEl.textContent = ev.payload;
     dlgClip.showModal();
+  });
+
+  await listen<string>("external-url", (ev) => {
+    openAddModal(ev.payload);
+  });
+
+  await listen<{
+    url: string;
+    filename?: string;
+    referrer?: string;
+    cookies?: string;
+    user_agent?: string;
+  }>("browser-handoff", (ev) => {
+    const p = ev.payload;
+    openAddModal(p.url);
+    if (p.filename) {
+      addFilenameInput.value = p.filename;
+      filenameUserEdited = true;
+    }
+    pendingBrowserHeaders = {
+      ...(p.user_agent ? { "User-Agent": p.user_agent } : {}),
+      ...(p.referrer ? { Referer: p.referrer } : {}),
+      ...(p.cookies ? { Cookie: p.cookies } : {}),
+    };
+  });
+
+  await listen<{ html: string; page_url: string }>("browser-link-grabber", (ev) => {
+    setDrawer("grabber");
+    const seed = ev.payload.html?.trim() || ev.payload.page_url || "";
+    linkGrabberView.setInputUrl(seed);
   });
 }
 

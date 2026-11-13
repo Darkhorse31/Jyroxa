@@ -1,0 +1,24 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Jyroxa</title>
+    <link rel="stylesheet" href="popup.css" />
+  </head>
+  <body>
+  <header class="hdr">
+      <img src="icons/icon-32.png" width="32" height="32" alt="" />
+      <div>
+        <strong>Jyroxa</strong>
+        <p id="status-text" class="muted">Checking…</p>
+      </div>
+    </header>
+    <label class="row">
+      <span>Capture downloads</span>
+      <input type="checkbox" id="toggle-enabled" checked />
+    </label>
+    <button type="button" id="btn-refresh" class="btn">Refresh connection</button>
+    <script type="module" src="popup.js"></script>
+  </body>
+</html>

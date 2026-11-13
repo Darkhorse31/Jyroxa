@@ -4,6 +4,7 @@ members = [
     "crates/jyroxa-core",
     "crates/jyroxa-cli",
     "crates/jyroxa-ffi",
+    "crates/jyroxa-native-host",
     "apps/desktop/src-tauri",
 ]
 default-members = [

@@ -2414,6 +2414,7 @@ name = "jyroxa-desktop"
 version = "0.1.2"
 dependencies = [
  "jyroxa-core",
+ "jyroxa-native-host",
  "regex",
  "serde",
  "serde_json",
@@ -2437,6 +2438,16 @@ dependencies = [
  "jyroxa-core",
  "once_cell",
  "serde_json",
+ "tokio",
+]
+
+[[package]]
+name = "jyroxa-native-host"
+version = "0.1.2"
+dependencies = [
+ "serde",
+ "serde_json",
+ "thiserror 1.0.69",
  "tokio",
 ]
 
