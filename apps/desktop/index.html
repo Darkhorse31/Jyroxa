@@ -5,6 +5,23 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>Jyroxa</title>
     <link rel="icon" type="image/svg+xml" href="/src/assets/logo.svg" />
+    <script>
+      (function () {
+        try {
+          var k = "jyroxa-theme";
+          var s = localStorage.getItem(k) || localStorage.getItem("swiftget-theme");
+          var t =
+            s === "dark"
+              ? "dark"
+              : s === "light"
+                ? "light"
+                : window.matchMedia && window.matchMedia("(prefers-color-scheme: dark)").matches
+                  ? "dark"
+                  : "light";
+          document.documentElement.setAttribute("data-theme", t);
+        } catch (_) {}
+      })();
+    </script>
     <link rel="stylesheet" href="/src/styles.css" />
   </head>
   <body data-theme="light">

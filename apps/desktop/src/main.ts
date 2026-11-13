@@ -27,7 +27,8 @@ import { dispatchSystemNotification, showToast } from "./toast";
 
 const THEME_KEY = "jyroxa-theme";
 
-function getInitialTheme(): "dark" | "light" {
+function resolveTheme(settingsPref?: string): "dark" | "light" {
+  if (settingsPref === "light" || settingsPref === "dark") return settingsPref;
   const saved = localStorage.getItem(THEME_KEY) || localStorage.getItem("swiftget-theme");
   if (saved === "light" || saved === "dark") return saved;
   if (window.matchMedia && window.matchMedia("(prefers-color-scheme: dark)").matches) {
@@ -37,6 +38,7 @@ function getInitialTheme(): "dark" | "light" {
 }
 
 function setTheme(theme: "dark" | "light", graph?: SpeedGraph) {
+  document.documentElement.setAttribute("data-theme", theme);
   document.body.setAttribute("data-theme", theme);
   localStorage.setItem(THEME_KEY, theme);
   if (graph) {
@@ -138,7 +140,7 @@ async function boot() {
 
   // Initialize Speed Graph & Theme
   const graph = new SpeedGraph(speedGraphCanvas);
-  setTheme(getInitialTheme(), graph);
+  setTheme(resolveTheme(), graph);
 
   if (window.matchMedia) {
     window.matchMedia("(prefers-color-scheme: light)").addEventListener("change", (e) => {
@@ -176,6 +178,7 @@ async function boot() {
     if (!folderUserEdited) {
       addFolderInput.value = updated.download_dir || updated.default_folder || "";
     }
+    setTheme(resolveTheme(updated.theme), graph);
   });
 
   // Load Settings and Default Category Dirs
@@ -195,6 +198,7 @@ async function boot() {
     }
 
     addFolderInput.value = currentSettings.download_dir || currentSettings.default_folder || "";
+    setTheme(resolveTheme(currentSettings.theme), graph);
   } catch (err) {
     console.error("Failed to load settings:", err);
   }
