@@ -10,6 +10,12 @@ rust-version.workspace = true
 
 [features]
 default = []
+telegram = [
+    "dep:grammers-client",
+    "dep:grammers-mtsender",
+    "dep:grammers-session",
+    "dep:windows",
+]
 # HTTP/3 (QUIC) support is optional and off by default. Enabling it requires a
 # reqwest build with the unstable `http3` feature (RUSTFLAGS="--cfg reqwest_unstable").
 # The flag is wired through so UIs can advertise the capability; the engine falls
@@ -30,6 +36,13 @@ md-5 = { workspace = true }
 hex = { workspace = true }
 bytes = { workspace = true }
 tracing = { workspace = true }
+grammers-client = { version = "0.12", optional = true, default-features = false, features = ["fs"] }
+grammers-mtsender = { version = "0.12", optional = true }
+grammers-session = { version = "0.12", optional = true, default-features = false, features = ["serde"] }
+windows = { version = "0.58", optional = true, features = [
+    "Win32_Security_Cryptography",
+    "Win32_Foundation",
+] }
 
 [target.'cfg(target_os = "android")'.dependencies]
 # NDK builds: no system OpenSSL; pure-Rust TLS (ring builds with cargo-ndk's clang).

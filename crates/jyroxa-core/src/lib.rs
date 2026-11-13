@@ -23,6 +23,9 @@ pub mod state;
 pub mod trace;
 pub mod tuner;
 
+#[cfg(feature = "telegram")]
+pub mod telegram;
+
 pub use download::{
     Control, DownloadConfig, DownloadOutcome, DownloadRequest, Downloader, RefreshFn,
 };
@@ -36,6 +39,13 @@ pub use probe::{probe_url, ProbeInfo};
 pub use queue::{QueueConfig, Scheduler, TaskId, TaskPriority, TaskSpec};
 pub use state::{DownloadState, SegmentState};
 pub use tuner::{parse_retry_after, Tuner, TunerInput, TunerOutput};
+
+#[cfg(feature = "telegram")]
+pub use telegram::{
+    extract_telegram_urls, is_telegram_post_url, parse_telegram_link, probe_post, resolve_post,
+    TelegramAccountView, TelegramClientPool, TelegramError, TelegramLoginStep, TelegramMediaItem,
+    TelegramPostRef,
+};
 
 /// Hard upper bound on the number of simultaneous connections for a single
 /// download, matching the capability advertised to users.
