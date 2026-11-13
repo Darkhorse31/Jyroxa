@@ -1,6 +1,10 @@
 use std::path::PathBuf;
 use tauri::{AppHandle, State};
 
+use crate::browser_integration::{
+    install_browser_integration, integration_status, uninstall_browser_integration,
+    BrowserIntegrationStatus,
+};
 use crate::engine::{AddDownloadArgs, AppSettings, DownloadView, EngineState, GrabOptionsDto};
 use crate::platform::reveal_in_file_manager;
 use tauri_plugin_opener::OpenerExt;
@@ -176,6 +180,28 @@ pub async fn open_folder_cmd(
     let settings = state.0.get_settings().await;
     let fallback = settings.download_dir;
     reveal_in_file_manager(PathBuf::from(&path).as_path(), Some(fallback.as_str()))
+}
+
+#[tauri::command]
+pub async fn get_browser_integration_status(
+    _state: State<'_, EngineState>,
+) -> Result<BrowserIntegrationStatus, String> {
+    let exe = std::env::current_exe().map_err(|e| e.to_string())?;
+    Ok(integration_status(&exe))
+}
+
+#[tauri::command]
+pub async fn install_browser_integration_cmd(
+    state: State<'_, EngineState>,
+) -> Result<(), String> {
+    let settings = state.0.get_settings().await;
+    let exe = std::env::current_exe().map_err(|e| e.to_string())?;
+    install_browser_integration(&exe, &settings.browser_integration)
+}
+
+#[tauri::command]
+pub async fn uninstall_browser_integration_cmd() -> Result<(), String> {
+    uninstall_browser_integration()
 }
 
 #[tauri::command]

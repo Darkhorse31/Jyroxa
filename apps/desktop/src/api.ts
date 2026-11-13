@@ -67,6 +67,35 @@ export interface AppSettings {
   scheduler_start?: string | null;
   scheduler_stop?: string | null;
   scheduler_days: number[];
+  browser_integration: BrowserIntegrationSettings;
+}
+
+export interface BrowserFileTypes {
+  archives: boolean;
+  programs: boolean;
+  video: boolean;
+  audio: boolean;
+  documents: boolean;
+  iso: boolean;
+}
+
+export interface BrowserIntegrationSettings {
+  enabled: boolean;
+  min_size_bytes: number;
+  file_types: BrowserFileTypes;
+  silent_add: boolean;
+  disabled_hosts: string[];
+  chrome_extension_id: string;
+  edge_extension_id: string;
+}
+
+export interface BrowserIntegrationStatus {
+  token_present: boolean;
+  host_manifest_present: boolean;
+  chrome_registry: boolean;
+  edge_registry: boolean;
+  firefox_registry: boolean;
+  native_host_installed: boolean;
 }
 
 export interface AddDownloadArgs {
@@ -77,6 +106,7 @@ export interface AddDownloadArgs {
   connections_auto: boolean;
   sha256?: string;
   md5?: string;
+  http_headers?: Record<string, string>;
 }
 
 export interface GrabOptionsDto {
@@ -183,6 +213,12 @@ export const api = {
     invoke<void>("open_folder_cmd", { path }),
   openFile: (path: string) =>
     invoke<void>("open_file", { path }),
+  getBrowserIntegrationStatus: () =>
+    invoke<BrowserIntegrationStatus>("get_browser_integration_status"),
+  installBrowserIntegration: () =>
+    invoke<void>("install_browser_integration_cmd"),
+  uninstallBrowserIntegration: () =>
+    invoke<void>("uninstall_browser_integration_cmd"),
 };
 
 export async function openFolder(filePath: string): Promise<boolean> {

@@ -185,6 +185,9 @@ impl Default for DownloadConfig {
     }
 }
 
+/// Optional per-download HTTP headers (e.g. Cookie / Referer from browser handoff).
+pub type ExtraHeaders = std::collections::HashMap<String, String>;
+
 /// A download request: one logical file, one or more mirror URLs.
 #[derive(Clone, Debug)]
 pub struct DownloadRequest {
@@ -196,6 +199,26 @@ pub struct DownloadRequest {
     pub sha256: Option<String>,
     pub md5: Option<String>,
     pub autotune: bool,
+    pub extra_headers: Option<ExtraHeaders>,
+}
+
+pub fn apply_extra_headers(
+    builder: reqwest::RequestBuilder,
+    headers: &Option<ExtraHeaders>,
+) -> reqwest::RequestBuilder {
+    let Some(map) = headers else {
+        return builder;
+    };
+    let mut b = builder;
+    for (k, v) in map {
+        if let (Ok(name), Ok(val)) = (
+            reqwest::header::HeaderName::from_bytes(k.as_bytes()),
+            reqwest::header::HeaderValue::from_str(v),
+        ) {
+            b = b.header(name, val);
+        }
+    }
+    b
 }
 
 impl DownloadRequest {
@@ -208,6 +231,7 @@ impl DownloadRequest {
             sha256: None,
             md5: None,
             autotune: true,
+            extra_headers: None,
         }
     }
     pub fn mirror(mut self, url: impl Into<String>) -> Self {
@@ -270,14 +294,24 @@ pub fn filename_from_url(u: &url::Url) -> Option<String> {
     crate::naming::filename_from_url_path(u).map(|s| crate::naming::sanitize_filename(&s))
 }
 
-async fn probe(client: &reqwest::Client, url: &str, timeout: Duration) -> Result<Meta> {
-    match probe_metadata(client, url, timeout).await {
+async fn probe(
+    client: &reqwest::Client,
+    url: &str,
+    timeout: Duration,
+    extra_headers: &Option<ExtraHeaders>,
+) -> Result<Meta> {
+    match probe_metadata(client, url, timeout, extra_headers).await {
         Ok(m) => Ok(m),
-        Err(_) => probe_streaming_fallback(client, url, timeout).await,
+        Err(_) => probe_streaming_fallback(client, url, timeout, extra_headers).await,
     }
 }
 
-async fn probe_metadata(client: &reqwest::Client, url: &str, timeout: Duration) -> Result<Meta> {
+async fn probe_metadata(
+    client: &reqwest::Client,
+    url: &str,
+    timeout: Duration,
+    extra_headers: &Option<ExtraHeaders>,
+) -> Result<Meta> {
     use reqwest::header as h;
     let mut meta = Meta {
         final_url: url.to_string(),
@@ -287,11 +321,12 @@ async fn probe_metadata(client: &reqwest::Client, url: &str, timeout: Duration) 
     // 1. HEAD for size / validators / filename.
     // Some servers never answer HEAD (the request just hangs); cap it so the
     // ranged GET below gets a turn instead of the task sitting at Starting.
-    if let Ok(resp) = client
-        .head(url)
-        .timeout(timeout.min(HEAD_TIMEOUT))
-        .send()
-        .await
+    if let Ok(resp) = apply_extra_headers(
+        client.head(url).timeout(timeout.min(HEAD_TIMEOUT)),
+        extra_headers,
+    )
+    .send()
+    .await
     {
         if resp.status().is_success() {
             let headers = resp.headers().clone();
@@ -319,12 +354,15 @@ async fn probe_metadata(client: &reqwest::Client, url: &str, timeout: Duration) 
 
     // 2. Confirm range support / size with a tiny ranged GET when needed.
     if !meta.supports_ranges || meta.size.is_none() {
-        let resp = client
-            .get(&meta.final_url)
-            .header(h::RANGE, "bytes=0-0")
-            .timeout(timeout)
-            .send()
-            .await?;
+        let resp = apply_extra_headers(
+            client
+                .get(&meta.final_url)
+                .header(h::RANGE, "bytes=0-0")
+                .timeout(timeout),
+            extra_headers,
+        )
+        .send()
+        .await?;
         let status = resp.status();
         let headers = resp.headers().clone();
         meta.final_url = resp.url().to_string();
@@ -369,9 +407,12 @@ async fn probe_streaming_fallback(
     client: &reqwest::Client,
     url: &str,
     timeout: Duration,
+    extra_headers: &Option<ExtraHeaders>,
 ) -> Result<Meta> {
     use reqwest::header as h;
-    let resp = client.get(url).timeout(timeout).send().await?;
+    let resp = apply_extra_headers(client.get(url).timeout(timeout), extra_headers)
+        .send()
+        .await?;
     if !resp.status().is_success() {
         return Err(Error::Status(resp.status().as_u16()));
     }
@@ -574,6 +615,7 @@ struct Ctx {
     range_fallback: AtomicBool,
     last_progress_emit: Mutex<Instant>,
     trace: Mutex<Trace>,
+    extra_headers: Option<ExtraHeaders>,
 }
 
 fn spawn_disk_writer(
@@ -721,7 +763,14 @@ impl Downloader {
                 if attempt > 0 {
                     tokio::time::sleep(backoff_delay(attempt)).await;
                 }
-                if let Ok(m) = probe(&self.client, u, self.config.request_timeout).await {
+                if let Ok(m) = probe(
+                    &self.client,
+                    u,
+                    self.config.request_timeout,
+                    &req.extra_headers,
+                )
+                .await
+                {
                     meta = Some(m);
                     break 'mirrors;
                 }
@@ -837,6 +886,7 @@ impl Downloader {
             range_fallback: AtomicBool::new(false),
             last_progress_emit: Mutex::new(Instant::now()),
             trace: Mutex::new(Trace::new()),
+            extra_headers: req.extra_headers.clone(),
         });
 
         ctx.emit(ProgressEvent::Started {
@@ -1040,6 +1090,7 @@ impl Downloader {
                     &control,
                     &mut ctrl_rx,
                     &events,
+                    &req.extra_headers,
                 )
                 .await
             {
@@ -1082,10 +1133,11 @@ impl Downloader {
         control: &Control,
         ctrl_rx: &mut watch::Receiver<Cmd>,
         events: &Option<EventSender>,
+        extra_headers: &Option<ExtraHeaders>,
     ) -> Result<u64> {
         use std::io::Write;
         let resp = loop {
-            let send_fut = self.client.get(url).send();
+            let send_fut = apply_extra_headers(self.client.get(url), extra_headers).send();
             break tokio::select! {
                 r = send_fut => r?,
                 changed = ctrl_rx.changed() => {
@@ -1341,7 +1393,10 @@ async fn run_segment(
         let url = ctx.pool.url_of(&mirror);
         let range = format!("bytes={}-{}", begin, end);
 
-        let req_builder = client.get(&url).header(reqwest::header::RANGE, range);
+        let req_builder = apply_extra_headers(
+            client.get(&url).header(reqwest::header::RANGE, range),
+            &ctx.extra_headers,
+        );
 
         let resp = tokio::select! {
             res = req_builder.send() => res,

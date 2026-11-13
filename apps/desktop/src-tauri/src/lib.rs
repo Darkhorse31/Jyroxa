@@ -1,3 +1,4 @@
+mod browser_integration;
 mod commands;
 mod engine;
 mod platform;
@@ -240,6 +241,10 @@ pub fn run() {
         .setup(move |app| {
             let handle = app.handle().clone();
             tauri::async_runtime::spawn(platform::run_single_instance_server(handle.clone()));
+            tauri::async_runtime::spawn(browser_integration::run_browser_handoff_server(
+                handle.clone(),
+            ));
+            let _ = browser_integration::ensure_browser_token();
             if let Some(url) = maybe_url.clone() {
                 let h = handle.clone();
                 tauri::async_runtime::spawn(async move {
@@ -366,6 +371,9 @@ pub fn run() {
             commands::default_category_dirs,
             commands::open_folder_cmd,
             commands::open_file,
+            commands::get_browser_integration_status,
+            commands::install_browser_integration_cmd,
+            commands::uninstall_browser_integration_cmd,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

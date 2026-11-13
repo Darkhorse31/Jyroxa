@@ -10,6 +10,7 @@ export type SettingsTab =
   | "speed"
   | "scheduler"
   | "clipboard"
+  | "browser"
   | "theme";
 
 export class SettingsView {
@@ -63,6 +64,10 @@ export class SettingsView {
         <button type="button" class="settings-tab-btn ${this.activeTab === "clipboard" ? "active" : ""}" data-tab="clipboard" role="tab">
           ${icons.clipboard(14)}
           <span>Clipboard</span>
+        </button>
+        <button type="button" class="settings-tab-btn ${this.activeTab === "browser" ? "active" : ""}" data-tab="browser" role="tab">
+          ${icons.link(14)}
+          <span>Browser</span>
         </button>
         <button type="button" class="settings-tab-btn ${this.activeTab === "theme" ? "active" : ""}" data-tab="theme" role="tab">
           ${icons.sun(14)}
@@ -370,6 +375,97 @@ export class SettingsView {
           </div>
         </div>
 
+        <!-- BROWSER INTEGRATION -->
+        <div class="settings-section ${this.activeTab === "browser" ? "" : "hidden"}" id="sec-browser">
+          <div class="settings-card">
+            <h4 class="settings-group-title">Browser integration</h4>
+            <p class="setting-desc">Catch downloads from Chrome, Edge, and Firefox via the Jyroxa extension.</p>
+
+            <div class="setting-item">
+              <div class="setting-info">
+                <label class="setting-title" for="set-browser-enabled">Enable integration</label>
+              </div>
+              <div class="setting-control">
+                <label class="switch-toggle">
+                  <input type="checkbox" id="set-browser-enabled" ${s.browser_integration?.enabled !== false ? "checked" : ""} />
+                  <span class="switch-slider"></span>
+                </label>
+              </div>
+            </div>
+
+            <div class="setting-item">
+              <div class="setting-info">
+                <label class="setting-title" for="set-browser-silent">Add without confirmation</label>
+                <span class="setting-desc">Queue captures immediately instead of opening the Add dialog.</span>
+              </div>
+              <div class="setting-control">
+                <label class="switch-toggle">
+                  <input type="checkbox" id="set-browser-silent" ${s.browser_integration?.silent_add ? "checked" : ""} />
+                  <span class="switch-slider"></span>
+                </label>
+              </div>
+            </div>
+
+            <div class="setting-item">
+              <div class="setting-info">
+                <label class="setting-title" for="set-browser-min-size">Minimum file size (bytes)</label>
+                <span class="setting-desc">0 ignores size filtering.</span>
+              </div>
+              <div class="setting-control">
+                <input type="number" id="set-browser-min-size" class="form-input input-sm" min="0" step="1"
+                  value="${s.browser_integration?.min_size_bytes ?? 0}" />
+              </div>
+            </div>
+          </div>
+
+          <div class="settings-card">
+            <h4 class="settings-group-title">Intercept file types</h4>
+            <div class="category-dirs-grid">
+              ${(
+                [
+                  ["archives", "Archives"],
+                  ["programs", "Programs"],
+                  ["video", "Video"],
+                  ["audio", "Audio"],
+                  ["documents", "Documents"],
+                  ["iso", "ISO / images"],
+                ] as const
+              )
+                .map(
+                  ([key, label]) => `
+              <label class="setting-item compact">
+                <span class="setting-title">${label}</span>
+                <input type="checkbox" class="browser-type" data-type="${key}"
+                  ${s.browser_integration?.file_types?.[key] !== false ? "checked" : ""} />
+              </label>`,
+                )
+                .join("")}
+            </div>
+          </div>
+
+          <div class="settings-card">
+            <h4 class="settings-group-title">Extension IDs (Chromium)</h4>
+            <p class="setting-desc">Copy from chrome://extensions after loading the unpacked extension.</p>
+            <div class="setting-item">
+              <input type="text" id="set-chrome-ext-id" class="form-input" placeholder="Chrome extension ID"
+                value="${this.escapeHtml(s.browser_integration?.chrome_extension_id || "")}" />
+            </div>
+            <div class="setting-item">
+              <input type="text" id="set-edge-ext-id" class="form-input" placeholder="Edge extension ID"
+                value="${this.escapeHtml(s.browser_integration?.edge_extension_id || "")}" />
+            </div>
+          </div>
+
+          <div class="settings-card">
+            <h4 class="settings-group-title">Native host</h4>
+            <p id="browser-install-status" class="setting-desc">Install status loads when you open this tab.</p>
+            <div class="settings-footer" style="padding-left:0">
+              <button type="button" id="btn-install-browser" class="btn secondary">Install / update host</button>
+              <button type="button" id="btn-uninstall-browser" class="btn secondary">Uninstall host</button>
+            </div>
+          </div>
+        </div>
+
         <!-- THEME SECTION -->
         <div class="settings-section ${this.activeTab === "theme" ? "" : "hidden"}" id="sec-theme">
           <div class="settings-card">
@@ -475,9 +571,53 @@ export class SettingsView {
       }
     });
 
+    const installBrowser = this.container.querySelector("#btn-install-browser") as HTMLButtonElement;
+    installBrowser?.addEventListener("click", async () => {
+      try {
+        await api.installBrowserIntegration();
+        showToast("Browser integration host installed");
+        await this.refreshBrowserStatus();
+      } catch (e) {
+        showToast(`Install failed: ${e}`);
+      }
+    });
+
+    const uninstallBrowser = this.container.querySelector("#btn-uninstall-browser") as HTMLButtonElement;
+    uninstallBrowser?.addEventListener("click", async () => {
+      try {
+        await api.uninstallBrowserIntegration();
+        showToast("Browser integration host removed");
+        await this.refreshBrowserStatus();
+      } catch (e) {
+        showToast(`Uninstall failed: ${e}`);
+      }
+    });
+
+    if (this.activeTab === "browser") {
+      void this.refreshBrowserStatus();
+    }
+
     // Save button
     const saveBtn = this.container.querySelector("#btn-save-settings") as HTMLButtonElement;
     saveBtn?.addEventListener("click", () => this.handleSave());
+  }
+
+  private async refreshBrowserStatus() {
+    const el = this.container.querySelector("#browser-install-status");
+    if (!el) return;
+    try {
+      const st = await api.getBrowserIntegrationStatus();
+      el.textContent = [
+        `Token: ${st.token_present ? "yes" : "no"}`,
+        `Manifest: ${st.host_manifest_present ? "yes" : "no"}`,
+        `Chrome: ${st.chrome_registry ? "registered" : "missing"}`,
+        `Edge: ${st.edge_registry ? "registered" : "missing"}`,
+        `Firefox: ${st.firefox_registry ? "registered" : "missing"}`,
+        `Host exe: ${st.native_host_installed ? "found" : "missing"}`,
+      ].join(" · ");
+    } catch (e) {
+      el.textContent = `Could not read status: ${e}`;
+    }
   }
 
   private async handleSave() {
@@ -519,6 +659,35 @@ export class SettingsView {
 
     const folderVal = folderInput ? folderInput.value.trim() : this.settings.download_dir;
 
+    const browserTypes: Record<string, boolean> = {};
+    this.container.querySelectorAll<HTMLInputElement>(".browser-type").forEach((inp) => {
+      const t = inp.dataset.type;
+      if (t) browserTypes[t] = inp.checked;
+    });
+    const prevBi = this.settings.browser_integration;
+    const browser_integration = {
+      enabled: (this.container.querySelector("#set-browser-enabled") as HTMLInputElement)?.checked ?? prevBi?.enabled ?? true,
+      silent_add: (this.container.querySelector("#set-browser-silent") as HTMLInputElement)?.checked ?? prevBi?.silent_add ?? false,
+      min_size_bytes: Number((this.container.querySelector("#set-browser-min-size") as HTMLInputElement)?.value || 0),
+      file_types: {
+        archives: browserTypes.archives ?? prevBi?.file_types?.archives ?? true,
+        programs: browserTypes.programs ?? prevBi?.file_types?.programs ?? true,
+        video: browserTypes.video ?? prevBi?.file_types?.video ?? true,
+        audio: browserTypes.audio ?? prevBi?.file_types?.audio ?? true,
+        documents: browserTypes.documents ?? prevBi?.file_types?.documents ?? true,
+        iso: browserTypes.iso ?? prevBi?.file_types?.iso ?? true,
+      },
+      disabled_hosts: prevBi?.disabled_hosts ?? [],
+      chrome_extension_id:
+        (this.container.querySelector("#set-chrome-ext-id") as HTMLInputElement)?.value.trim() ||
+        prevBi?.chrome_extension_id ||
+        "",
+      edge_extension_id:
+        (this.container.querySelector("#set-edge-ext-id") as HTMLInputElement)?.value.trim() ||
+        prevBi?.edge_extension_id ||
+        "",
+    };
+
     const updated: AppSettings = {
       ...this.settings,
       max_concurrent: concurrentInput ? Math.max(1, Math.min(16, Number(concurrentInput.value) || 3)) : this.settings.max_concurrent,
@@ -539,6 +708,7 @@ export class SettingsView {
       scheduler_stop: schedStopInput?.value ? schedStopInput.value : null,
       scheduler_days: activeDays,
       theme: selectedThemeRadio?.value || this.settings.theme || "system",
+      browser_integration,
     };
 
     try {

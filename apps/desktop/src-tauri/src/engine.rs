@@ -17,6 +17,56 @@ use tokio::sync::{Mutex, RwLock};
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(default)]
+pub struct BrowserFileTypes {
+    pub archives: bool,
+    pub programs: bool,
+    pub video: bool,
+    pub audio: bool,
+    pub documents: bool,
+    pub iso: bool,
+}
+
+impl Default for BrowserFileTypes {
+    fn default() -> Self {
+        Self {
+            archives: true,
+            programs: true,
+            video: true,
+            audio: true,
+            documents: true,
+            iso: true,
+        }
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(default)]
+pub struct BrowserIntegrationSettings {
+    pub enabled: bool,
+    pub min_size_bytes: u64,
+    pub file_types: BrowserFileTypes,
+    pub silent_add: bool,
+    pub disabled_hosts: Vec<String>,
+    pub chrome_extension_id: String,
+    pub edge_extension_id: String,
+}
+
+impl Default for BrowserIntegrationSettings {
+    fn default() -> Self {
+        Self {
+            enabled: true,
+            min_size_bytes: 0,
+            file_types: BrowserFileTypes::default(),
+            silent_add: false,
+            disabled_hosts: Vec::new(),
+            chrome_extension_id: String::new(),
+            edge_extension_id: String::new(),
+        }
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(default)]
 pub struct AppSettings {
     pub max_concurrent: usize,
     pub max_connections_per_download: usize,
@@ -37,6 +87,7 @@ pub struct AppSettings {
     pub scheduler_start: Option<String>,
     pub scheduler_stop: Option<String>,
     pub scheduler_days: Vec<u8>,
+    pub browser_integration: BrowserIntegrationSettings,
 }
 
 impl Default for AppSettings {
@@ -60,6 +111,7 @@ impl Default for AppSettings {
             scheduler_start: None,
             scheduler_stop: None,
             scheduler_days: vec![0, 1, 2, 3, 4, 5, 6],
+            browser_integration: BrowserIntegrationSettings::default(),
         }
     }
 }
@@ -93,6 +145,8 @@ pub struct DownloadView {
     pub connections_auto: bool,
     pub sha256: Option<String>,
     pub md5: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub http_headers: Option<std::collections::HashMap<String, String>>,
     pub status: TaskStatus,
     pub downloaded: u64,
     pub total: Option<u64>,
@@ -110,6 +164,7 @@ pub struct AddDownloadArgs {
     pub connections_auto: bool,
     pub sha256: Option<String>,
     pub md5: Option<String>,
+    pub http_headers: Option<std::collections::HashMap<String, String>>,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -393,6 +448,7 @@ impl DesktopEngine {
                 connections_auto: inner.view.connections_auto,
                 sha256: inner.view.sha256.clone(),
                 md5: inner.view.md5.clone(),
+                http_headers: inner.view.http_headers.clone(),
             }
         };
         let settings = self.settings.lock().await.clone();
@@ -564,6 +620,7 @@ impl DesktopEngine {
                 connections_auto: item.connections_auto,
                 sha256: item.sha256.clone(),
                 md5: item.md5.clone(),
+                http_headers: None,
                 status: status.clone(),
                 downloaded,
                 total,
@@ -625,6 +682,7 @@ impl DesktopEngine {
             connections_auto: args.connections_auto,
             sha256: args.sha256.clone(),
             md5: args.md5.clone(),
+            http_headers: args.http_headers.clone(),
             status: TaskStatus::Queued,
             downloaded: 0,
             total: None,
@@ -716,6 +774,7 @@ impl DesktopEngine {
                     sha256: v.sha256.clone(),
                     md5: v.md5.clone(),
                     autotune: request_autotune(v.connections_auto, global_autotune),
+                    extra_headers: v.http_headers.clone(),
                 }
             };
 
