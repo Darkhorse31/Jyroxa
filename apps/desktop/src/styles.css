@@ -21,7 +21,6 @@
   --transition-fast: all var(--dur-fast) var(--ease);
   --transition-normal: all var(--dur-normal) var(--ease);
 
-  /* Light theme (default) — tokens on :root so surfaces resolve before paint */
   color-scheme: light;
 
   --bg-app: #f3f3f3;
