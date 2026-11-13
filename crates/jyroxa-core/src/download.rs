@@ -97,6 +97,9 @@ async fn acquire_rate(
     nbytes: u64,
     ctrl_rx: &mut watch::Receiver<Cmd>,
 ) -> Result<()> {
+    if limiter.is_unlimited() && global.is_unlimited() {
+        return wait_runnable(ctrl_rx).await;
+    }
     let mut left = nbytes;
     let poll_rx = ctrl_rx.clone();
     let still_running = || matches!(*poll_rx.borrow(), Cmd::Run | Cmd::Paused);
@@ -170,7 +173,7 @@ impl Default for DownloadConfig {
     fn default() -> Self {
         DownloadConfig {
             max_connections: crate::MAX_CONNECTIONS,
-            initial_connections: 1,
+            initial_connections: crate::tuner::DEFAULT_START_CONNECTIONS,
             min_segment_size: 2 << 20, // 2 MiB
             max_retries: 5,
             max_global_failures: 0,
@@ -284,7 +287,12 @@ async fn probe_metadata(client: &reqwest::Client, url: &str, timeout: Duration) 
     // 1. HEAD for size / validators / filename.
     // Some servers never answer HEAD (the request just hangs); cap it so the
     // ranged GET below gets a turn instead of the task sitting at Starting.
-    if let Ok(resp) = client.head(url).timeout(timeout.min(HEAD_TIMEOUT)).send().await {
+    if let Ok(resp) = client
+        .head(url)
+        .timeout(timeout.min(HEAD_TIMEOUT))
+        .send()
+        .await
+    {
         if resp.status().is_success() {
             let headers = resp.headers().clone();
             meta.final_url = resp.url().to_string();
@@ -292,7 +300,12 @@ async fn probe_metadata(client: &reqwest::Client, url: &str, timeout: Duration) 
             // body length, or frameworks that recompute it from an empty body).
             // Treat a zero length as "unknown" so the ranged GET below confirms
             // the real size instead of us wrongly concluding the file is empty.
-            meta.size = resp.content_length().filter(|&n| n > 0);
+            // HEAD has no response body: reqwest's content_length() reports
+            // the body size (zero), not the advertised file size. Reading the
+            // header avoids an unnecessary second metadata request.
+            meta.size = header_str(&headers, h::CONTENT_LENGTH)
+                .and_then(|value| value.parse::<u64>().ok())
+                .filter(|&n| n > 0);
             meta.etag = header_str(&headers, h::ETAG);
             meta.last_modified = header_str(&headers, h::LAST_MODIFIED);
             meta.supports_ranges = header_str(&headers, h::ACCEPT_RANGES)
@@ -554,6 +567,8 @@ struct Ctx {
     fatal: Arc<Mutex<Option<Error>>>,
     notify: Notify,
     final_connections: AtomicUsize,
+    tuning_result: Mutex<Option<(usize, f64)>>,
+    tuning_had_errors: AtomicBool,
     busy_workers: AtomicUsize,
     range_fallback: AtomicBool,
     last_progress_emit: Mutex<Instant>,
@@ -566,7 +581,9 @@ fn spawn_disk_writer(
     pending: Arc<AtomicUsize>,
 ) -> mpsc::Sender<WriteChunk> {
     let (tx, mut rx) = mpsc::channel::<WriteChunk>(64);
-    tokio::spawn(async move {
+    // Keep one blocking writer alive instead of cloning the file and scheduling
+    // a new blocking task for every buffer. Network workers never do disk I/O.
+    tokio::task::spawn_blocking(move || {
         let file = match std::fs::OpenOptions::new().write(true).open(&path) {
             Ok(f) => f,
             Err(e) => {
@@ -577,55 +594,41 @@ fn spawn_disk_writer(
                 return;
             }
         };
-        while let Some(chunk) = rx.recv().await {
-            let off = chunk.offset;
-            let data = chunk.data;
-            let len = data.len();
-            let seg = chunk.seg;
-            let out = match file.try_clone() {
-                Ok(f) => f,
-                Err(e) => {
-                    let mut slot = fatal.lock().unwrap();
-                    if slot.is_none() {
-                        *slot = Some(Error::other(e.to_string()));
-                    }
-                    break;
+        while let Some(chunk) = rx.blocking_recv() {
+            if let Err(e) = pwrite_all(&file, chunk.offset, &chunk.data) {
+                let mut slot = fatal.lock().unwrap();
+                if slot.is_none() {
+                    *slot = Some(Error::other(e.to_string()));
                 }
-            };
-            let written = tokio::task::spawn_blocking(move || pwrite_all(&out, off, &data)).await;
-            pending.fetch_sub(1, Ordering::AcqRel);
-            match written {
-                Ok(Ok(())) => {
-                    let end = off + len as u64;
-                    seg.current.store(end, Ordering::Release);
-                }
-                Ok(Err(e)) => {
-                    let mut slot = fatal.lock().unwrap();
-                    if slot.is_none() {
-                        *slot = Some(Error::other(e.to_string()));
-                    }
-                    break;
-                }
-                Err(e) => {
-                    let mut slot = fatal.lock().unwrap();
-                    if slot.is_none() {
-                        *slot = Some(Error::other(e.to_string()));
-                    }
-                    break;
-                }
+                pending.fetch_sub(1, Ordering::AcqRel);
+                break;
             }
+            // The producer owns the segment cursor. Writing an older queued
+            // buffer must never rewind it and cause duplicate reads or splits.
+            chunk
+                .seg
+                .committed
+                .fetch_max(chunk.offset + chunk.data.len() as u64, Ordering::Release);
+            pending.fetch_sub(1, Ordering::AcqRel);
         }
     });
     tx
 }
 
-async fn drain_disk_writes(ctx: &Ctx) {
+async fn drain_disk_writes(ctx: &Ctx) -> Result<()> {
     for _ in 0..10_000 {
+        if let Some(err) = ctx.fatal.lock().unwrap().take() {
+            return Err(err);
+        }
         if ctx.write_pending.load(Ordering::Acquire) == 0 {
-            return;
+            if let Some(err) = ctx.fatal.lock().unwrap().take() {
+                return Err(err);
+            }
+            return Ok(());
         }
         tokio::time::sleep(Duration::from_millis(2)).await;
     }
+    Err(Error::other("timed out draining disk writes"))
 }
 
 impl Ctx {
@@ -750,8 +753,7 @@ impl Downloader {
         // Starting connection count: remembered best for the host, clamped by cap.
         let host_cap = self.host_stats.host_cap(&host);
         let initial_conn = if req.autotune {
-            // Start wide (like IDM / Ghost Downloader) or at the host's recent
-            // best if that is higher; the tuner only climbs from there.
+            // Start at eight, or a recent measured best, bounded by the cap.
             let wide = crate::tuner::initial_connections(total, max_conn);
             self.host_stats
                 .best_connections(&host)
@@ -776,11 +778,7 @@ impl Downloader {
                     ) =>
             {
                 resumed = true;
-                SegmentTable::from_state(
-                    &st.segments,
-                    self.config.min_segment_size,
-                    steal_cap,
-                )
+                SegmentTable::from_state(&st.segments, self.config.min_segment_size, steal_cap)
             }
             other => {
                 if other.is_some() {
@@ -788,11 +786,7 @@ impl Downloader {
                     DownloadState::remove(&state_path)?;
                 }
                 let ranges = split_initial(total, initial_conn);
-                SegmentTable::from_ranges(
-                    &ranges,
-                    self.config.min_segment_size,
-                    steal_cap,
-                )
+                SegmentTable::from_ranges(&ranges, self.config.min_segment_size, steal_cap)
             }
         };
 
@@ -838,6 +832,8 @@ impl Downloader {
             fatal: fatal_slot,
             notify: Notify::new(),
             final_connections: AtomicUsize::new(initial_conn),
+            tuning_result: Mutex::new(None),
+            tuning_had_errors: AtomicBool::new(false),
             busy_workers: AtomicUsize::new(0),
             range_fallback: AtomicBool::new(false),
             last_progress_emit: Mutex::new(Instant::now()),
@@ -892,6 +888,7 @@ impl Downloader {
             let _ = tokio::time::timeout(Duration::from_millis(150), ctx.notify.notified()).await;
         }
         supervisor.abort();
+        let _ = supervisor.await;
 
         if control.is_cancelled() {
             *ctx.writer.lock().unwrap() = None;
@@ -939,13 +936,34 @@ impl Downloader {
             return Err(Error::other("download ended with incomplete segments"));
         }
 
-        drain_disk_writes(&ctx).await;
+        drain_disk_writes(&ctx).await?;
+        *ctx.writer.lock().unwrap() = None;
 
         let elapsed = start.elapsed();
         let connections_used = ctx.final_connections.load(Ordering::Relaxed).max(1);
 
         // Verify checksums if requested.
         verify_checksums(&output, req.sha256.as_deref(), req.md5.as_deref())?;
+
+        // The supervisor is aborted above, so its epilogue cannot save results.
+        // Save only after successful writes and checksum verification, including
+        // short downloads that finish before a complete measurement window.
+        if req.autotune && !host.is_empty() {
+            let measured = *ctx.tuning_result.lock().unwrap();
+            if let Some((count, throughput)) = measured {
+                self.host_stats.observe(&host, count, throughput);
+            } else if ctx.target.load(Ordering::Acquire) == initial_conn
+                && !ctx.tuning_had_errors.load(Ordering::Relaxed)
+                && ctx.recent_errors.load(Ordering::Relaxed) == 0
+                && ctx.recent_throttles.load(Ordering::Relaxed) == 0
+            {
+                self.host_stats.observe(
+                    &host,
+                    initial_conn,
+                    total.saturating_sub(already) as f64 / elapsed.as_secs_f64().max(1e-9),
+                );
+            }
+        }
 
         // Success: drop the state sidecar.
         DownloadState::remove(&state_path)?;
@@ -1262,8 +1280,6 @@ async fn flush_segment_buf(
     let offset = *at;
     let data = std::mem::take(buf);
     *at += len as u64;
-    seg.current.store(*at, Ordering::Release);
-    ctx.downloaded.fetch_add(len as u64, Ordering::Relaxed);
     ctx.write_pending.fetch_add(1, Ordering::AcqRel);
     let tx = ctx.writer.lock().unwrap().clone();
     let send_err = match tx {
@@ -1281,6 +1297,10 @@ async fn flush_segment_buf(
         ctx.write_pending.fetch_sub(1, Ordering::AcqRel);
         return Err(Error::other("disk writer stopped"));
     }
+    // Publish completion only once the buffer is accounted for and queued;
+    // otherwise the download can finish before its final write is submitted.
+    seg.current.store(*at, Ordering::Release);
+    ctx.downloaded.fetch_add(len as u64, Ordering::Relaxed);
     seg.apply_cap_if_due(*at);
     Ok(())
 }
@@ -1479,7 +1499,8 @@ async fn run_segment(
                         }
                         write_buf.extend_from_slice(bytes);
                         pos += bytes.len() as u64;
-                        ctx.received.fetch_add(bytes.len() as u64, Ordering::Relaxed);
+                        ctx.received
+                            .fetch_add(bytes.len() as u64, Ordering::Relaxed);
                         if write_buf.len() >= SEGMENT_WRITE_BUF {
                             flush_segment_buf(ctx, &mut write_buf, &mut write_at, seg, ctrl_rx)
                                 .await?;
@@ -1511,7 +1532,6 @@ async fn run_segment(
         if let Some(e) = stream_err {
             // Connection dropped mid-segment: retry, resuming from `pos`.
             ctx.pool.demote(&mirror);
-            ctx.recent_errors.fetch_add(1, Ordering::Relaxed);
             attempt += 1;
             if attempt > ctx.config.max_retries {
                 return Err(e);
@@ -1568,8 +1588,7 @@ async fn supervise(
     };
     let mut target = initial_conn;
     ctx.target.store(target, Ordering::Release);
-    ctx.final_connections
-        .fetch_max(target, Ordering::Release);
+    ctx.final_connections.fetch_max(target, Ordering::Release);
 
     let mut ctrl_rx = ctx.control.subscribe();
     loop {
@@ -1646,6 +1665,9 @@ async fn supervise(
 
         let errors = ctx.recent_errors.swap(0, Ordering::Relaxed);
         let throttles = ctx.recent_throttles.swap(0, Ordering::Relaxed);
+        if errors > 0 || throttles > 0 {
+            ctx.tuning_had_errors.store(true, Ordering::Relaxed);
+        }
 
         let busy = ctx.busy_workers.load(Ordering::Relaxed);
         let queued = ctx.table.queued();
@@ -1668,11 +1690,15 @@ async fn supervise(
                 error_events: errors,
                 bytes_remaining: remaining,
             });
+            *ctx.tuning_result.lock().unwrap() = if t.best_throughput() > 0.0 {
+                Some((t.best_connections(), t.best_throughput()))
+            } else {
+                None
+            };
             if out.target != target {
                 target = out.target;
                 ctx.target.store(target, Ordering::Release);
-                ctx.final_connections
-                    .fetch_max(target, Ordering::Release);
+                ctx.final_connections.fetch_max(target, Ordering::Release);
                 ctx.emit(ProgressEvent::ConnectionsChanged {
                     count: target,
                     reason: if throttles > 0 {
@@ -1706,16 +1732,6 @@ async fn supervise(
             break;
         }
     }
-
-    if req.autotune {
-        if let Some(t) = tuner.as_ref() {
-            if t.best_throughput() > 0.0 && !host.is_empty() {
-                host_stats.observe(&host, t.best_connections(), t.best_throughput());
-            }
-            ctx.final_connections
-                .fetch_max(t.target().max(1), Ordering::Release);
-        }
-    }
 }
 
 fn persist_state(
@@ -1734,7 +1750,20 @@ fn persist_state(
         last_modified: meta.last_modified.clone(),
         supports_ranges: true,
         connections,
-        segments: ctx.table.snapshot(),
+        segments: ctx
+            .table
+            .segments()
+            .iter()
+            .map(|seg| {
+                let mut snapshot = seg.snapshot();
+                snapshot.downloaded = seg
+                    .committed
+                    .load(Ordering::Acquire)
+                    .min(snapshot.end.saturating_add(1))
+                    .saturating_sub(snapshot.start);
+                snapshot
+            })
+            .collect(),
     };
     let _ = st.save(state_path);
 }

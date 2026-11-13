@@ -49,6 +49,8 @@ pub struct Segment {
     pub end: AtomicU64,
     /// Absolute offset of the next byte to download.
     pub current: AtomicU64,
+    /// Cursor confirmed by the disk writer, used for crash-safe checkpoints.
+    pub(crate) committed: AtomicU64,
     /// Set when the segment is fully downloaded.
     pub done: AtomicBool,
     /// Inclusive byte cap for the primary worker (probe splits); 0 = none.
@@ -64,6 +66,7 @@ impl Segment {
             start,
             end: AtomicU64::new(end),
             current: AtomicU64::new(current),
+            committed: AtomicU64::new(current),
             done: AtomicBool::new(current > end),
             cap_end: AtomicU64::new(0),
             in_use: AtomicBool::new(false),

@@ -1,6 +1,6 @@
 //! Throughput-driven auto-tuner state machine.
 
-use std::collections::{HashMap, VecDeque};
+use std::collections::{HashMap, HashSet, VecDeque};
 use std::time::Duration;
 
 use crate::segment::PROBE_MIN_REMAINING;
@@ -42,6 +42,8 @@ const WARMUP_TICKS: usize = 3;
 const MEASURE_TICKS: usize = 4;
 /// A higher connection count must beat the best by this much to be kept.
 const GAIN: f64 = 0.08;
+/// Allow at most 20% loss per connection when testing a wider level.
+const PER_CONNECTION_RETENTION: f64 = 0.80;
 /// Hold this many ticks between upward re-probes (~10 s at 500 ms ticks).
 const REPROBE_TICKS: usize = 20;
 /// After a throttle, wait this long before probing again (~20 s).
@@ -51,19 +53,9 @@ const CAP_RELAX_TICKS: usize = 60;
 /// Default first connection count when nothing is known about the host.
 pub const DEFAULT_START_CONNECTIONS: usize = 8;
 
-/// Aggressive first connection count for a ranged download of `total` bytes,
-/// like IDM/Ghost Downloader: big files start wide instead of ramping from 1.
-pub fn initial_connections(total: u64, max_connections: usize) -> usize {
-    let want = if total >= 64 << 20 {
-        16
-    } else if total >= 16 << 20 {
-        8
-    } else if total >= 4 << 20 {
-        4
-    } else {
-        2
-    };
-    want.clamp(1, max_connections.max(1))
+/// Range-capable downloads start at eight, bounded by the user's maximum.
+pub fn initial_connections(_total: u64, max_connections: usize) -> usize {
+    DEFAULT_START_CONNECTIONS.min(max_connections.max(1))
 }
 
 /// Throughput-driven connection tuner.
@@ -72,17 +64,19 @@ pub fn initial_connections(total: u64, max_connections: usize) -> usize {
 /// from there: every count it tries is held for a short warm-up, then measured
 /// (median of several ticks). It doubles while each step is clearly faster and
 /// otherwise holds the fastest count measured. It never drops below the start
-/// count except on real throttling (429/503), so noisy samples can't collapse
+/// count except on real throttling (429/503) or transport errors, so noisy samples can't collapse
 /// a download to a single slow connection.
 #[derive(Debug)]
 pub struct Tuner {
     target: usize,
     max_connections: usize,
-    /// Current soft ceiling from throttle events (429/503).
+    /// Current soft ceiling from throttle events or connection errors.
     host_cap: usize,
     phase: Phase,
     /// Median throughput measured at each connection count.
     measured: HashMap<usize, f64>,
+    /// Levels whose per-connection throughput failed the upward probe.
+    rejected: HashSet<usize>,
     /// Raw samples taken at the current count, after warm-up.
     samples: Vec<f64>,
     ticks_at_current: usize,
@@ -109,6 +103,7 @@ impl Tuner {
             host_cap: cap,
             phase: Phase::Measuring { ascending: true },
             measured: HashMap::new(),
+            rejected: HashSet::new(),
             samples: Vec::new(),
             ticks_at_current: 0,
             hold_ticks: 0,
@@ -139,7 +134,7 @@ impl Tuner {
     fn best(&self) -> Option<(usize, f64)> {
         self.measured
             .iter()
-            .filter(|(c, tp)| **c <= self.host_cap && **tp > 0.0)
+            .filter(|(c, tp)| **c <= self.host_cap && **tp > 0.0 && !self.rejected.contains(c))
             .max_by(|a, b| {
                 a.1.partial_cmp(b.1)
                     .unwrap_or(std::cmp::Ordering::Equal)
@@ -193,12 +188,8 @@ impl Tuner {
 
     pub fn tick(&mut self, input: &TunerInput) -> TunerOutput {
         self.ticks_at_current += 1;
-        // Generic transport errors are retried by the workers; they must not
-        // collapse the connection count.
-        let _ = input.error_events;
-
-        if input.throttle_events > 0 {
-            self.handle_throttle(input.throttle_events);
+        if input.throttle_events > 0 || input.error_events > 0 {
+            self.handle_throttle(input.throttle_events.saturating_add(input.error_events));
             return TunerOutput {
                 target: self.target,
             };
@@ -226,13 +217,9 @@ impl Tuner {
     }
 
     fn handle_throttle(&mut self, throttled: u64) {
-        // The server refused `throttled` requests: drop exactly those
-        // connections (it is telling us its concurrency limit) rather than
-        // halving, and cap there until the cap relaxes.
-        let next = self
-            .target
-            .saturating_sub(throttled.max(1) as usize)
-            .max(1);
+        // Drop the failed/refused connections rather than halving the target.
+        // Throughput fluctuations alone never lower this ceiling.
+        let next = self.target.saturating_sub(throttled.max(1) as usize).max(1);
         self.host_cap = self.host_cap.min(next);
         self.ticks_since_throttle = 0;
         // Measurements taken above the new cap no longer apply.
@@ -243,6 +230,12 @@ impl Tuner {
     }
 
     fn tick_measuring(&mut self, input: &TunerInput, ascending: bool) {
+        // Do not compare a level until its workers are actually available.
+        if input.active_connections < self.target {
+            self.ticks_at_current = 0;
+            self.samples.clear();
+            return;
+        }
         if self.ticks_at_current <= WARMUP_TICKS {
             return;
         }
@@ -258,9 +251,22 @@ impl Tuner {
         }
 
         let level_tp = Self::median(&self.samples);
-        let prev_best = self.best_throughput();
+        let previous = self.best();
+        let prev_best = previous.map(|(_, tp)| tp).unwrap_or(0.0);
         self.measured.insert(self.target, level_tp);
-        let improved = prev_best <= 0.0 || level_tp >= prev_best * (1.0 + GAIN);
+        let per_connection_holds = previous
+            .map(|(count, tp)| {
+                self.target <= count
+                    || level_tp / self.target as f64 >= tp / count as f64 * PER_CONNECTION_RETENTION
+            })
+            .unwrap_or(true);
+        let improved =
+            (prev_best <= 0.0 || level_tp >= prev_best * (1.0 + GAIN)) && per_connection_holds;
+        if !improved {
+            self.rejected.insert(self.target);
+            self.hold_best();
+            return;
+        }
 
         if !self.probing_viable(input) {
             self.hold_best();
@@ -279,7 +285,7 @@ impl Tuner {
             }
             // Going up did not help: settle on the fastest count measured, which
             // is never below the starting count. Connections are only reduced on
-            // real throttling (429/503), not on noisy throughput.
+            // real throttling or connection errors, not on noisy throughput.
             self.hold_best();
         } else {
             self.hold_best();
@@ -311,7 +317,7 @@ impl Tuner {
             .get(&next)
             .map(|tp| *tp < self.best_throughput() * (1.0 + GAIN))
             .unwrap_or(false);
-        if next > self.target && !tried_and_worse {
+        if next > self.target && !tried_and_worse && !self.rejected.contains(&next) {
             self.switch_to(next, Phase::Measuring { ascending: true });
         } else {
             self.hold_ticks = 0;
@@ -385,7 +391,7 @@ mod tests {
     fn input(throughput: f64, throttle: u64) -> TunerInput {
         TunerInput {
             throughput,
-            active_connections: 1,
+            active_connections: crate::MAX_CONNECTIONS,
             throttle_events: throttle,
             error_events: 0,
             bytes_remaining: 1 << 30,
@@ -435,11 +441,11 @@ mod tests {
     }
 
     #[test]
-    fn aggressive_start_for_large_files() {
-        assert_eq!(initial_connections(100 << 20, 32), 16);
+    fn ranged_downloads_start_at_eight() {
+        assert_eq!(initial_connections(100 << 20, 32), 8);
         assert_eq!(initial_connections(100 << 20, 8), 8);
         assert_eq!(initial_connections(20 << 20, 32), 8);
-        assert_eq!(initial_connections(1 << 20, 32), 2);
+        assert_eq!(initial_connections(1 << 20, 32), 8);
         assert_eq!(initial_connections(1 << 30, 1), 1);
     }
 
@@ -454,7 +460,7 @@ mod tests {
             let mut t = Tuner::new(4, 32, None);
             run(&mut t, 150, &model);
             let held = model(t.target());
-            for (_, tp) in t.measured.iter() {
+            for (_, tp) in t.measured.iter().filter(|(c, _)| !t.rejected.contains(c)) {
                 assert!(held >= *tp * 0.999, "held {held} but measured {tp}");
             }
         }
@@ -524,7 +530,7 @@ mod tests {
     }
 
     #[test]
-    fn errors_do_not_drop_target() {
+    fn connection_errors_back_off() {
         let mut t = Tuner::new(8, 16, None);
         let out = t.tick(&TunerInput {
             throughput: 5.0 * MB,
@@ -533,7 +539,36 @@ mod tests {
             error_events: 5,
             bytes_remaining: 1 << 30,
         });
-        assert_eq!(out.target, 8);
+        assert_eq!(out.target, 3);
+    }
+
+    #[test]
+    fn wider_probe_must_preserve_per_connection_throughput() {
+        let mut t = Tuner::new(8, 16, None);
+        // A 25% aggregate gain for twice the connections is not worth keeping.
+        run(&mut t, 100, |c| if c == 8 { 20.0 * MB } else { 25.0 * MB });
+        assert_eq!(t.target(), 8);
+        assert_eq!(t.best_connections(), 8);
+    }
+
+    #[test]
+    fn one_slow_sample_does_not_reduce_baseline() {
+        let mut t = Tuner::new(8, 16, None);
+        run(&mut t, 3, |_| 20.0 * MB);
+        t.tick(&input(1.0, 0));
+        assert_eq!(t.target(), 8);
+    }
+
+    #[test]
+    fn incomplete_worker_start_does_not_measure_or_probe() {
+        let mut t = Tuner::new(8, 16, None);
+        let mut sample = input(20.0 * MB, 0);
+        sample.active_connections = 4;
+        for _ in 0..30 {
+            t.tick(&sample);
+        }
+        assert_eq!(t.target(), 8);
+        assert_eq!(t.best_throughput(), 0.0);
     }
 
     #[test]

@@ -184,6 +184,83 @@ fn test_engine() -> Downloader {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn auto_starts_at_eight_and_remembers_successful_short_download() {
+    let data = make_data(1024 * 1024);
+    let addr = spawn_server(data.clone()).await;
+    let dir = tempfile::tempdir().unwrap();
+    let stats = Arc::new(jyroxa_core::HostStats::in_memory());
+    let engine = test_engine().with_host_stats(stats.clone());
+    let req = DownloadRequest::new(format!("http://{addr}/file"), dir.path().join("auto.bin"))
+        .connections(16);
+    let (tx, mut rx) = events::channel();
+    engine
+        .download(req, Some(tx), Control::new(), None)
+        .await
+        .unwrap();
+    assert!(matches!(
+        rx.recv().await,
+        Some(ProgressEvent::Started { connections: 8, .. })
+    ));
+    assert_eq!(stats.best_connections("127.0.0.1"), Some(8));
+    assert_eq!(std::fs::read(dir.path().join("auto.bin")).unwrap(), data);
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn queued_multibuffer_writes_preserve_cursor_and_contents() {
+    let data = make_data(32 * 1024 * 1024);
+    let addr = spawn_server(data.clone()).await;
+    let dir = tempfile::tempdir().unwrap();
+    let out = dir.path().join("buffered.bin");
+    let mut req = DownloadRequest::new(format!("http://{addr}/file"), &out).connections(1);
+    req.autotune = false;
+    req.sha256 = Some(hex::encode(Sha256::digest(&data)));
+    let outcome = tokio::time::timeout(
+        Duration::from_secs(20),
+        test_engine().download(req, None, Control::new(), None),
+    )
+    .await
+    .unwrap()
+    .unwrap();
+    assert_eq!(outcome.total_size, data.len() as u64);
+    assert_eq!(std::fs::read(out).unwrap(), data);
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn valid_head_does_not_repeat_metadata_probe() {
+    let data = make_data(128 * 1024);
+    let hits = Arc::new(AtomicUsize::new(0));
+    let count = hits.clone();
+    let app = Router::new()
+        .route(
+            "/file",
+            get(move |state: State<AppState>, headers: HeaderMap| {
+                count.fetch_add(1, Ordering::Relaxed);
+                serve_file(state, headers)
+            }),
+        )
+        .with_state(AppState {
+            data: Arc::new(data.clone()),
+            etag: "\"head\"".into(),
+        });
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    let server = tokio::spawn(async move {
+        axum::serve(listener, app).await.unwrap();
+    });
+    let dir = tempfile::tempdir().unwrap();
+    let out = dir.path().join("head.bin");
+    let mut req = DownloadRequest::new(format!("http://{addr}/file"), &out).connections(1);
+    req.autotune = false;
+    test_engine()
+        .download(req, None, Control::new(), None)
+        .await
+        .unwrap();
+    assert_eq!(hits.load(Ordering::Relaxed), 2, "one HEAD and one data GET");
+    assert_eq!(std::fs::read(out).unwrap(), data);
+    server.abort();
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn manual_connection_count_opens_all_connections_immediately() {
     let data = make_data(4 * 1024 * 1024);
     let addr = spawn_server(data.clone()).await;
@@ -206,9 +283,9 @@ async fn manual_connection_count_opens_all_connections_immediately() {
             jyroxa_core::ProgressEvent::Started { connections, .. } if started.is_none() => {
                 started = Some(connections)
             }
-            jyroxa_core::ProgressEvent::Progress { segments: Some(s), .. } if first_segments.is_none() => {
-                first_segments = Some(s.len())
-            }
+            jyroxa_core::ProgressEvent::Progress {
+                segments: Some(s), ..
+            } if first_segments.is_none() => first_segments = Some(s.len()),
             _ => {}
         }
     }

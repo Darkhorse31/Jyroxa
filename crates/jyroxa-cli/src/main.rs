@@ -504,16 +504,19 @@ async fn bench_run(
     out: &std::path::Path,
 ) -> Result<(f64, usize)> {
     let engine = make_engine(None, autotune, true)?;
-    let req = DownloadRequest::new(url.to_string(), out.to_path_buf()).connections(connections);
+    let mut req = DownloadRequest::new(url.to_string(), out.to_path_buf()).connections(connections);
+    req.autotune = autotune;
     let control = Control::new();
     let (tx, mut rx) = events::channel();
     let start = Instant::now();
     let dl = engine.download(req, Some(tx), control, None);
-    let mut last_conns = connections;
+    let mut last_conns = 1;
     let consumer = async {
         while let Some(ev) = rx.recv().await {
-            if let ProgressEvent::ConnectionsChanged { count, .. } = ev {
-                last_conns = count;
+            match ev {
+                ProgressEvent::Started { connections, .. } => last_conns = connections,
+                ProgressEvent::ConnectionsChanged { count, .. } => last_conns = count,
+                _ => {}
             }
         }
     };
