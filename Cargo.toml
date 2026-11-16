@@ -67,3 +67,4 @@ codegen-units = 1
 # archives instead of synthesising corrupt raw-dylib import libraries.
 [patch.crates-io]
 windows-link = { path = "vendor/windows-link" }
+librqbit = { path = "vendor/librqbit" }

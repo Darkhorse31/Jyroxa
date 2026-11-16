@@ -21,6 +21,8 @@ pub mod queue;
 pub mod segment;
 pub mod state;
 pub mod trace;
+#[cfg(not(target_os = "android"))]
+pub mod torrent;
 pub mod tuner;
 
 pub use download::{
@@ -36,6 +38,11 @@ pub use probe::{probe_url, ProbeInfo};
 pub use queue::{QueueConfig, Scheduler, TaskId, TaskPriority, TaskSpec};
 pub use state::{DownloadState, SegmentState};
 pub use tuner::{parse_retry_after, Tuner, TunerInput, TunerOutput};
+#[cfg(not(target_os = "android"))]
+pub use torrent::{
+    is_magnet_uri, is_torrent_source, magnet_display_name, parse_info_hash_hex, TorrentSession,
+    TorrentTuning,
+};
 
 /// Hard upper bound on the number of simultaneous connections for a single
 /// download, matching the capability advertised to users.
