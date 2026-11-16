@@ -96,6 +96,7 @@ export interface BrowserIntegrationStatus {
   edge_registry: boolean;
   firefox_registry: boolean;
   native_host_installed: boolean;
+  packaged_extension_id: string;
 }
 
 export interface AddDownloadArgs {

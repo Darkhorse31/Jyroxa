@@ -31,7 +31,8 @@
     "targets": ["nsis"],
     "resources": {
       "WebView2Loader.dll": "./",
-      "jyroxa-native-host.exe": "./jyroxa-native-host.exe"
+      "jyroxa-native-host.exe": "./jyroxa-native-host.exe",
+      "jyroxa-browser-register.exe": "./jyroxa-browser-register.exe"
     },
     "icon": [
       "icons/32x32.png",
@@ -44,7 +45,8 @@
       "nsis": {
         "installerIcon": "icons/icon.ico",
         "headerImage": "icons/header.bmp",
-        "sidebarImage": "icons/sidebar.bmp"
+        "sidebarImage": "icons/sidebar.bmp",
+        "installerHooks": "./windows/browser-installer.nsh"
       }
     }
   }
