@@ -130,6 +130,7 @@ async fn handle_pipe_message(app: &AppHandle, env: PipeEnvelope) -> serde_json::
                     sha256: None,
                     md5: None,
                     http_headers: Some(headers),
+                    torrent_only_files: None,
                 };
                 match state.0.add_download(app.clone(), args).await {
                     Ok(id) => {

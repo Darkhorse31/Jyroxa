@@ -199,6 +199,8 @@ pub struct AddDownloadArgs {
     pub sha256: Option<String>,
     pub md5: Option<String>,
     pub http_headers: Option<std::collections::HashMap<String, String>>,
+    #[serde(default)]
+    pub torrent_only_files: Option<Vec<usize>>,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -247,6 +249,7 @@ struct InnerItem {
     view: DownloadView,
     control: Option<Control>,
     torrent_cancel: Option<tokio::sync::watch::Sender<bool>>,
+    torrent_only_files: Option<Vec<usize>>,
 }
 
 enum ResumeAction {
@@ -418,6 +421,10 @@ impl DesktopEngine {
         jyroxa_core::probe_url(&client, &normalized, std::time::Duration::from_secs(10)).await
     }
 
+    pub async fn probe_torrent(&self, source: &str) -> CoreResult<jyroxa_core::torrent::TorrentProbeInfo> {
+        crate::torrent_host::probe_torrent_via_sidecar(source).await
+    }
+
     pub async fn probe_url_with_headers(
         &self,
         url: &str,
@@ -529,6 +536,7 @@ impl DesktopEngine {
                 sha256: inner.view.sha256.clone(),
                 md5: inner.view.md5.clone(),
                 http_headers: inner.view.http_headers.clone(),
+                torrent_only_files: inner.torrent_only_files.clone(),
             }
         };
         let settings = self.settings.lock().await.clone();
@@ -724,6 +732,7 @@ impl DesktopEngine {
                         view: view.clone(),
                         control: None,
                         torrent_cancel: None,
+                        torrent_only_files: None,
                     },
                 );
             }
@@ -822,6 +831,7 @@ impl DesktopEngine {
                     view: view.clone(),
                     control: None,
                     torrent_cancel: None,
+                    torrent_only_files: args.torrent_only_files.clone(),
                 },
             );
         }
@@ -891,7 +901,7 @@ impl DesktopEngine {
         let engine = Arc::clone(self);
         tauri::async_runtime::spawn(async move {
             let settings = engine.settings.lock().await.clone();
-            let (urls, output_dir) = {
+            let (urls, output_dir, only_files) = {
                 let mut items = engine.items.lock().await;
                 let Some(inner) = items.get_mut(&id) else {
                     return;
@@ -900,6 +910,7 @@ impl DesktopEngine {
                 (
                     inner.view.urls.clone(),
                     crate::torrent_host::sidecar_output_dir(&engine.data_dir, id),
+                    inner.torrent_only_files.clone(),
                 )
             };
             {
@@ -926,6 +937,7 @@ impl DesktopEngine {
             let result = crate::torrent_host::spawn_torrent_sidecar(
                 &urls,
                 output_dir,
+                only_files,
                 &settings,
                 cancel_rx,
                 move |progress| {

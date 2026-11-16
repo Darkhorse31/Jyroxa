@@ -2,7 +2,7 @@
 
 use std::path::{Path, PathBuf};
 use std::process::Stdio;
-use jyroxa_core::torrent::{is_torrent_source, magnet_display_name};
+use jyroxa_core::torrent::{is_torrent_source, magnet_display_name, TorrentProbeInfo};
 use jyroxa_core::Error;
 use regex::Regex;
 use tokio::io::{AsyncBufReadExt, BufReader};
@@ -64,9 +64,39 @@ fn jyroxa_cli_exe() -> PathBuf {
 }
 
 /// Spawn `jyroxa torrent get` and stream stderr progress lines back to the UI.
+pub async fn probe_torrent_via_sidecar(input: &str) -> Result<TorrentProbeInfo, Error> {
+    let input = input.trim();
+    if input.is_empty() {
+        return Err(Error::other("empty torrent source"));
+    }
+    let cli = jyroxa_cli_exe();
+    if !cli.is_file() {
+        return Err(Error::other(format!(
+            "jyroxa CLI not found at {} (set JYROXA_CLI)",
+            cli.display()
+        )));
+    }
+    let out = Command::new(&cli)
+        .args(["torrent", "meta", input])
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null())
+        .output()
+        .await
+        .map_err(|e| Error::other(e.to_string()))?;
+    if !out.status.success() {
+        return Err(Error::other(format!(
+            "torrent meta probe failed ({})",
+            out.status
+        )));
+    }
+    let text = String::from_utf8_lossy(&out.stdout).trim().to_string();
+    serde_json::from_str(&text).map_err(|e| Error::other(format!("torrent meta json: {e}")))
+}
+
 pub async fn spawn_torrent_sidecar(
     urls: &[String],
     output_dir: PathBuf,
+    only_files: Option<Vec<usize>>,
     _settings: &AppSettings,
     cancel: watch::Receiver<bool>,
     on_progress: impl Fn(TorrentProgressLine) + Send + Sync + 'static,
@@ -84,12 +114,18 @@ pub async fn spawn_torrent_sidecar(
     }
     std::fs::create_dir_all(&output_dir).map_err(|e| Error::other(e.to_string()))?;
 
-    let mut child = Command::new(&cli)
-        .arg("torrent")
+    let mut cmd = Command::new(&cli);
+    cmd.arg("torrent")
         .arg("get")
         .arg(input)
         .arg("-o")
-        .arg(&output_dir)
+        .arg(&output_dir);
+    if let Some(indices) = &only_files {
+        for idx in indices {
+            cmd.arg("-f").arg(idx.to_string());
+        }
+    }
+    let mut child = cmd
         .stdout(Stdio::null())
         .stderr(Stdio::piped())
         .kill_on_drop(true)
