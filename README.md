@@ -65,10 +65,10 @@ Pre-built binaries from **GitHub Releases**:
 
 | Artifact | Description |
 | -------- | ----------- |
-| `Jyroxa_0.1.5_x64-setup.exe` | Windows NSIS installer (includes `jyroxa-native-host.exe`) |
-| `Jyroxa-0.1.5-windows-x64-portable.zip` | Portable `Jyroxa.exe`, `WebView2Loader.dll`, and `jyroxa-native-host.exe` |
+| `Jyroxa_0.1.6_x64-setup.exe` | Windows NSIS installer (includes `jyroxa-native-host.exe`) |
+| `Jyroxa-0.1.6-windows-x64-portable.zip` | Portable `Jyroxa.exe`, `WebView2Loader.dll`, and `jyroxa-native-host.exe` |
 | `jyroxa-browser-extension.zip` | Unpacked WebExtension for Chrome, Edge, and Firefox (load unpacked, then copy the extension ID into Settings → Browser) |
-| `Jyroxa-0.1.5-android-universal.apk` | Signed Android universal APK (arm64-v8a, armeabi-v7a, x86_64) |
+| `Jyroxa-0.1.6-android-universal.apk` | Signed Android universal APK (arm64-v8a, armeabi-v7a, x86_64) |
 | `SHA256SUMS.txt` | SHA-256 checksums for the files above |
 
 ## Build from source

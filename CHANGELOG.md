@@ -1,5 +1,18 @@
 # Changelog
 
+## 0.1.6 — 2026-11-16
+
+### Browser integration
+
+- Native messaging host registers automatically on every app start and from the Windows installer (Chrome, Edge, Firefox).
+- Stable shipped Chromium extension ID (`njgbdpacpmohafoefmcmnmhdjpjmjipe`); auto-registration keeps discovered unpacked extension IDs.
+- Extension popup shows clearer errors when the host is missing or unreachable.
+- Tests isolate HKCU registry writes via `JYROXA_REGISTRY_PREFIX` so developer machines are not affected.
+
+### Distribution
+
+- Workspace, desktop, and Android version 0.1.6; Android versionCode 7.
+
 ## 0.1.5 — 2026-11-16
 
 ### Telegram downloads

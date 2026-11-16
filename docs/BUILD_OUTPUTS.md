@@ -1,13 +1,13 @@
 # Jyroxa build outputs
 
-Release artifacts are written under `dist/` (git-ignored). Typical names for **0.1.5**:
+Release artifacts are written under `dist/` (git-ignored). Typical names for **0.1.6**:
 
 | Platform | Artifact |
 | -------- | -------- |
-| Windows NSIS | `dist/Jyroxa_0.1.5_x64-setup.exe` |
-| Windows portable | `dist/Jyroxa-0.1.5-windows-x64-portable.zip` |
+| Windows NSIS | `dist/Jyroxa_0.1.6_x64-setup.exe` |
+| Windows portable | `dist/Jyroxa-0.1.6-windows-x64-portable.zip` |
 | Browser extension | `dist/jyroxa-browser-extension.zip` |
-| Android universal APK | `dist/Jyroxa-0.1.5-android-universal.apk` |
+| Android universal APK | `dist/Jyroxa-0.1.6-android-universal.apk` |
 
 Gradle copies the signed release APK via `./gradlew :app:exportReleaseApk`; release staging adds `-android-` to match the published artifact name.
 
@@ -27,7 +27,7 @@ JNI libraries (`libjyroxa_ffi.so`) are built into `android/app/src/main/jniLibs/
 | Release executable | `target/release/jyroxa-desktop.exe` |
 | WebView2 loader (required beside exe on GNU) | `target/release/WebView2Loader.dll` |
 | Redistributable copy (tracked) | `apps/desktop/src-tauri/WebView2Loader.dll` |
-| NSIS installer | `target/release/bundle/nsis/Jyroxa_0.1.5_x64-setup.exe` |
+| NSIS installer | `target/release/bundle/nsis/Jyroxa_0.1.6_x64-setup.exe` |
 | Native messaging host | `target/release/jyroxa-native-host.exe` (bundled beside desktop via `tauri.conf.json` resources) |
 | Browser host registration CLI | `target/release/jyroxa-browser-register.exe` (NSIS post-install + verify) |
 
