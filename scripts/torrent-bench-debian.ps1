@@ -1,4 +1,22 @@
 $ErrorActionPreference = "Stop"
+function Invoke-CliText {
+    param([string]$Exe, [string[]]$ArgList, [string]$WorkDir)
+    $psi = New-Object System.Diagnostics.ProcessStartInfo
+    $psi.FileName = $Exe
+    $psi.Arguments = ($ArgList | ForEach-Object {
+        if ($_ -match '\s') { '"' + ($_ -replace '"','\"') + '"' } else { $_ }
+    }) -join ' '
+    $psi.RedirectStandardOutput = $true
+    $psi.RedirectStandardError = $true
+    $psi.UseShellExecute = $false
+    if ($WorkDir) { $psi.WorkingDirectory = $WorkDir }
+    $p = [System.Diagnostics.Process]::Start($psi)
+    $stdout = $p.StandardOutput.ReadToEnd()
+    $stderr = $p.StandardError.ReadToEnd()
+    $p.WaitForExit()
+    if ($p.ExitCode -ne 0) { throw "exit $($p.ExitCode): $stderr" }
+    return ($stdout + "`n" + $stderr).Trim()
+}
 . C:\Users\lenovo\.jyroxa-tools\env.ps1
 $root = (Resolve-Path (Join-Path $PSScriptRoot "..")).Path
 $jyroxa = Join-Path $root "target\release\jyroxa.exe"
@@ -8,7 +26,8 @@ $benchRoot = Join-Path $env:TEMP "jyroxa-torrent-bench-016"
 if (Test-Path $benchRoot) { Remove-Item -Recurse -Force $benchRoot }
 New-Item -ItemType Directory -Path $benchRoot | Out-Null
 
-$trackers = @(
+$trackerFile = Join-Path $benchRoot "trackers.txt"
+$trackerLines = @(
     "udp://tracker.opentrackr.org:1337/announce",
     "udp://open.tracker.cl:1337/announce",
     "udp://tracker.torrent.eu.org:451/announce",
@@ -33,7 +52,8 @@ $trackers = @(
     "http://tracker.opentrackr.org:1337/announce",
     "http://open.acgnxtracker.com:80/announce",
     "http://www.peckrocks.com:6969/announce"
-) -join ","
+)
+Set-Content -Path $trackerFile -Value $trackerLines
 $ariaFlags = @(
     "--bt-max-peers=200",
     "--bt-request-peer-speed-limit=50M",
@@ -41,10 +61,10 @@ $ariaFlags = @(
     "--enable-dht=true",
     "--bt-enable-lpd=true",
     "--enable-peer-exchange=true",
-    "--bt-tracker=$trackers",
     "--seed-time=0",
     "--max-connection-per-server=16"
 )
+$ariaFlags += "--bt-tracker=$($trackerLines -join ',')"
 
 $rows = @()
 for ($run = 1; $run -le 3; $run++) {
@@ -52,7 +72,7 @@ for ($run = 1; $run -le 3; $run++) {
     Remove-Item -Recurse -Force $dir -ErrorAction SilentlyContinue
     $sw = [System.Diagnostics.Stopwatch]::StartNew()
     $metaMs = $null
-    $out = (& $jyroxa torrent get $torrent -o $dir *>&1 | ForEach-Object { "$_" }) -join "`n"
+    $out = Invoke-CliText $jyroxa @("torrent", "get", $torrent, "-o", $dir)
     $sw.Stop()
     if ($out -match "metadata: (\d+) ms") { $metaMs = [int]$Matches[1] }
     $totalSec = $sw.Elapsed.TotalSeconds
@@ -69,11 +89,17 @@ for ($run = 1; $run -le 3; $run++) {
     Remove-Item -Recurse -Force $dir -ErrorAction SilentlyContinue
     New-Item -ItemType Directory -Path $dir | Out-Null
     $sw = [System.Diagnostics.Stopwatch]::StartNew()
-    & $aria2 @ariaFlags -d $dir -o "debian.iso" $torrent 2>&1 | Out-Null
+    $prevEa = $ErrorActionPreference
+    $ErrorActionPreference = "Continue"
+    try {
+        & $aria2 @ariaFlags "-d" $dir $torrent *> $null
+    } finally {
+        $ErrorActionPreference = $prevEa
+    }
     $sw.Stop()
     $totalSec = $sw.Elapsed.TotalSeconds
-    $iso = Join-Path $dir "debian.iso"
-    $bytes = if (Test-Path $iso) { (Get-Item $iso).Length } else { 0 }
+    $bytes = (Get-ChildItem $dir -File -ErrorAction SilentlyContinue | Where-Object { $_.Length -gt 1MB } | Measure-Object -Property Length -Maximum).Maximum
+    if (-not $bytes) { $bytes = 0 }
     $avg = if ($totalSec -gt 0) { ($bytes / $totalSec) / (1024*1024) } else { 0 }
     $rows += [pscustomobject]@{ Client="aria2c"; Run=$run; MetadataMs=$null; TotalSec=[math]::Round($totalSec,1); AvgMiB=[math]::Round($avg,2) }
     Remove-Item -Recurse -Force $dir -ErrorAction SilentlyContinue

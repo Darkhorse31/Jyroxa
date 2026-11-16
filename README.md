@@ -19,6 +19,23 @@ IDM’s supplied **10.08 / 6.72** references use MiB/s; decimal equivalents are 
 
 [Method, ranges and source data](docs/BENCHMARK.md) · [Raw confirmation output](reports/release-0.1.3-bench.log).
 
+### BitTorrent (Debian 13.7.0 amd64 netinst, v0.1.8)
+
+Legal torrent: `https://cdimage.debian.org/debian-cd/current/amd64/bt-cd/debian-13.7.0-amd64-netinst.iso.torrent` (~756 MiB payload). Three runs each on the same Windows host; aria2c 1.37.0 portable with `--bt-max-peers=200`, `--bt-request-peer-speed-limit=50M`, DHT/LPD/PEX enabled, and the same public tracker list as Jyroxa.
+
+| Client | Run | Metadata (ms) | Total (s) | Avg (MiB/s) |
+| --- | ---: | ---: | ---: | ---: |
+| Jyroxa | 1 | 233 | 16.4 | 55.37 |
+| Jyroxa | 2 | 318 | 18.8 | 44.37 |
+| Jyroxa | 3 | 282 | 16.4 | 50.23 |
+| aria2c | 1 | — | 50.5 | 14.96 |
+| aria2c | 2 | — | 49.9 | 15.15 |
+| aria2c | 3 | — | 50.4 | 14.99 |
+
+**Summary:** Jyroxa **median ~16.4 s / ~50 MiB/s**, metadata **~282 ms**. aria2c **~50 s / ~15 MiB/s** (tuned flags). Raw TSV: [reports/torrent-bench-0.1.8.tsv](reports/torrent-bench-0.1.8.tsv).
+
+**Not in v0.1.8:** BEP-19 web seeds via the multi-connection HTTP engine (librqbit peers/DHT only for now).
+
 ## Features
 
 ### Engine (Rust)
