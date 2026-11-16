@@ -47,15 +47,17 @@ IDM’s supplied **10.08 / 6.72** references use MiB/s; decimal equivalents are 
 
 ## Screenshots
 
-Main window (light and dark):
+Main window:
 
-<p><img src="docs/screenshots/main-light.png" width="49%" alt="Jyroxa main window, light theme" /> <img src="docs/screenshots/main-dark.png" width="49%" alt="Jyroxa main window, dark theme" /></p>
+<p><img src="docs/screenshots/main-dark.png" width="49%" alt="Jyroxa main window, dark theme" /> <img src="docs/screenshots/main-light.png" width="49%" alt="Jyroxa main window, light theme" /></p>
 
-Add download and settings (with Telegram):
+Add download, with the advanced connection and checksum options:
 
-<p><img src="docs/screenshots/add-download.png" width="49%" alt="Add download dialog" /> <img src="docs/screenshots/settings-light.png" width="49%" alt="Settings with Telegram section" /></p>
+<p><img src="docs/screenshots/add-download.png" width="49%" alt="Add download dialog" /> <img src="docs/screenshots/add-download-advanced.png" width="49%" alt="Add download dialog with advanced options" /></p>
 
-<p><img src="docs/screenshots/settings-dark.png" width="49%" alt="Settings, dark theme" /></p>
+Settings:
+
+<p><img src="docs/screenshots/settings-dark.png" width="98%" alt="Jyroxa settings panel" /></p>
 
 ## Download
 
