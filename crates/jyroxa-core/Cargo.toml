@@ -9,7 +9,9 @@ repository.workspace = true
 rust-version.workspace = true
 
 [features]
-default = []
+default = ["torrent-engine"]
+# In-process librqbit (omit in the Tauri cdylib — too many exports for MinGW).
+torrent-engine = ["dep:librqbit"]
 # HTTP/3 (QUIC) support is optional and off by default. Enabling it requires a
 # reqwest build with the unstable `http3` feature (RUSTFLAGS="--cfg reqwest_unstable").
 # The flag is wired through so UIs can advertise the capability; the engine falls
@@ -46,7 +48,7 @@ reqwest = { version = "0.12", default-features = false, features = [
 
 [target.'cfg(not(target_os = "android"))'.dependencies]
 reqwest = { workspace = true }
-librqbit = { version = "9.1.0", default-features = true, features = ["http-api-client"] }
+librqbit = { version = "9.1.0", default-features = true, features = ["http-api-client"], optional = true }
 
 [dev-dependencies]
 axum = "0.7"

@@ -1,15 +1,13 @@
-//! Desktop integration for jyroxa-core BitTorrent sessions.
+//! BitTorrent on desktop: CLI sidecar (keeps librqbit out of the Tauri cdylib).
 
-use std::path::PathBuf;
-use std::sync::Arc;
-
-use tokio::sync::{Mutex, watch};
-
-use jyroxa_core::torrent::{
-    is_torrent_source, magnet_display_name, TorrentJobOptions, TorrentSession, TorrentSource,
-    TorrentTuning,
-};
+use std::path::{Path, PathBuf};
+use std::process::Stdio;
+use jyroxa_core::torrent::{is_torrent_source, magnet_display_name};
 use jyroxa_core::Error;
+use regex::Regex;
+use tokio::io::{AsyncBufReadExt, BufReader};
+use tokio::process::Command;
+use tokio::sync::watch;
 
 use crate::engine::{AppSettings, DownloadView, TaskStatus};
 
@@ -17,28 +15,6 @@ pub fn primary_is_torrent(urls: &[String]) -> bool {
     urls.first()
         .map(|u| is_torrent_source(u))
         .unwrap_or(false)
-}
-
-pub async fn torrent_session(
-    slot: &Arc<Mutex<Option<Arc<TorrentSession>>>>,
-    output_root: PathBuf,
-    settings: &AppSettings,
-) -> Result<Arc<TorrentSession>, Error> {
-    let mut guard = slot.lock().await;
-    if let Some(s) = guard.as_ref() {
-        return Ok(Arc::clone(s));
-    }
-    let mut tuning = TorrentTuning::default().with_output_root(output_root.clone());
-    tuning.peer_limit = settings.torrent_peer_limit.max(16);
-    tuning.merge_builtin_trackers = settings.torrent_merge_trackers;
-    tuning.allow_seeding = settings.torrent_seeding;
-    tuning.ratio_limit = settings.torrent_ratio_limit;
-    if let Some(limit) = settings.global_speed_limit {
-        tuning.download_limit_bps = limit;
-    }
-    let session = Arc::new(TorrentSession::open(output_root, tuning).await?);
-    *guard = Some(Arc::clone(&session));
-    Ok(session)
 }
 
 pub fn torrent_filename_hint(urls: &[String]) -> String {
@@ -66,50 +42,149 @@ pub fn torrent_filename_hint(urls: &[String]) -> String {
     "torrent-download".into()
 }
 
-pub async fn start_torrent(
-    session: &TorrentSession,
-    urls: &[String],
-    output_dir: PathBuf,
-) -> Result<(jyroxa_core::torrent::TorrentHandle, watch::Sender<bool>, watch::Receiver<bool>), Error> {
-    let source = if let Some(u) = urls.first() {
-        let u = u.trim();
-        if u.starts_with("magnet:") || u.starts_with("http://") || u.starts_with("https://") {
-            TorrentSource::Url(u)
-        } else if std::path::Path::new(u).is_file() {
-            let bytes = std::fs::read(u).map_err(|e| Error::other(e.to_string()))?;
-            TorrentSource::FileBytes(bytes.into())
-        } else {
-            TorrentSource::Url(u)
+fn jyroxa_cli_exe() -> PathBuf {
+    if let Ok(p) = std::env::var("JYROXA_CLI") {
+        let path = PathBuf::from(p);
+        if path.is_file() {
+            return path;
         }
-    } else {
-        return Err(Error::other("empty torrent source"));
-    };
-    let opts = TorrentJobOptions {
-        output_folder: Some(output_dir),
-        overwrite: true,
-        ..Default::default()
-    };
-    let handle = session.add(source, opts).await?;
-    let (tx, rx) = watch::channel(false);
-    Ok((handle, tx, rx))
+    }
+    if let Ok(exe) = std::env::current_exe() {
+        if let Some(dir) = exe.parent() {
+            for name in ["jyroxa.exe", "jyroxa-cli.exe"] {
+                let c = dir.join(name);
+                if c.is_file() {
+                    return c;
+                }
+            }
+        }
+    }
+    PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("../../../target/release/jyroxa.exe")
 }
 
-pub fn apply_torrent_snapshot(view: &mut DownloadView, snap: &jyroxa_core::torrent::TorrentSnapshot) {
-    view.downloaded = snap.downloaded;
-    view.total = Some(snap.total);
-    view.speed_bps = snap.speed_bps;
-    view.torrent_peers = Some(snap.live_peers);
-    view.torrent_seeds = Some(snap.live_seeders);
-    if snap.downloaded > 0 {
-        view.torrent_ratio = Some(snap.uploaded as f64 / snap.downloaded as f64);
+/// Spawn `jyroxa torrent get` and stream stderr progress lines back to the UI.
+pub async fn spawn_torrent_sidecar(
+    urls: &[String],
+    output_dir: PathBuf,
+    _settings: &AppSettings,
+    cancel: watch::Receiver<bool>,
+    on_progress: impl Fn(TorrentProgressLine) + Send + Sync + 'static,
+) -> Result<(), Error> {
+    let input = urls.first().map(String::as_str).unwrap_or("").trim();
+    if input.is_empty() {
+        return Err(Error::other("empty torrent source"));
     }
-    if snap.finished {
-        view.status = TaskStatus::Completed;
-    } else if view.status != TaskStatus::Paused {
+    let cli = jyroxa_cli_exe();
+    if !cli.is_file() {
+        return Err(Error::other(format!(
+            "jyroxa CLI not found at {} (set JYROXA_CLI)",
+            cli.display()
+        )));
+    }
+    std::fs::create_dir_all(&output_dir).map_err(|e| Error::other(e.to_string()))?;
+
+    let mut child = Command::new(&cli)
+        .arg("torrent")
+        .arg("get")
+        .arg(input)
+        .arg("-o")
+        .arg(&output_dir)
+        .stdout(Stdio::null())
+        .stderr(Stdio::piped())
+        .kill_on_drop(true)
+        .spawn()
+        .map_err(|e| Error::other(e.to_string()))?;
+
+    let stderr = child
+        .stderr
+        .take()
+        .ok_or_else(|| Error::other("torrent sidecar: no stderr"))?;
+    let progress_re = Regex::new(
+        r"^jyroxa-torrent-progress downloaded=(\d+) total=(\d+) peers=(\d+) seeds=(\d+) speed_bps=(\d+)$",
+    )
+    .map_err(|e| Error::other(e.to_string()))?;
+
+    let mut reader = BufReader::new(stderr).lines();
+    let mut kill = cancel.clone();
+
+    loop {
+        if *kill.borrow() {
+            let _ = child.kill().await;
+            return Err(Error::Cancelled);
+        }
+        tokio::select! {
+            _ = kill.changed() => {
+                if *kill.borrow() {
+                    let _ = child.kill().await;
+                    return Err(Error::Cancelled);
+                }
+            }
+            line = reader.next_line() => {
+                match line {
+                    Ok(Some(l)) => {
+                        if let Some(caps) = progress_re.captures(&l) {
+                            let progress = TorrentProgressLine {
+                                downloaded: caps[1].parse().unwrap_or(0),
+                                total: caps[2].parse().unwrap_or(0),
+                                peers: caps[3].parse().unwrap_or(0),
+                                seeds: caps[4].parse().unwrap_or(0),
+                                speed_bps: caps[5].parse().unwrap_or(0.0),
+                            };
+                            on_progress(progress);
+                        }
+                    }
+                    Ok(None) => break,
+                    Err(e) => return Err(Error::other(e.to_string())),
+                }
+            }
+        }
+    }
+
+    let status = child
+        .wait()
+        .await
+        .map_err(|e| Error::other(e.to_string()))?;
+    if status.success() {
+        Ok(())
+    } else {
+        Err(Error::other(format!(
+            "torrent sidecar exited with {}",
+            status
+        )))
+    }
+}
+
+#[derive(Clone, Debug)]
+pub struct TorrentProgressLine {
+    pub downloaded: u64,
+    pub total: u64,
+    pub peers: u32,
+    pub seeds: u32,
+    pub speed_bps: f64,
+}
+
+pub fn apply_torrent_progress(view: &mut DownloadView, p: &TorrentProgressLine) {
+    view.downloaded = p.downloaded;
+    view.total = Some(p.total);
+    view.speed_bps = p.speed_bps;
+    view.torrent_peers = Some(p.peers);
+    view.torrent_seeds = Some(p.seeds);
+    if p.downloaded > 0 {
+        view.torrent_ratio = Some(0.0);
+    }
+    if view.status != TaskStatus::Paused {
         view.status = TaskStatus::Running;
     }
-    if let Some(err) = &snap.error {
-        view.status = TaskStatus::Failed;
-        view.error = Some(err.clone());
+}
+
+pub fn mark_torrent_completed(view: &mut DownloadView) {
+    view.status = TaskStatus::Completed;
+    if view.total.is_none() && view.downloaded > 0 {
+        view.total = Some(view.downloaded);
     }
+}
+
+pub fn sidecar_output_dir(data_dir: &Path, id: u64) -> PathBuf {
+    data_dir.join("torrents").join(id.to_string())
 }

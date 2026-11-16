@@ -1,11 +1,13 @@
 //! BitTorrent engine (librqbit) with magnet support and tracker boosting.
 
 mod config;
+#[cfg(feature = "torrent-engine")]
 mod engine;
 mod magnet;
 mod trackers;
 
 pub use config::TorrentTuning;
+#[cfg(feature = "torrent-engine")]
 pub use engine::{
     TorrentHandle, TorrentJobOptions, TorrentSession, TorrentSnapshot, TorrentSource,
 };

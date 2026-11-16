@@ -39,15 +39,12 @@ pub async fn run_torrent_get(input: String, output: PathBuf) -> Result<()> {
     session
         .run_until_done(handle.clone(), rx, |snap| {
             eprintln!(
-                "progress {:.1}% peers={} seeds={} {:.2} MiB/s",
-                if snap.total > 0 {
-                    snap.downloaded as f64 / snap.total as f64 * 100.0
-                } else {
-                    0.0
-                },
+                "jyroxa-torrent-progress downloaded={} total={} peers={} seeds={} speed_bps={:.0}",
+                snap.downloaded,
+                snap.total,
                 snap.live_peers,
                 snap.live_seeders,
-                snap.speed_bps / (1024.0 * 1024.0)
+                snap.speed_bps
             );
         })
         .await

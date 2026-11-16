@@ -40,9 +40,10 @@ pub use state::{DownloadState, SegmentState};
 pub use tuner::{parse_retry_after, Tuner, TunerInput, TunerOutput};
 #[cfg(not(target_os = "android"))]
 pub use torrent::{
-    is_magnet_uri, is_torrent_source, magnet_display_name, parse_info_hash_hex, TorrentSession,
-    TorrentTuning,
+    is_magnet_uri, is_torrent_source, magnet_display_name, parse_info_hash_hex, TorrentTuning,
 };
+#[cfg(all(not(target_os = "android"), feature = "torrent-engine"))]
+pub use torrent::TorrentSession;
 
 /// Hard upper bound on the number of simultaneous connections for a single
 /// download, matching the capability advertised to users.

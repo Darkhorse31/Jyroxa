@@ -246,7 +246,6 @@ pub struct PersistedItem {
 struct InnerItem {
     view: DownloadView,
     control: Option<Control>,
-    torrent_handle: Option<jyroxa_core::torrent::TorrentHandle>,
     torrent_cancel: Option<tokio::sync::watch::Sender<bool>>,
 }
 
@@ -267,7 +266,6 @@ pub struct DesktopEngine {
     close_to_tray_cached: AtomicBool,
     data_dir: PathBuf,
     weak: Weak<Self>,
-    torrent_session: Arc<Mutex<Option<Arc<jyroxa_core::torrent::TorrentSession>>>>,
 }
 
 impl DesktopEngine {
@@ -312,7 +310,6 @@ impl DesktopEngine {
             close_to_tray_cached: AtomicBool::new(close_to_tray),
             data_dir,
             weak: weak.clone(),
-            torrent_session: Arc::new(Mutex::new(None)),
         });
         Ok(engine)
     }
@@ -681,7 +678,6 @@ impl DesktopEngine {
                     InnerItem {
                         view: view.clone(),
                         control: None,
-                        torrent_handle: None,
                         torrent_cancel: None,
                     },
                 );
@@ -759,7 +755,6 @@ impl DesktopEngine {
                 InnerItem {
                     view: view.clone(),
                     control: None,
-                    torrent_handle: None,
                     torrent_cancel: None,
                 },
             );
@@ -836,105 +831,72 @@ impl DesktopEngine {
                     return;
                 };
                 inner.view.status = TaskStatus::Starting;
-                (inner.view.urls.clone(), PathBuf::from(&inner.view.output))
+                (
+                    inner.view.urls.clone(),
+                    crate::torrent_host::sidecar_output_dir(&engine.data_dir, id),
+                )
             };
+            {
+                let mut items = engine.items.lock().await;
+                if let Some(inner) = items.get_mut(&id) {
+                    inner.view.output = output_dir.to_string_lossy().into_owned();
+                }
+            }
             let _ = app.emit("downloads-changed", ());
             {
                 let mut active = engine.active_count.lock().await;
                 *active += 1;
             }
-            let session = match crate::torrent_host::torrent_session(
-                &engine.torrent_session,
-                engine.data_dir.join("torrents"),
-                &settings,
-            )
-            .await
-            {
-                Ok(s) => s,
-                Err(e) => {
-                    let mut items = engine.items.lock().await;
-                    if let Some(inner) = items.get_mut(&id) {
-                        inner.view.status = TaskStatus::Failed;
-                        inner.view.error = Some(e.to_string());
-                    }
-                    let _ = app.emit("downloads-changed", ());
-                    let mut active = engine.active_count.lock().await;
-                    *active = active.saturating_sub(1);
-                    return;
-                }
-            };
-            let (handle, cancel_tx, cancel_rx) = match crate::torrent_host::start_torrent(
-                session.as_ref(),
-                &urls,
-                output_dir,
-            )
-            .await
-            {
-                Ok(pair) => pair,
-                Err(e) => {
-                    let mut items = engine.items.lock().await;
-                    if let Some(inner) = items.get_mut(&id) {
-                        inner.view.status = TaskStatus::Failed;
-                        inner.view.error = Some(e.to_string());
-                    }
-                    let _ = app.emit("downloads-changed", ());
-                    let mut active = engine.active_count.lock().await;
-                    *active = active.saturating_sub(1);
-                    return;
-                }
-            };
+            let (cancel_tx, cancel_rx) = tokio::sync::watch::channel(false);
             {
                 let mut items = engine.items.lock().await;
                 if let Some(inner) = items.get_mut(&id) {
-                    inner.torrent_handle = Some(handle.clone());
                     inner.torrent_cancel = Some(cancel_tx.clone());
                     inner.view.status = TaskStatus::Running;
                 }
             }
             let items_ref = Arc::clone(&engine.items);
             let app_poll = app.clone();
-            let result = session
-                .run_until_done(
-                    handle.clone(),
-                    cancel_rx,
-                    move |snap| {
-                        let items_ref = items_ref.clone();
-                        let app_poll = app_poll.clone();
-                        tauri::async_runtime::spawn(async move {
-                            let mut items = items_ref.lock().await;
-                            if let Some(inner) = items.get_mut(&id) {
-                                crate::torrent_host::apply_torrent_snapshot(
-                                    &mut inner.view,
-                                    &snap,
-                                );
-                            }
-                            let _ = app_poll.emit("downloads-changed", ());
-                        });
-                    },
-                )
-                .await;
+            let result = crate::torrent_host::spawn_torrent_sidecar(
+                &urls,
+                output_dir,
+                &settings,
+                cancel_rx,
+                move |progress| {
+                    let items_ref = items_ref.clone();
+                    let app_poll = app_poll.clone();
+                    tauri::async_runtime::spawn(async move {
+                        let mut items = items_ref.lock().await;
+                        if let Some(inner) = items.get_mut(&id) {
+                            crate::torrent_host::apply_torrent_progress(
+                                &mut inner.view,
+                                &progress,
+                            );
+                        }
+                        let _ = app_poll.emit("downloads-changed", ());
+                    });
+                },
+            )
+            .await;
             if *cancel_tx.borrow() {
                 let _ = result;
             } else if let Err(e) = result {
                 let mut items = engine.items.lock().await;
                 if let Some(inner) = items.get_mut(&id) {
-                    inner.view.status = TaskStatus::Failed;
-                    inner.view.error = Some(e.to_string());
+                    if !matches!(e, jyroxa_core::Error::Cancelled) {
+                        inner.view.status = TaskStatus::Failed;
+                        inner.view.error = Some(e.to_string());
+                    }
                 }
             } else {
                 let mut items = engine.items.lock().await;
                 if let Some(inner) = items.get_mut(&id) {
-                    inner.view.status = TaskStatus::Completed;
+                    crate::torrent_host::mark_torrent_completed(&mut inner.view);
                 }
             }
             {
                 let mut items = engine.items.lock().await;
                 if let Some(inner) = items.get_mut(&id) {
-                    let snap = jyroxa_core::torrent::TorrentSession::stats(
-                        inner.torrent_handle.as_ref().expect("torrent handle"),
-                    );
-                    crate::torrent_host::apply_torrent_snapshot(&mut inner.view, &snap);
-                    inner.torrent_handle = None;
                     inner.torrent_cancel = None;
                 }
             }
@@ -1071,25 +1033,23 @@ impl DesktopEngine {
     }
 
     pub async fn pause(&self, id: u64) -> bool {
-        let (http, torrent) = {
+        let (http, torrent_cancel) = {
             let items = self.items.lock().await;
             let Some(inner) = items.get(&id) else {
                 return false;
             };
-            (
-                inner.control.clone(),
-                inner.torrent_handle.clone(),
-            )
+            (inner.control.clone(), inner.torrent_cancel.clone())
         };
         if let Some(c) = http {
             c.pause();
             return true;
         }
-        if let (Some(h), Some(session)) = (
-            torrent,
-            self.torrent_session.lock().await.clone(),
-        ) {
-            let _ = session.pause(&h).await;
+        if let Some(tx) = torrent_cancel {
+            let _ = tx.send(true);
+            let mut items = self.items.lock().await;
+            if let Some(inner) = items.get_mut(&id) {
+                inner.view.status = TaskStatus::Paused;
+            }
             return true;
         }
         false
