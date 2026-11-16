@@ -90,6 +90,54 @@ fn push_chrome_id(ids: &mut Vec<String>, raw: &str) {
     }
 }
 
+/// When set (e.g. `JyroxaTest`), HKCU native-messaging keys are written under
+/// `Software\<prefix>\...` so tests never touch real Chrome/Edge/Firefox keys.
+fn native_messaging_registry_prefix() -> Option<String> {
+    std::env::var("JYROXA_REGISTRY_PREFIX")
+        .ok()
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty())
+}
+
+fn native_messaging_registry_key(browser_vendor: &str) -> String {
+    let leaf = format!(r"{browser_vendor}\NativeMessagingHosts\{NATIVE_HOST_NAME}");
+    match native_messaging_registry_prefix() {
+        Some(prefix) => format!(r"Software\{prefix}\{leaf}"),
+        None => format!(r"Software\{leaf}"),
+    }
+}
+
+fn native_messaging_registry_keys() -> [String; 3] {
+    [
+        native_messaging_registry_key(r"Google\Chrome"),
+        native_messaging_registry_key(r"Microsoft\Edge"),
+        native_messaging_registry_key(r"Mozilla"),
+    ]
+}
+
+fn push_chrome_ids_from_existing_manifest(ids: &mut Vec<String>) {
+    let path = host_manifest_path();
+    let Ok(text) = std::fs::read_to_string(&path) else {
+        return;
+    };
+    let Ok(v) = serde_json::from_str::<serde_json::Value>(&text) else {
+        return;
+    };
+    let Some(arr) = v.get("allowed_origins").and_then(|a| a.as_array()) else {
+        return;
+    };
+    for origin in arr {
+        let Some(s) = origin.as_str() else {
+            continue;
+        };
+        let Some(rest) = s.strip_prefix("chrome-extension://") else {
+            continue;
+        };
+        let id = rest.strip_suffix('/').unwrap_or(rest);
+        push_chrome_id(ids, id);
+    }
+}
+
 /// Collect chrome-extension origins for the native host manifest.
 pub fn build_allowed_origins(config: &BrowserOriginsConfig) -> Vec<String> {
     let mut ids = Vec::new();
@@ -99,6 +147,7 @@ pub fn build_allowed_origins(config: &BrowserOriginsConfig) -> Vec<String> {
     for id in discover_chromium_extension_ids() {
         push_chrome_id(&mut ids, &id);
     }
+    push_chrome_ids_from_existing_manifest(&mut ids);
 
     let mut out: Vec<String> = ids
         .into_iter()
@@ -216,13 +265,9 @@ pub fn install_native_host(
 
     #[cfg(windows)]
     {
-        let chrome_key = format!(r"Software\Google\Chrome\NativeMessagingHosts\{NATIVE_HOST_NAME}");
-        let edge_key =
-            format!(r"Software\Microsoft\Edge\NativeMessagingHosts\{NATIVE_HOST_NAME}");
-        let firefox_key = format!(r"Software\Mozilla\NativeMessagingHosts\{NATIVE_HOST_NAME}");
-        write_registry_manifest(&chrome_key, &manifest_path)?;
-        write_registry_manifest(&edge_key, &manifest_path)?;
-        write_registry_manifest(&firefox_key, &manifest_path)?;
+        for key in native_messaging_registry_keys() {
+            write_registry_manifest(&key, &manifest_path)?;
+        }
     }
     Ok(())
 }
@@ -239,11 +284,7 @@ pub fn uninstall_native_host() -> Result<(), String> {
         use winreg::enums::*;
         use winreg::RegKey;
         let hkcu = RegKey::predef(HKEY_CURRENT_USER);
-        for key in [
-            format!(r"Software\Google\Chrome\NativeMessagingHosts\{NATIVE_HOST_NAME}"),
-            format!(r"Software\Microsoft\Edge\NativeMessagingHosts\{NATIVE_HOST_NAME}"),
-            format!(r"Software\Mozilla\NativeMessagingHosts\{NATIVE_HOST_NAME}"),
-        ] {
+        for key in native_messaging_registry_keys() {
             let _ = hkcu.delete_subkey(key);
         }
     }
@@ -276,17 +317,10 @@ pub fn integration_status(desktop_exe: &Path) -> BrowserIntegrationStatus {
     }
 
     #[cfg(windows)]
-    let (chrome_registry, edge_registry, firefox_registry) = (
-        reg_ok(&format!(
-            r"Software\Google\Chrome\NativeMessagingHosts\{NATIVE_HOST_NAME}"
-        )),
-        reg_ok(&format!(
-            r"Software\Microsoft\Edge\NativeMessagingHosts\{NATIVE_HOST_NAME}"
-        )),
-        reg_ok(&format!(
-            r"Software\Mozilla\NativeMessagingHosts\{NATIVE_HOST_NAME}"
-        )),
-    );
+    let keys = native_messaging_registry_keys();
+    #[cfg(windows)]
+    let (chrome_registry, edge_registry, firefox_registry) =
+        (reg_ok(&keys[0]), reg_ok(&keys[1]), reg_ok(&keys[2]));
 
     #[cfg(not(windows))]
     let (chrome_registry, edge_registry, firefox_registry) = (false, false, false);
@@ -346,6 +380,49 @@ mod tests {
         });
         let unique: HashSet<_> = origins.iter().cloned().collect();
         assert_eq!(unique.len(), origins.len());
+    }
+
+    #[test]
+    fn native_messaging_registry_key_paths() {
+        // SAFETY: env mutation; other tests should not rely on JYROXA_REGISTRY_PREFIX.
+        unsafe { std::env::remove_var("JYROXA_REGISTRY_PREFIX") };
+        let prod = native_messaging_registry_key(r"Google\Chrome");
+        assert_eq!(
+            prod,
+            format!(r"Software\Google\Chrome\NativeMessagingHosts\{NATIVE_HOST_NAME}")
+        );
+        unsafe { std::env::set_var("JYROXA_REGISTRY_PREFIX", "JyroxaTest") };
+        let test_key = native_messaging_registry_key(r"Google\Chrome");
+        assert!(test_key.contains(r"Software\JyroxaTest\Google\Chrome"));
+        unsafe { std::env::remove_var("JYROXA_REGISTRY_PREFIX") };
+    }
+
+    #[test]
+    fn preserves_ids_from_existing_manifest_on_disk() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let data = tmp.path().join("jyroxa-data");
+        std::fs::create_dir_all(data.join("native-host")).expect("dir");
+        // SAFETY: isolated data dir for this test.
+        unsafe { std::env::set_var("JYROXA_DATA_DIR", &data) };
+        let manifest = data.join("native-host").join(format!("{NATIVE_HOST_NAME}.json"));
+        let prior = "hehgieooaeknhlodfpkommnhinaahkjf";
+        let json = serde_json::json!({
+            "name": NATIVE_HOST_NAME,
+            "allowed_origins": [format!("chrome-extension://{prior}/")],
+        });
+        std::fs::write(
+            &manifest,
+            serde_json::to_string_pretty(&json).expect("json"),
+        )
+        .expect("write");
+        let origins = build_allowed_origins(&BrowserOriginsConfig::default());
+        assert!(origins
+            .iter()
+            .any(|o| o == &format!("chrome-extension://{prior}/")));
+        assert!(origins
+            .iter()
+            .any(|o| o == &format!("chrome-extension://{PACKAGED_CHROME_EXTENSION_ID}/")));
+        unsafe { std::env::remove_var("JYROXA_DATA_DIR") };
     }
 }
 
@@ -428,8 +505,11 @@ mod windows_live {
         let tmp = tempfile::tempdir().expect("tempdir");
         let data = tmp.path().join("jyroxa-data");
         std::fs::create_dir_all(&data).expect("data dir");
-        // SAFETY: single-threaded test; no other test reads JYROXA_DATA_DIR concurrently.
-        unsafe { std::env::set_var("JYROXA_DATA_DIR", &data) };
+        // SAFETY: single-threaded test; env vars not read concurrently by other tests.
+        unsafe {
+            std::env::set_var("JYROXA_DATA_DIR", &data);
+            std::env::set_var("JYROXA_REGISTRY_PREFIX", "JyroxaTest");
+        };
 
         let stage = tmp.path().join("stage");
         std::fs::create_dir_all(&stage).expect("stage");
@@ -474,5 +554,11 @@ mod windows_live {
 
         assert_eq!(reply.get("ok"), Some(&serde_json::Value::Bool(true)));
         assert_eq!(reply.get("connected"), Some(&serde_json::Value::Bool(true)));
+
+        uninstall_native_host().expect("cleanup test registry keys");
+        unsafe {
+            std::env::remove_var("JYROXA_DATA_DIR");
+            std::env::remove_var("JYROXA_REGISTRY_PREFIX");
+        };
     }
 }
