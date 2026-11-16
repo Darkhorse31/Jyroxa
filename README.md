@@ -47,7 +47,15 @@ IDM’s supplied **10.08 / 6.72** references use MiB/s; decimal equivalents are 
 
 ## Screenshots
 
-Screenshots: see [docs/screenshots](docs/screenshots) (placeholders until assets are added).
+Main window (light and dark):
+
+<p><img src="docs/screenshots/main-light.png" width="49%" alt="Jyroxa main window, light theme" /> <img src="docs/screenshots/main-dark.png" width="49%" alt="Jyroxa main window, dark theme" /></p>
+
+Add download and settings (with Telegram):
+
+<p><img src="docs/screenshots/add-download.png" width="49%" alt="Add download dialog" /> <img src="docs/screenshots/settings-light.png" width="49%" alt="Settings with Telegram section" /></p>
+
+<p><img src="docs/screenshots/settings-dark.png" width="49%" alt="Settings, dark theme" /></p>
 
 ## Download
 
