@@ -6,7 +6,19 @@ use std::time::Instant;
 use anyhow::{Context, Result};
 use jyroxa_core::torrent::{TorrentJobOptions, TorrentSession, TorrentSource, TorrentTuning};
 
-pub async fn run_torrent_get(input: String, output: PathBuf) -> Result<()> {
+pub async fn run_torrent_meta(input: String) -> Result<()> {
+    let info = jyroxa_core::torrent::probe_torrent_source(&input)
+        .await
+        .context("torrent metadata")?;
+    println!("{}", serde_json::to_string(&info)?);
+    Ok(())
+}
+
+pub async fn run_torrent_get(
+    input: String,
+    output: PathBuf,
+    only_files: Vec<usize>,
+) -> Result<()> {
     std::fs::create_dir_all(&output)?;
     let tuning = TorrentTuning::default().with_output_root(output.clone());
     let session = TorrentSession::open(output.clone(), tuning)
@@ -26,6 +38,11 @@ pub async fn run_torrent_get(input: String, output: PathBuf) -> Result<()> {
             source,
             TorrentJobOptions {
                 output_folder: Some(output.clone()),
+                only_files: if only_files.is_empty() {
+                    None
+                } else {
+                    Some(only_files)
+                },
                 ..Default::default()
             },
         )
@@ -70,7 +87,7 @@ pub async fn run_torrent_bench(input: String, output: PathBuf, runs: usize, cap_
         let dir = output.join(format!("run-{run}"));
         let _ = std::fs::remove_dir_all(&dir);
         eprintln!("=== jyroxa torrent bench run {run}/{runs} ===");
-        let fut = run_torrent_get(input.clone(), dir.clone());
+        let fut = run_torrent_get(input.clone(), dir.clone(), Vec::new());
         match tokio::time::timeout(std::time::Duration::from_secs(cap_secs), fut).await {
             Ok(Ok(())) => {}
             Ok(Err(e)) => eprintln!("run failed: {e:#}"),

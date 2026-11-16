@@ -117,12 +117,20 @@ enum Command {
 
 #[derive(Subcommand)]
 enum TorrentCmd {
+    /// Print torrent name, size, and file list as JSON (metadata only).
+    Meta {
+        /// Magnet URI, torrent URL, or local .torrent path.
+        input: String,
+    },
     /// Download a magnet / torrent to a folder.
     Get {
         /// Magnet URI, torrent URL, or local .torrent path.
         input: String,
         #[arg(short = 'o', long, default_value = ".")]
         output: PathBuf,
+        /// Download only these file indices (repeat for each).
+        #[arg(short = 'f', long = "only-file")]
+        only_files: Vec<usize>,
     },
     /// Repeat timed downloads (for benchmarks).
     Bench {
@@ -201,7 +209,12 @@ async fn real_main() -> Result<()> {
             connections,
         } => run_resume(statefile, connections).await,
         Command::Torrent { sub } => match sub {
-            TorrentCmd::Get { input, output } => torrent_cli::run_torrent_get(input, output).await,
+            TorrentCmd::Meta { input } => torrent_cli::run_torrent_meta(input).await,
+            TorrentCmd::Get {
+                input,
+                output,
+                only_files,
+            } => torrent_cli::run_torrent_get(input, output, only_files).await,
             TorrentCmd::Bench {
                 input,
                 output,

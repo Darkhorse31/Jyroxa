@@ -43,7 +43,8 @@ pub use state::{DownloadState, SegmentState};
 pub use tuner::{parse_retry_after, Tuner, TunerInput, TunerOutput};
 #[cfg(not(target_os = "android"))]
 pub use torrent::{
-    is_magnet_uri, is_torrent_source, magnet_display_name, parse_info_hash_hex, TorrentTuning,
+    is_magnet_uri, is_torrent_source, magnet_display_name, parse_info_hash_hex, TorrentFileProbe,
+    TorrentProbeInfo, TorrentTuning,
 };
 #[cfg(all(not(target_os = "android"), feature = "torrent-engine"))]
 pub use torrent::TorrentSession;
