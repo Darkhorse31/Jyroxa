@@ -12,11 +12,16 @@
       <div>
         <strong>Jyroxa</strong>
         <p id="status-text" class="muted">Checking…</p>
+        <p id="status-detail" class="muted"></p>
       </div>
     </header>
     <label class="row">
       <span>Capture downloads</span>
       <input type="checkbox" id="toggle-enabled" checked />
+    </label>
+    <label class="row">
+      <span>Start downloads without asking</span>
+      <input type="checkbox" id="toggle-silent" />
     </label>
     <button type="button" id="btn-refresh" class="btn">Refresh connection</button>
     <script type="module" src="popup.js"></script>

@@ -38,6 +38,56 @@ function mapSettings(raw) {
   };
 }
 
+export function connectionFailureReason(errText) {
+  const m = (errText || "").toLowerCase();
+  if (!m) {
+    return {
+      short: "Jyroxa not reachable",
+      detail: "No response from the native messaging host.",
+    };
+  }
+  if (
+    m.includes("native messaging host not found") ||
+    m.includes("specify native messaging host") ||
+    m.includes("not found")
+  ) {
+    return {
+      short: "Host not registered",
+      detail:
+        "Chrome cannot find com.jyroxa.browser. Install Jyroxa or restart the desktop app to register the host.",
+    };
+  }
+  if (m.includes("forbidden") || m.includes("access to the specified native messaging host")) {
+    return {
+      short: "Extension not allowed",
+      detail:
+        "The native host rejected this extension ID. Load the official Jyroxa extension or add your ID in Jyroxa settings.",
+    };
+  }
+  if (m.includes("native host not installed")) {
+    return {
+      short: "Host not configured",
+      detail: "Jyroxa has not written the native messaging manifest yet. Start the desktop app once.",
+    };
+  }
+  if (m.includes("timeout")) {
+    return {
+      short: "No response",
+      detail: "The native host did not answer in time. Jyroxa may not be running.",
+    };
+  }
+  if (m.includes("pipe") || m.includes("unavailable") || m.includes("disconnected")) {
+    return {
+      short: "Jyroxa not running",
+      detail: "Start Jyroxa on this PC, then refresh the connection.",
+    };
+  }
+  return {
+    short: "Jyroxa not reachable",
+    detail: errText,
+  };
+}
+
 export async function sendNative(payload) {
   return new Promise((resolve) => {
     const port = api.runtime.connectNative(HOST);
@@ -89,6 +139,16 @@ export async function refreshSettingsFromApp() {
 export async function pingApp() {
   const res = await sendNative({ type: "ping" });
   return Boolean(res?.ok && res.connected);
+}
+
+export function pingFailureFromResponse(res) {
+  if (res?.ok && res.connected) {
+    return null;
+  }
+  if (res?.error) {
+    return connectionFailureReason(res.error);
+  }
+  return connectionFailureReason("disconnected");
 }
 
 export function extEnabled() {

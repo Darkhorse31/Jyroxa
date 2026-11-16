@@ -47,7 +47,17 @@ IDM’s supplied **10.08 / 6.72** references use MiB/s; decimal equivalents are 
 
 ## Screenshots
 
-Screenshots: see [docs/screenshots](docs/screenshots) (placeholders until assets are added).
+Main window:
+
+<p><img src="docs/screenshots/main-dark.png" width="49%" alt="Jyroxa main window, dark theme" /> <img src="docs/screenshots/main-light.png" width="49%" alt="Jyroxa main window, light theme" /></p>
+
+Add download, with the advanced connection and checksum options:
+
+<p><img src="docs/screenshots/add-download.png" width="49%" alt="Add download dialog" /> <img src="docs/screenshots/add-download-advanced.png" width="49%" alt="Add download dialog with advanced options" /></p>
+
+Settings:
+
+<p><img src="docs/screenshots/settings-dark.png" width="98%" alt="Jyroxa settings panel" /></p>
 
 ## Download
 
@@ -55,10 +65,10 @@ Pre-built binaries from **GitHub Releases**:
 
 | Artifact | Description |
 | -------- | ----------- |
-| `Jyroxa_0.1.4_x64-setup.exe` | Windows NSIS installer (includes `jyroxa-native-host.exe`) |
-| `Jyroxa-0.1.4-windows-x64-portable.zip` | Portable `Jyroxa.exe`, `WebView2Loader.dll`, and `jyroxa-native-host.exe` |
+| `Jyroxa_0.1.6_x64-setup.exe` | Windows NSIS installer (includes `jyroxa-native-host.exe`) |
+| `Jyroxa-0.1.6-windows-x64-portable.zip` | Portable `Jyroxa.exe`, `WebView2Loader.dll`, and `jyroxa-native-host.exe` |
 | `jyroxa-browser-extension.zip` | Unpacked WebExtension for Chrome, Edge, and Firefox (load unpacked, then copy the extension ID into Settings → Browser) |
-| `Jyroxa-0.1.4-android-universal.apk` | Signed Android universal APK (arm64-v8a, armeabi-v7a, x86_64) |
+| `Jyroxa-0.1.6-android-universal.apk` | Signed Android universal APK (arm64-v8a, armeabi-v7a, x86_64) |
 | `SHA256SUMS.txt` | SHA-256 checksums for the files above |
 
 ## Build from source

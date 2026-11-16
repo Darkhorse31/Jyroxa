@@ -1,223 +1,48 @@
 //! Browser extension native-messaging install + named-pipe handoff server.
 
 use std::collections::HashMap;
-use std::path::{Path, PathBuf};
+use std::path::Path;
 
 use jyroxa_native_host::handoff::{handoff_to_headers, BrowserHandoff, PipeEnvelope, PipeMessage};
-use jyroxa_native_host::{NATIVE_HOST_NAME, HANDOFF_PIPE_NAME};
-use serde::{Deserialize, Serialize};
+use jyroxa_native_host::integration::{self, install_native_host, uninstall_native_host, BrowserOriginsConfig};
+pub use jyroxa_native_host::integration::BrowserIntegrationStatus;
+use jyroxa_native_host::HANDOFF_PIPE_NAME;
 use tauri::{AppHandle, Emitter, Manager};
 
 use crate::engine::{AddDownloadArgs, BrowserIntegrationSettings, EngineState};
 
-#[derive(Clone, Debug, Serialize, Deserialize)]
-pub struct BrowserIntegrationStatus {
-    pub token_present: bool,
-    pub host_manifest_present: bool,
-    pub chrome_registry: bool,
-    pub edge_registry: bool,
-    pub firefox_registry: bool,
-    pub native_host_installed: bool,
-}
+pub use integration::ensure_browser_token;
 
-pub fn jyroxa_data_dir() -> PathBuf {
-    std::env::var_os("LOCALAPPDATA")
-        .map(PathBuf::from)
-        .unwrap_or_else(std::env::temp_dir)
-        .join("Jyroxa")
-}
-
-fn token_path() -> PathBuf {
-    jyroxa_data_dir().join("browser-integration.token")
-}
-
-fn desktop_exe_marker() -> PathBuf {
-    jyroxa_data_dir().join("desktop-exe.txt")
-}
-
-fn host_manifest_path() -> PathBuf {
-    jyroxa_data_dir()
-        .join("native-host")
-        .join(format!("{NATIVE_HOST_NAME}.json"))
-}
-
-pub fn ensure_browser_token() -> std::io::Result<String> {
-    let path = token_path();
-    if let Ok(existing) = std::fs::read_to_string(&path) {
-        let t = existing.trim();
-        if !t.is_empty() {
-            return Ok(t.to_string());
-        }
+fn origins_config(settings: &BrowserIntegrationSettings) -> BrowserOriginsConfig {
+    BrowserOriginsConfig {
+        chrome_extension_id: settings.chrome_extension_id.clone(),
+        edge_extension_id: settings.edge_extension_id.clone(),
     }
-    if let Some(parent) = path.parent() {
-        std::fs::create_dir_all(parent)?;
-    }
-    let nanos = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map(|d| d.as_nanos())
-        .unwrap_or(0);
-    let token = format!("{:x}{:x}{:x}", nanos, std::process::id(), line!());
-    std::fs::write(&path, &token)?;
-    Ok(token)
-}
-
-fn native_host_exe_path(desktop_exe: &Path) -> PathBuf {
-    let sibling = desktop_exe
-        .parent()
-        .map(|p| p.join("jyroxa-native-host.exe"));
-    if let Some(ref p) = sibling {
-        if p.is_file() {
-            return p.clone();
-        }
-    }
-    jyroxa_data_dir().join("jyroxa-native-host.exe")
-}
-
-fn extension_origins(settings: &BrowserIntegrationSettings) -> Vec<String> {
-    let mut out = Vec::new();
-    if !settings.chrome_extension_id.is_empty() {
-        out.push(format!(
-            "chrome-extension://{}/",
-            settings.chrome_extension_id.trim()
-        ));
-    }
-    if !settings.edge_extension_id.is_empty() {
-        out.push(format!(
-            "chrome-extension://{}/",
-            settings.edge_extension_id.trim()
-        ));
-    }
-    if out.is_empty() {
-        out.push("chrome-extension://lkcpmllaclbmggbphpaojdklcjgmjaad/".into());
-    }
-    out.push("moz-extension://jyroxa-browser@jyroxa/".into());
-    out
-}
-
-#[cfg(windows)]
-fn write_registry_manifest(key: &str, manifest: &Path) -> Result<(), String> {
-    use winreg::enums::*;
-    use winreg::RegKey;
-    let hkcu = RegKey::predef(HKEY_CURRENT_USER);
-    let (k, _) = hkcu.create_subkey(key).map_err(|e| e.to_string())?;
-    k.set_value("", &manifest.to_string_lossy().to_string())
-        .map_err(|e| e.to_string())
-}
-
-#[cfg(not(windows))]
-fn write_registry_manifest(_key: &str, _manifest: &Path) -> Result<(), String> {
-    Ok(())
 }
 
 pub fn install_browser_integration(
     desktop_exe: &Path,
     settings: &BrowserIntegrationSettings,
 ) -> Result<(), String> {
-    let _token = ensure_browser_token().map_err(|e| e.to_string())?;
-    let data = jyroxa_data_dir();
-    std::fs::create_dir_all(&data).map_err(|e| e.to_string())?;
-    std::fs::write(desktop_exe_marker(), desktop_exe.to_string_lossy().as_bytes())
-        .map_err(|e| e.to_string())?;
-
-    let host_exe = native_host_exe_path(desktop_exe);
-    if !host_exe.is_file() {
-        return Err(format!(
-            "native host not found at {}",
-            host_exe.display()
-        ));
-    }
-
-    let manifest_dir = data.join("native-host");
-    std::fs::create_dir_all(&manifest_dir).map_err(|e| e.to_string())?;
-    let manifest_path = host_manifest_path();
-
-    let manifest = serde_json::json!({
-        "name": NATIVE_HOST_NAME,
-        "description": "Jyroxa browser download integration",
-        "path": host_exe.to_string_lossy(),
-        "type": "stdio",
-        "allowed_origins": extension_origins(settings),
-    });
-    let text =
-        serde_json::to_string_pretty(&manifest).map_err(|e: serde_json::Error| e.to_string())?;
-    std::fs::write(&manifest_path, text).map_err(|e| e.to_string())?;
-
-    #[cfg(windows)]
-    {
-        let m = manifest_path.to_string_lossy();
-        let chrome_key = format!(r"Software\Google\Chrome\NativeMessagingHosts\{NATIVE_HOST_NAME}");
-        let edge_key =
-            format!(r"Software\Microsoft\Edge\NativeMessagingHosts\{NATIVE_HOST_NAME}");
-        let firefox_key = format!(r"Software\Mozilla\NativeMessagingHosts\{NATIVE_HOST_NAME}");
-        write_registry_manifest(&chrome_key, &manifest_path)?;
-        write_registry_manifest(&edge_key, &manifest_path)?;
-        write_registry_manifest(&firefox_key, &manifest_path)?;
-        let _ = m;
-    }
-    Ok(())
+    install_native_host(desktop_exe, &origins_config(settings))
 }
 
 pub fn uninstall_browser_integration() -> Result<(), String> {
-    if token_path().is_file() {
-        let _ = std::fs::remove_file(token_path());
+    uninstall_native_host()
+}
+
+pub fn ensure_browser_integration_on_start(
+    desktop_exe: &Path,
+    settings: &BrowserIntegrationSettings,
+) {
+    match install_native_host(desktop_exe, &origins_config(settings)) {
+        Ok(()) => tracing::info!("browser native host registered"),
+        Err(e) => tracing::warn!("browser native host registration skipped: {e}"),
     }
-    if host_manifest_path().is_file() {
-        let _ = std::fs::remove_file(host_manifest_path());
-    }
-    #[cfg(windows)]
-    {
-        use winreg::enums::*;
-        use winreg::RegKey;
-        let hkcu = RegKey::predef(HKEY_CURRENT_USER);
-        for key in [
-            format!(r"Software\Google\Chrome\NativeMessagingHosts\{NATIVE_HOST_NAME}"),
-            format!(r"Software\Microsoft\Edge\NativeMessagingHosts\{NATIVE_HOST_NAME}"),
-            format!(r"Software\Mozilla\NativeMessagingHosts\{NATIVE_HOST_NAME}"),
-        ] {
-            let _ = hkcu.delete_subkey(key);
-        }
-    }
-    Ok(())
 }
 
 pub fn integration_status(desktop_exe: &Path) -> BrowserIntegrationStatus {
-    let token_present = token_path().is_file();
-    let host_manifest_present = host_manifest_path().is_file();
-    let native_host_installed = native_host_exe_path(desktop_exe).is_file();
-
-    #[cfg(windows)]
-    fn reg_ok(key: &str) -> bool {
-        use winreg::enums::*;
-        use winreg::RegKey;
-        RegKey::predef(HKEY_CURRENT_USER)
-            .open_subkey(key)
-            .is_ok()
-    }
-
-    #[cfg(windows)]
-    let (chrome_registry, edge_registry, firefox_registry) = (
-        reg_ok(&format!(
-            r"Software\Google\Chrome\NativeMessagingHosts\{NATIVE_HOST_NAME}"
-        )),
-        reg_ok(&format!(
-            r"Software\Microsoft\Edge\NativeMessagingHosts\{NATIVE_HOST_NAME}"
-        )),
-        reg_ok(&format!(
-            r"Software\Mozilla\NativeMessagingHosts\{NATIVE_HOST_NAME}"
-        )),
-    );
-
-    #[cfg(not(windows))]
-    let (chrome_registry, edge_registry, firefox_registry) = (false, false, false);
-
-    BrowserIntegrationStatus {
-        token_present,
-        host_manifest_present,
-        chrome_registry,
-        edge_registry,
-        firefox_registry,
-        native_host_installed,
-    }
+    integration::integration_status(desktop_exe)
 }
 
 fn headers_map(h: &BrowserHandoff) -> HashMap<String, String> {
@@ -227,7 +52,7 @@ fn headers_map(h: &BrowserHandoff) -> HashMap<String, String> {
 }
 
 async fn handle_pipe_message(app: &AppHandle, env: PipeEnvelope) -> serde_json::Value {
-    let Ok(expected) = std::fs::read_to_string(token_path()) else {
+    let Ok(expected) = std::fs::read_to_string(integration::jyroxa_data_dir().join("browser-integration.token")) else {
         return serde_json::json!({ "ok": false, "error": "token missing" });
     };
     if env.token.trim() != expected.trim() {
@@ -249,11 +74,26 @@ async fn handle_pipe_message(app: &AppHandle, env: PipeEnvelope) -> serde_json::
             })
         }
         PipeMessage::GrabLinks { html, page_url } => {
+            crate::bring_main_window_to_front(app);
             let _ = app.emit(
                 "browser-link-grabber",
                 serde_json::json!({ "html": html, "page_url": page_url }),
             );
             serde_json::json!({ "ok": true })
+        }
+        PipeMessage::SetSilentAdd { silent_add } => {
+            let mut settings = state.0.get_settings().await;
+            settings.browser_integration.silent_add = silent_add;
+            let name = app.package_info().name.clone();
+            let exe = std::env::current_exe().ok();
+            match state
+                .0
+                .set_settings(settings, &name, exe.as_deref())
+                .await
+            {
+                Ok(()) => serde_json::json!({ "ok": true, "silent_add": silent_add }),
+                Err(e) => serde_json::json!({ "ok": false, "error": e.to_string() }),
+            }
         }
         PipeMessage::Handoff(handoff) => {
             if let Err(e) = handoff.validate() {
@@ -264,18 +104,27 @@ async fn handle_pipe_message(app: &AppHandle, env: PipeEnvelope) -> serde_json::
                 return serde_json::json!({ "ok": false, "error": "browser integration disabled" });
             }
 
-            let filename = handoff
+            let headers = headers_map(&handoff);
+            let mut filename = handoff
                 .filename
                 .clone()
                 .filter(|s| !s.is_empty())
                 .unwrap_or_else(|| "download".into());
-            let headers = headers_map(&handoff);
+            if let Ok(info) = state
+                .0
+                .probe_url_with_headers(&handoff.url, headers.clone())
+                .await
+            {
+                if !info.suggested_name.is_empty() && info.suggested_name != "download" {
+                    filename = info.suggested_name;
+                }
+            }
 
             if settings.browser_integration.silent_add {
                 let args = AddDownloadArgs {
                     urls: vec![handoff.url.clone()],
                     output_dir: settings.download_dir.clone(),
-                    filename,
+                    filename: filename.clone(),
                     connections: settings.max_connections_per_download,
                     connections_auto: true,
                     sha256: None,
@@ -283,16 +132,25 @@ async fn handle_pipe_message(app: &AppHandle, env: PipeEnvelope) -> serde_json::
                     http_headers: Some(headers),
                 };
                 match state.0.add_download(app.clone(), args).await {
-                    Ok(id) => serde_json::json!({ "ok": true, "download_id": id, "silent": true }),
+                    Ok(id) => {
+                        crate::bring_main_window_to_front(app);
+                        crate::engine::show_native_notification(
+                            app,
+                            "Added to Jyroxa",
+                            &filename,
+                        );
+                        serde_json::json!({ "ok": true, "download_id": id, "silent": true })
+                    }
                     Err(e) => serde_json::json!({ "ok": false, "error": e.to_string() }),
                 }
             } else {
+                crate::bring_main_window_to_front(app);
                 let payload = serde_json::json!({
                     "url": handoff.url,
                     "referrer": handoff.referrer,
                     "cookies": handoff.cookies,
                     "user_agent": handoff.user_agent,
-                    "filename": handoff.filename,
+                    "filename": if filename == "download" { handoff.filename } else { Some(filename) },
                     "page_url": handoff.page_url,
                 });
                 let _ = app.emit("browser-handoff", payload);

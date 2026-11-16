@@ -1,5 +1,47 @@
 # Changelog
 
+## 0.1.7 — 2026-11-16
+
+### Browser handoff
+
+- Restores and focuses the desktop window on browser handoff and link grabber events (tray/minimized no longer hides the Add flow).
+- Add dialog probes handoff URLs with Cookie/Referer/User-Agent so extensionless links get real filenames and sizes.
+- Extension dedupes `onCreated` and `onDeterminingFilename`, cancels Chrome only after a successful handoff, and notifies when Jyroxa is unreachable.
+- Extension popup toggle **Start downloads without asking** syncs with desktop `silent_add`; silent handoffs show a native **Added to Jyroxa** notification.
+
+### Distribution
+
+- Workspace and browser extension 0.1.7; NSIS installer and extension ZIP.
+
+## 0.1.6 — 2026-11-16
+
+### Browser integration
+
+- Native messaging host registers automatically on every app start and from the Windows installer (Chrome, Edge, Firefox).
+- Stable shipped Chromium extension ID (`njgbdpacpmohafoefmcmnmhdjpjmjipe`); auto-registration keeps discovered unpacked extension IDs.
+- Extension popup shows clearer errors when the host is missing or unreachable.
+- Tests isolate HKCU registry writes via `JYROXA_REGISTRY_PREFIX` so developer machines are not affected.
+
+### Distribution
+
+- Workspace, desktop, and Android version 0.1.6; Android versionCode 7.
+
+## 0.1.5 — 2026-11-16
+
+### Telegram downloads
+
+- Public `t.me/channel/id` posts resolve via embed HTML with no login; private `t.me/c/…` links use optional MTProto sign-in (Settings → Telegram).
+- LinkGrabber and add-download flows recognize Telegram post URLs alongside regular HTTP links.
+
+### Desktop build
+
+- Windows GNU: desktop `crate-type` is `rlib` + `staticlib` only (no `cdylib`) so grammers does not blow the DLL export ordinal limit.
+
+### Distribution
+
+- Workspace, desktop, and Android version 0.1.5; Android versionCode 6.
+- Same artifact set as 0.1.4 (NSIS, portable ZIP with native host, browser extension ZIP, Android APK, SHA-256 checksums). Android APK does not include Telegram (desktop-only feature).
+
 ## 0.1.4 — 2026-11-13
 
 ### Desktop UI

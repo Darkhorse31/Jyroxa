@@ -100,6 +100,7 @@ export interface BrowserIntegrationStatus {
   edge_registry: boolean;
   firefox_registry: boolean;
   native_host_installed: boolean;
+  packaged_extension_id: string;
 }
 
 export interface AddDownloadArgs {
@@ -187,6 +188,20 @@ export interface ProgressPayload {
   event: BackendProgressEvent;
 }
 
+export interface TelegramAccountView {
+  connected: boolean;
+  phone?: string | null;
+  display_name?: string | null;
+  api_id?: number | null;
+}
+
+export type TelegramLoginStep =
+  | "need_api_credentials"
+  | "need_phone"
+  | { step: "need_code"; phone: string }
+  | "need_password"
+  | "done";
+
 export const api = {
   getSettings: () => invoke<AppSettings>("get_settings"),
   setSettings: (s: AppSettings) => invoke<void>("set_settings", { settings: s }),
@@ -209,6 +224,8 @@ export const api = {
     invoke<LinkInfo[]>("probe_links", { urls }),
   probeUrl: (url: string) =>
     invoke<ProbeInfo>("probe_url", { url }),
+  probeUrlWithHeaders: (url: string, headers: Record<string, string>) =>
+    invoke<ProbeInfo>("probe_url_with_headers", { url, headers }),
   suggestSavePath: (dir: string, name: string) =>
     invoke<string>("suggest_save_path", { dir, name }),
   defaultCategoryDirs: () =>
@@ -223,6 +240,16 @@ export const api = {
     invoke<void>("install_browser_integration_cmd"),
   uninstallBrowserIntegration: () =>
     invoke<void>("uninstall_browser_integration_cmd"),
+  telegramStatus: () => invoke<TelegramAccountView>("telegram_status"),
+  telegramSetCredentials: (apiId: number, apiHash: string) =>
+    invoke<void>("telegram_set_credentials", { apiId, apiHash }),
+  telegramBeginLogin: (phone: string) =>
+    invoke<TelegramLoginStep>("telegram_begin_login", { phone }),
+  telegramSubmitCode: (code: string) =>
+    invoke<TelegramLoginStep>("telegram_submit_code", { code }),
+  telegramSubmitPassword: (password: string) =>
+    invoke<TelegramLoginStep>("telegram_submit_password", { password }),
+  telegramSignOut: () => invoke<void>("telegram_sign_out"),
 };
 
 export async function openFolder(filePath: string): Promise<boolean> {

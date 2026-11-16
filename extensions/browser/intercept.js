@@ -22,12 +22,7 @@ const EXT = {
   iso: ["iso", "img", "bin", "dmg"],
 };
 
-function extOf(nameOrUrl) {
-  const base = (nameOrUrl || "").split(/[?#]/)[0];
-  const dot = base.lastIndexOf(".");
-  if (dot < 0) return "";
-  return base.slice(dot + 1).toLowerCase();
-}
+import { extOf } from "./handoff-dedupe.js";
 
 function matchesCategory(ext, settings) {
   const ft = settings.fileTypes || {};

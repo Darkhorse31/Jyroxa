@@ -1,9 +1,13 @@
-import { sendNative, refreshSettingsFromApp } from "./native.js";
+import { sendNative, refreshSettingsFromApp, connectionFailureReason } from "./native.js";
 import { shouldInterceptDownload, extEnabled } from "./intercept.js";
 import {
   registerContextMenus,
   onContextMenuClick,
 } from "./context-menus.js";
+import {
+  createHandoffTracker,
+  urlHasKnownExtension,
+} from "./handoff-dedupe.js";
 
 const api = globalThis.browser ?? globalThis.chrome;
 
@@ -11,6 +15,7 @@ registerContextMenus();
 api.contextMenus.onClicked.addListener(onContextMenuClick);
 
 let bypassUntil = 0;
+const handoffTracker = createHandoffTracker();
 
 api.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
   if (msg?.type === "alt-bypass") {
@@ -31,16 +36,16 @@ async function cookiesForUrl(url) {
   }
 }
 
-async function handoffDownload(details) {
+async function buildHandoffPayload(details) {
   const url = details.url || details.finalUrl;
-  if (!url) return;
-  const referer = details.referrer || details.referrer || "";
+  if (!url) return null;
+  const referer = details.referrer || "";
   const pageUrl = details.finalUrl || url;
   const filename = details.filename || details.suggestedFilename || "";
   const cookies = await cookiesForUrl(url);
   const userAgent = navigator.userAgent;
 
-  await sendNative({
+  return {
     type: "handoff",
     url,
     referrer: referer || undefined,
@@ -48,7 +53,27 @@ async function handoffDownload(details) {
     filename: filename || undefined,
     cookies: cookies || undefined,
     user_agent: userAgent,
-  });
+  };
+}
+
+async function performHandoff(details) {
+  const payload = await buildHandoffPayload(details);
+  if (!payload) return { ok: false, error: "missing url" };
+  return sendNative(payload);
+}
+
+function notifyHandoffFailure(res) {
+  const reason = connectionFailureReason(res?.error || "handoff failed");
+  const id = `handoff-fail-${Date.now()}`;
+  try {
+    api.notifications.create(id, {
+      type: "basic",
+      iconUrl: "icons/icon-128.png",
+      title: reason.short,
+      message: reason.detail || "Chrome will continue the download.",
+    });
+  } catch {
+  }
 }
 
 function hostFromUrl(url) {
@@ -59,7 +84,7 @@ function hostFromUrl(url) {
   }
 }
 
-async function onDownloadCreated(item) {
+async function interceptDownload(item, { viaCreated }) {
   if (!extEnabled()) return;
   if (Date.now() < bypassUntil) return;
   if (item.url?.startsWith("magnet:")) {
@@ -80,24 +105,37 @@ async function onDownloadCreated(item) {
   const host = hostFromUrl(item.url);
   if (settings.disabledHosts?.includes(host)) return;
 
-  const take = shouldInterceptDownload(item, settings);
-  if (!take) return;
+  if (!shouldInterceptDownload(item, settings)) return;
 
-  try {
-    await api.downloads.cancel(item.id);
-  } catch {
+  if (viaCreated) {
+    if (handoffTracker.isClaimed(item.id)) return;
+    if (!urlHasKnownExtension(item.url)) return;
+    if (!handoffTracker.tryClaim(item.id)) return;
+  } else if (!handoffTracker.tryClaim(item.id)) {
+    return;
   }
 
-  await handoffDownload({
-    url: item.url,
-    referrer: item.referrer,
-    filename: item.filename,
-    finalUrl: item.finalUrl,
-  });
+  const res = await performHandoff(item);
+  if (res?.ok) {
+    try {
+      await api.downloads.cancel(item.id);
+    } catch {
+    }
+    return;
+  }
+
+  handoffTracker.release(item.id);
+  if (!viaCreated) {
+    try {
+      await api.downloads.resume(item.id);
+    } catch {
+    }
+  }
+  notifyHandoffFailure(res);
 }
 
 api.downloads.onCreated.addListener((item) => {
-  void onDownloadCreated(item);
+  void interceptDownload(item, { viaCreated: true });
 });
 
 api.downloads.onDeterminingFilename.addListener((item, suggest) => {
@@ -116,11 +154,31 @@ api.downloads.onDeterminingFilename.addListener((item, suggest) => {
       suggest();
       return;
     }
+    if (handoffTracker.isClaimed(item.id)) {
+      suggest();
+      return;
+    }
+    if (!handoffTracker.tryClaim(item.id)) {
+      suggest();
+      return;
+    }
+
+    const res = await performHandoff(item);
+    if (res?.ok) {
+      try {
+        await api.downloads.cancel(item.id);
+      } catch {
+      }
+      return;
+    }
+
+    handoffTracker.release(item.id);
+    suggest();
     try {
-      await api.downloads.cancel(item.id);
+      await api.downloads.resume(item.id);
     } catch {
     }
-    await handoffDownload(item);
+    notifyHandoffFailure(res);
   })();
 });
 

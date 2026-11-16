@@ -144,6 +144,7 @@ pub(crate) fn bring_main_window_to_front(app: &tauri::AppHandle) {
         }
     }
     let _ = w.set_focus();
+    let _ = w.request_user_attention(Some(tauri::UserAttentionType::Informational));
 }
 
 /// The app has no console, so a panic would otherwise vanish without a trace.
@@ -266,6 +267,20 @@ pub fn run() {
             tauri::async_runtime::block_on(async {
                 init_engine(&handle).await.expect("engine init failed");
             });
+            if let Ok(exe) = std::env::current_exe() {
+                let reg_handle = handle.clone();
+                tauri::async_runtime::spawn(async move {
+                    let settings = reg_handle
+                        .state::<EngineState>()
+                        .0
+                        .get_settings()
+                        .await;
+                    browser_integration::ensure_browser_integration_on_start(
+                        &exe,
+                        &settings.browser_integration,
+                    );
+                });
+            }
             tauri::async_runtime::spawn(run_clipboard_monitor(handle.clone()));
             tauri::async_runtime::spawn(run_tray_updater(handle.clone()));
 
@@ -373,6 +388,7 @@ pub fn run() {
             commands::grab_links,
             commands::probe_links,
             commands::probe_url,
+            commands::probe_url_with_headers,
             commands::suggest_save_path,
             commands::default_category_dirs,
             commands::open_folder_cmd,
@@ -380,6 +396,12 @@ pub fn run() {
             commands::get_browser_integration_status,
             commands::install_browser_integration_cmd,
             commands::uninstall_browser_integration_cmd,
+            commands::telegram_status,
+            commands::telegram_set_credentials,
+            commands::telegram_begin_login,
+            commands::telegram_submit_code,
+            commands::telegram_submit_password,
+            commands::telegram_sign_out,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

@@ -16,7 +16,7 @@ crate-type = ["rlib"]
 tauri-build = { version = "2", features = [] }
 
 [dependencies]
-jyroxa-core = { path = "../../../crates/jyroxa-core", default-features = false }
+jyroxa-core = { path = "../../../crates/jyroxa-core", default-features = false, features = ["telegram"] }
 jyroxa-native-host = { path = "../../../crates/jyroxa-native-host" }
 tauri = { version = "2", features = ["tray-icon", "image-png"] }
 tauri-plugin-opener = "2"
