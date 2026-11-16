@@ -117,6 +117,7 @@ async function boot() {
   const probeErrorEl = document.getElementById("probe-error")!;
   const probeErrorMsg = document.getElementById("probe-error-msg")!;
   const btnRetryProbe = document.getElementById("btn-retry-probe")!;
+  const btnProbeTelegramSettings = document.getElementById("btn-probe-telegram-settings")!;
 
   // Clipboard Dialog
   const dlgClip = document.getElementById("dlg-clipboard") as HTMLDialogElement;
@@ -324,12 +325,21 @@ async function boot() {
     probeLoadingEl.classList.remove("hidden");
     probeDetailsEl.classList.add("hidden");
     probeErrorEl.classList.add("hidden");
+    btnProbeTelegramSettings.classList.add("hidden");
 
     try {
       const info = pendingBrowserHeaders
         ? await api.probeUrlWithHeaders(trimmed, pendingBrowserHeaders)
         : await api.probeUrl(trimmed);
       probeLoadingEl.classList.add("hidden");
+      if (info.telegram_login_required) {
+        probeDetailsEl.classList.add("hidden");
+        probeErrorEl.classList.remove("hidden");
+        probeErrorMsg.textContent =
+          "Telegram hides this file from the web preview. Connect your Telegram account in Settings > Telegram to download it.";
+        btnProbeTelegramSettings.classList.remove("hidden");
+        return;
+      }
       probeDetailsEl.classList.remove("hidden");
 
       // Show detected metadata
@@ -399,6 +409,12 @@ async function boot() {
 
   btnRetryProbe.addEventListener("click", () => {
     if (lastProbedUrl) triggerProbe(lastProbedUrl);
+  });
+
+  btnProbeTelegramSettings.addEventListener("click", () => {
+    dlgAdd.close();
+    setDrawer("settings");
+    settingsView.openTab("telegram");
   });
 
   // Quick category folder buttons in Add dialog

@@ -182,4 +182,13 @@ mod tests {
         let urls = extract_telegram_urls("see https://t.me/telegram/193 and also t.me/durov/5 here");
         assert_eq!(urls.len(), 2);
     }
+
+    #[test]
+    fn public_link_with_single_query() {
+        let p = parse_telegram_link("https://t.me/durov/100?single=1").unwrap();
+        match p {
+            TelegramPostRef::Public { message_id, .. } => assert_eq!(message_id, 100),
+            _ => panic!("expected public"),
+        }
+    }
 }

@@ -20,6 +20,9 @@ pub struct ProbeInfo {
     pub category: Category,
     pub server: String,
     pub protocol: String,
+    /// Public embed hid the file; user must sign in to resolve via MTProto.
+    #[serde(default)]
+    pub telegram_login_required: bool,
 }
 
 fn mime_from_headers(headers: &h::HeaderMap) -> Option<String> {
@@ -157,6 +160,7 @@ pub async fn probe_url_with_headers(
         category,
         server,
         protocol,
+        telegram_login_required: false,
     })
 }
 

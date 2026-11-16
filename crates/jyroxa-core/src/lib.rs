@@ -42,9 +42,9 @@ pub use tuner::{parse_retry_after, Tuner, TunerInput, TunerOutput};
 
 #[cfg(feature = "telegram")]
 pub use telegram::{
-    extract_telegram_urls, is_telegram_post_url, parse_telegram_link, probe_post, resolve_post,
-    TelegramAccountView, TelegramClientPool, TelegramError, TelegramLoginStep, TelegramMediaItem,
-    TelegramPostRef,
+    extract_telegram_urls, is_telegram_post_url, parse_telegram_link, probe_post,
+    probe_post_with_pool, resolve_post, resolve_post_with_pool, TelegramAccountView,
+    TelegramClientPool, TelegramError, TelegramLoginStep, TelegramMediaItem, TelegramPostRef,
 };
 
 /// Hard upper bound on the number of simultaneous connections for a single
