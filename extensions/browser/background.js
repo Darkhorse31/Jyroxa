@@ -62,6 +62,18 @@ function hostFromUrl(url) {
 async function onDownloadCreated(item) {
   if (!extEnabled()) return;
   if (Date.now() < bypassUntil) return;
+  if (item.url?.startsWith("magnet:")) {
+    await sendNative({
+      type: "handoff",
+      url: item.url,
+      user_agent: navigator.userAgent,
+    });
+    try {
+      await api.downloads.cancel(item.id);
+    } catch {
+    }
+    return;
+  }
   if (!item.url?.startsWith("http")) return;
 
   const settings = await refreshSettingsFromApp();

@@ -45,6 +45,10 @@ export interface DownloadView {
   speed_bps: number;
   segments: SegmentState[];
   error?: string;
+  kind?: string;
+  torrent_peers?: number;
+  torrent_seeds?: number;
+  torrent_ratio?: number;
 }
 
 export interface AppSettings {

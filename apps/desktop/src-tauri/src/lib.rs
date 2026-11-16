@@ -2,6 +2,7 @@ mod browser_integration;
 mod commands;
 mod engine;
 mod platform;
+mod torrent_host;
 mod shell_paths;
 mod window_state;
 
@@ -217,7 +218,12 @@ pub fn run() {
     let maybe_url = args
         .iter()
         .skip(1)
-        .find(|a| a.starts_with("http://") || a.starts_with("https://"))
+        .find(|a| {
+            a.starts_with("http://")
+                || a.starts_with("https://")
+                || a.starts_with("magnet:")
+                || a.to_ascii_lowercase().ends_with(".torrent")
+        })
         .cloned();
 
     let _single_instance_guard =
