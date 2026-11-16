@@ -7,6 +7,8 @@ use std::time::{Duration, Instant};
 use anyhow::{anyhow, Context, Result};
 use clap::{Parser, Subcommand};
 
+mod torrent_cli;
+
 use jyroxa_core::download::{filename_from_url, Control};
 use jyroxa_core::events::{self, ProgressEvent};
 use jyroxa_core::{
@@ -106,6 +108,32 @@ enum Command {
         #[arg(long, default_value = ".jyroxa-bench")]
         dir: PathBuf,
     },
+    /// BitTorrent via librqbit (magnet, .torrent file, or torrent URL).
+    Torrent {
+        #[command(subcommand)]
+        sub: TorrentCmd,
+    },
+}
+
+#[derive(Subcommand)]
+enum TorrentCmd {
+    /// Download a magnet / torrent to a folder.
+    Get {
+        /// Magnet URI, torrent URL, or local .torrent path.
+        input: String,
+        #[arg(short = 'o', long, default_value = ".")]
+        output: PathBuf,
+    },
+    /// Repeat timed downloads (for benchmarks).
+    Bench {
+        input: String,
+        #[arg(short = 'o', long, default_value = ".jyroxa-torrent-bench")]
+        output: PathBuf,
+        #[arg(long, default_value_t = 3)]
+        runs: usize,
+        #[arg(long, default_value_t = 600)]
+        cap_secs: u64,
+    },
 }
 
 #[tokio::main(flavor = "multi_thread", worker_threads = 4)]
@@ -172,6 +200,15 @@ async fn real_main() -> Result<()> {
             statefile,
             connections,
         } => run_resume(statefile, connections).await,
+        Command::Torrent { sub } => match sub {
+            TorrentCmd::Get { input, output } => torrent_cli::run_torrent_get(input, output).await,
+            TorrentCmd::Bench {
+                input,
+                output,
+                runs,
+                cap_secs,
+            } => torrent_cli::run_torrent_bench(input, output, runs, cap_secs).await,
+        },
         Command::Bench {
             url,
             connections,
