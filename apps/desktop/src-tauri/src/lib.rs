@@ -143,6 +143,7 @@ pub(crate) fn bring_main_window_to_front(app: &tauri::AppHandle) {
         }
     }
     let _ = w.set_focus();
+    let _ = w.request_user_attention(Some(tauri::UserAttentionType::Informational));
 }
 
 /// The app has no console, so a panic would otherwise vanish without a trace.
@@ -381,6 +382,7 @@ pub fn run() {
             commands::grab_links,
             commands::probe_links,
             commands::probe_url,
+            commands::probe_url_with_headers,
             commands::suggest_save_path,
             commands::default_category_dirs,
             commands::open_folder_cmd,

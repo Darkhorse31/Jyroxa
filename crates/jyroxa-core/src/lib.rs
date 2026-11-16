@@ -35,7 +35,7 @@ pub use hoststats::HostStats;
 pub use limiter::RateLimiter;
 pub use linkgrabber::{GrabOptions, LinkGrabber, LinkInfo, Package};
 pub use naming::{category_for, dedupe_path, suggest_filename, Category};
-pub use probe::{probe_url, ProbeInfo};
+pub use probe::{probe_url, probe_url_with_headers, ProbeInfo};
 pub use queue::{QueueConfig, Scheduler, TaskId, TaskPriority, TaskSpec};
 pub use state::{DownloadState, SegmentState};
 pub use tuner::{parse_retry_after, Tuner, TunerInput, TunerOutput};

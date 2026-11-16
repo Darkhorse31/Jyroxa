@@ -74,11 +74,26 @@ async fn handle_pipe_message(app: &AppHandle, env: PipeEnvelope) -> serde_json::
             })
         }
         PipeMessage::GrabLinks { html, page_url } => {
+            crate::bring_main_window_to_front(app);
             let _ = app.emit(
                 "browser-link-grabber",
                 serde_json::json!({ "html": html, "page_url": page_url }),
             );
             serde_json::json!({ "ok": true })
+        }
+        PipeMessage::SetSilentAdd { silent_add } => {
+            let mut settings = state.0.get_settings().await;
+            settings.browser_integration.silent_add = silent_add;
+            let name = app.package_info().name.clone();
+            let exe = std::env::current_exe().ok();
+            match state
+                .0
+                .set_settings(settings, &name, exe.as_deref())
+                .await
+            {
+                Ok(()) => serde_json::json!({ "ok": true, "silent_add": silent_add }),
+                Err(e) => serde_json::json!({ "ok": false, "error": e.to_string() }),
+            }
         }
         PipeMessage::Handoff(handoff) => {
             if let Err(e) = handoff.validate() {
@@ -89,18 +104,27 @@ async fn handle_pipe_message(app: &AppHandle, env: PipeEnvelope) -> serde_json::
                 return serde_json::json!({ "ok": false, "error": "browser integration disabled" });
             }
 
-            let filename = handoff
+            let headers = headers_map(&handoff);
+            let mut filename = handoff
                 .filename
                 .clone()
                 .filter(|s| !s.is_empty())
                 .unwrap_or_else(|| "download".into());
-            let headers = headers_map(&handoff);
+            if let Ok(info) = state
+                .0
+                .probe_url_with_headers(&handoff.url, headers.clone())
+                .await
+            {
+                if !info.suggested_name.is_empty() && info.suggested_name != "download" {
+                    filename = info.suggested_name;
+                }
+            }
 
             if settings.browser_integration.silent_add {
                 let args = AddDownloadArgs {
                     urls: vec![handoff.url.clone()],
                     output_dir: settings.download_dir.clone(),
-                    filename,
+                    filename: filename.clone(),
                     connections: settings.max_connections_per_download,
                     connections_auto: true,
                     sha256: None,
@@ -108,16 +132,25 @@ async fn handle_pipe_message(app: &AppHandle, env: PipeEnvelope) -> serde_json::
                     http_headers: Some(headers),
                 };
                 match state.0.add_download(app.clone(), args).await {
-                    Ok(id) => serde_json::json!({ "ok": true, "download_id": id, "silent": true }),
+                    Ok(id) => {
+                        crate::bring_main_window_to_front(app);
+                        crate::engine::show_native_notification(
+                            app,
+                            "Added to Jyroxa",
+                            &filename,
+                        );
+                        serde_json::json!({ "ok": true, "download_id": id, "silent": true })
+                    }
                     Err(e) => serde_json::json!({ "ok": false, "error": e.to_string() }),
                 }
             } else {
+                crate::bring_main_window_to_front(app);
                 let payload = serde_json::json!({
                     "url": handoff.url,
                     "referrer": handoff.referrer,
                     "cookies": handoff.cookies,
                     "user_agent": handoff.user_agent,
-                    "filename": handoff.filename,
+                    "filename": if filename == "download" { handoff.filename } else { Some(filename) },
                     "page_url": handoff.page_url,
                 });
                 let _ = app.emit("browser-handoff", payload);

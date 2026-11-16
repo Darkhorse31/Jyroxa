@@ -38,6 +38,7 @@ fn extension_to_pipe(msg: ExtensionMessage) -> PipeMessage {
     match msg {
         ExtensionMessage::Ping => PipeMessage::Ping,
         ExtensionMessage::GetSettings => PipeMessage::GetSettings,
+        ExtensionMessage::SetSilentAdd { silent_add } => PipeMessage::SetSilentAdd { silent_add },
         ExtensionMessage::GrabLinks { html, page_url } => PipeMessage::GrabLinks { html, page_url },
         ExtensionMessage::Handoff(h) | ExtensionMessage::DownloadUrl(h) => PipeMessage::Handoff(h),
     }

@@ -326,7 +326,9 @@ async function boot() {
     probeErrorEl.classList.add("hidden");
 
     try {
-      const info = await api.probeUrl(trimmed);
+      const info = pendingBrowserHeaders
+        ? await api.probeUrlWithHeaders(trimmed, pendingBrowserHeaders)
+        : await api.probeUrl(trimmed);
       probeLoadingEl.classList.add("hidden");
       probeDetailsEl.classList.remove("hidden");
 
@@ -703,16 +705,17 @@ async function boot() {
     user_agent?: string;
   }>("browser-handoff", (ev) => {
     const p = ev.payload;
-    openAddModal(p.url);
-    if (p.filename) {
-      addFilenameInput.value = p.filename;
-      filenameUserEdited = true;
-    }
     pendingBrowserHeaders = {
       ...(p.user_agent ? { "User-Agent": p.user_agent } : {}),
       ...(p.referrer ? { Referer: p.referrer } : {}),
       ...(p.cookies ? { Cookie: p.cookies } : {}),
     };
+    filenameUserEdited = Boolean(p.filename);
+    openAddModal(p.url);
+    if (p.filename) {
+      addFilenameInput.value = p.filename;
+    }
+    void triggerProbe(p.url);
   });
 
   await listen<{ html: string; page_url: string }>("browser-link-grabber", (ev) => {

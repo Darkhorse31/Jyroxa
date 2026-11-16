@@ -220,6 +220,8 @@ export const api = {
     invoke<LinkInfo[]>("probe_links", { urls }),
   probeUrl: (url: string) =>
     invoke<ProbeInfo>("probe_url", { url }),
+  probeUrlWithHeaders: (url: string, headers: Record<string, string>) =>
+    invoke<ProbeInfo>("probe_url_with_headers", { url, headers }),
   suggestSavePath: (dir: string, name: string) =>
     invoke<string>("suggest_save_path", { dir, name }),
   defaultCategoryDirs: () =>

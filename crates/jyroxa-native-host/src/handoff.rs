@@ -9,6 +9,7 @@ pub enum ExtensionMessage {
     Ping,
     Handoff(BrowserHandoff),
     GetSettings,
+    SetSilentAdd { silent_add: bool },
     GrabLinks { html: String, page_url: String },
     DownloadUrl(BrowserHandoff),
 }
@@ -41,6 +42,7 @@ pub enum PipeMessage {
     Handoff(BrowserHandoff),
     Ping,
     GetSettings,
+    SetSilentAdd { silent_add: bool },
     GrabLinks { html: String, page_url: String },
 }
 

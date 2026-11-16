@@ -159,6 +159,19 @@ pub async fn probe_url(state: State<'_, EngineState>, url: String) -> Result<Pro
 }
 
 #[tauri::command]
+pub async fn probe_url_with_headers(
+    state: State<'_, EngineState>,
+    url: String,
+    headers: std::collections::HashMap<String, String>,
+) -> Result<ProbeInfo, String> {
+    state
+        .0
+        .probe_url_with_headers(&url, headers)
+        .await
+        .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
 pub fn suggest_save_path(state: State<'_, EngineState>, dir: String, name: String) -> String {
     state.0.suggest_save_path(&dir, &name)
 }

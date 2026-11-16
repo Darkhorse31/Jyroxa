@@ -383,6 +383,22 @@ impl DesktopEngine {
         jyroxa_core::probe_url(&client, &normalized, std::time::Duration::from_secs(10)).await
     }
 
+    pub async fn probe_url_with_headers(
+        &self,
+        url: &str,
+        headers: std::collections::HashMap<String, String>,
+    ) -> CoreResult<jyroxa_core::ProbeInfo> {
+        let normalized = normalize_user_url(url);
+        let client = build_client()?;
+        jyroxa_core::probe_url_with_headers(
+            &client,
+            &normalized,
+            &headers,
+            std::time::Duration::from_secs(10),
+        )
+        .await
+    }
+
     pub fn telegram(&self) -> Arc<jyroxa_core::TelegramClientPool> {
         Arc::clone(&self.telegram)
     }
@@ -1188,7 +1204,7 @@ pub(crate) fn request_autotune(connections_auto: bool, global_autotune: bool) ->
     connections_auto && global_autotune
 }
 
-fn show_native_notification(app: &AppHandle, title: &str, body: &str) {
+pub(crate) fn show_native_notification(app: &AppHandle, title: &str, body: &str) {
     use tauri_plugin_notification::NotificationExt;
     let _ = app
         .notification()

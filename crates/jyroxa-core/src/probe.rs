@@ -40,10 +40,33 @@ fn protocol_label(version: reqwest::Version) -> String {
     }
 }
 
+fn apply_extra_headers(
+    builder: reqwest::RequestBuilder,
+    headers: &std::collections::HashMap<String, String>,
+) -> reqwest::RequestBuilder {
+    let mut b = builder;
+    for (k, v) in headers {
+        if !k.is_empty() && !v.is_empty() {
+            b = b.header(k.as_str(), v.as_str());
+        }
+    }
+    b
+}
+
 /// Probe `url` with HEAD, falling back to a ranged GET (`bytes=0-0`).
 pub async fn probe_url(
     client: &reqwest::Client,
     url: &str,
+    timeout: Duration,
+) -> Result<ProbeInfo> {
+    probe_url_with_headers(client, url, &std::collections::HashMap::new(), timeout).await
+}
+
+/// Probe with optional HTTP headers (e.g. Cookie / Referer from a browser handoff).
+pub async fn probe_url_with_headers(
+    client: &reqwest::Client,
+    url: &str,
+    headers: &std::collections::HashMap<String, String>,
     timeout: Duration,
 ) -> Result<ProbeInfo> {
     let mut final_url = url.to_string();
@@ -53,7 +76,12 @@ pub async fn probe_url(
     let mut content_disposition = None;
     let mut protocol = "HTTP/1.1".to_string();
 
-    if let Ok(resp) = client.head(url).timeout(timeout.min(crate::download::HEAD_TIMEOUT)).send().await {
+    let head = apply_extra_headers(client.head(url), headers);
+    if let Ok(resp) = head
+        .timeout(timeout.min(crate::download::HEAD_TIMEOUT))
+        .send()
+        .await
+    {
         if resp.status().is_success() || resp.status() == reqwest::StatusCode::METHOD_NOT_ALLOWED {
             final_url = resp.url().to_string();
             protocol = protocol_label(resp.version());
@@ -74,8 +102,8 @@ pub async fn probe_url(
 
     let needs_ranged = size.is_none() || !resumable;
     if needs_ranged {
-        let resp = client
-            .get(&final_url)
+        let get = apply_extra_headers(client.get(&final_url), headers);
+        let resp = get
             .header(h::RANGE, "bytes=0-0")
             .timeout(timeout)
             .send()
@@ -130,4 +158,71 @@ pub async fn probe_url(
         server,
         protocol,
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use axum::body::Body;
+    use axum::http::{HeaderMap, HeaderValue, StatusCode};
+    use axum::response::Response;
+    use axum::routing::get;
+    use axum::Router;
+    use std::collections::HashMap;
+    use tokio::net::TcpListener;
+
+    fn attachment_response(status: StatusCode, headers: &HeaderMap) -> Response<Body> {
+        let mut resp = Response::builder()
+            .status(status)
+            .header(
+                "Content-Disposition",
+                HeaderValue::from_static("attachment; filename=\"pixeldrain.bin\""),
+            )
+            .header("Content-Length", "4242")
+            .header("Accept-Ranges", "bytes")
+            .body(Body::empty())
+            .unwrap();
+        if headers.contains_key("range") {
+            *resp.status_mut() = StatusCode::PARTIAL_CONTENT;
+            resp.headers_mut().insert(
+                "Content-Range",
+                HeaderValue::from_static("bytes 0-0/4242"),
+            );
+        }
+        resp
+    }
+
+    async fn attachment_get(headers: HeaderMap) -> Response<Body> {
+        attachment_response(StatusCode::OK, &headers)
+    }
+
+    async fn attachment_head(headers: HeaderMap) -> Response<Body> {
+        attachment_response(StatusCode::OK, &headers)
+    }
+
+    #[tokio::test]
+    async fn probe_uses_content_disposition_with_headers() {
+        let app = Router::new()
+            .route("/file", get(attachment_get).head(attachment_head));
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        tokio::spawn(async move {
+            axum::serve(listener, app).await.unwrap();
+        });
+
+        let client = crate::build_client().unwrap();
+        let url = format!("http://{addr}/file?id=abc");
+        let mut headers = HashMap::new();
+        headers.insert("Cookie".into(), "sess=1".into());
+        let info = probe_url_with_headers(
+            &client,
+            &url,
+            &headers,
+            std::time::Duration::from_secs(5),
+        )
+        .await
+        .unwrap();
+        assert_eq!(info.suggested_name, "pixeldrain.bin");
+        assert_eq!(info.size, Some(4242));
+    }
 }
