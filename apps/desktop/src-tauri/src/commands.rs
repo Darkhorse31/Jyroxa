@@ -10,6 +10,7 @@ use crate::platform::reveal_in_file_manager;
 use tauri_plugin_opener::OpenerExt;
 use jyroxa_core::linkgrabber::{LinkInfo, Package};
 use jyroxa_core::ProbeInfo;
+use jyroxa_core::torrent::TorrentProbeInfo;
 
 #[tauri::command]
 pub async fn get_settings(state: State<'_, EngineState>) -> Result<AppSettings, String> {
@@ -156,6 +157,18 @@ pub async fn probe_links(
 #[tauri::command]
 pub async fn probe_url(state: State<'_, EngineState>, url: String) -> Result<ProbeInfo, String> {
     state.0.probe_url(&url).await.map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub async fn probe_torrent(
+    state: State<'_, EngineState>,
+    source: String,
+) -> Result<TorrentProbeInfo, String> {
+    state
+        .0
+        .probe_torrent(&source)
+        .await
+        .map_err(|e| e.to_string())
 }
 
 #[tauri::command]

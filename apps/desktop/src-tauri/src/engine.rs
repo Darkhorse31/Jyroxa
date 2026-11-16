@@ -88,6 +88,24 @@ pub struct AppSettings {
     pub scheduler_stop: Option<String>,
     pub scheduler_days: Vec<u8>,
     pub browser_integration: BrowserIntegrationSettings,
+    #[serde(default = "default_torrent_peer_limit")]
+    pub torrent_peer_limit: usize,
+    #[serde(default = "default_true")]
+    pub torrent_merge_trackers: bool,
+    #[serde(default)]
+    pub torrent_seeding: bool,
+    #[serde(default = "default_ratio_limit")]
+    pub torrent_ratio_limit: f64,
+}
+
+fn default_torrent_peer_limit() -> usize {
+    200
+}
+fn default_ratio_limit() -> f64 {
+    1.0
+}
+fn default_true() -> bool {
+    true
 }
 
 impl Default for AppSettings {
@@ -112,6 +130,10 @@ impl Default for AppSettings {
             scheduler_stop: None,
             scheduler_days: vec![0, 1, 2, 3, 4, 5, 6],
             browser_integration: BrowserIntegrationSettings::default(),
+            torrent_peer_limit: default_torrent_peer_limit(),
+            torrent_merge_trackers: true,
+            torrent_seeding: false,
+            torrent_ratio_limit: default_ratio_limit(),
         }
     }
 }
@@ -153,6 +175,18 @@ pub struct DownloadView {
     pub speed_bps: f64,
     pub segments: Vec<SegmentState>,
     pub error: Option<String>,
+    #[serde(default = "default_http_kind")]
+    pub kind: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub torrent_peers: Option<u32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub torrent_seeds: Option<u32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub torrent_ratio: Option<f64>,
+}
+
+fn default_http_kind() -> String {
+    "http".into()
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -165,6 +199,8 @@ pub struct AddDownloadArgs {
     pub sha256: Option<String>,
     pub md5: Option<String>,
     pub http_headers: Option<std::collections::HashMap<String, String>>,
+    #[serde(default)]
+    pub torrent_only_files: Option<Vec<usize>>,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -212,6 +248,8 @@ pub struct PersistedItem {
 struct InnerItem {
     view: DownloadView,
     control: Option<Control>,
+    torrent_cancel: Option<tokio::sync::watch::Sender<bool>>,
+    torrent_only_files: Option<Vec<usize>>,
 }
 
 enum ResumeAction {
@@ -383,6 +421,10 @@ impl DesktopEngine {
         jyroxa_core::probe_url(&client, &normalized, std::time::Duration::from_secs(10)).await
     }
 
+    pub async fn probe_torrent(&self, source: &str) -> CoreResult<jyroxa_core::torrent::TorrentProbeInfo> {
+        crate::torrent_host::probe_torrent_via_sidecar(source).await
+    }
+
     pub async fn probe_url_with_headers(
         &self,
         url: &str,
@@ -494,6 +536,7 @@ impl DesktopEngine {
                 sha256: inner.view.sha256.clone(),
                 md5: inner.view.md5.clone(),
                 http_headers: inner.view.http_headers.clone(),
+                torrent_only_files: inner.torrent_only_files.clone(),
             }
         };
         let settings = self.settings.lock().await.clone();
@@ -672,6 +715,14 @@ impl DesktopEngine {
                 speed_bps: 0.0,
                 segments,
                 error: None,
+                kind: if crate::torrent_host::primary_is_torrent(&item.urls) {
+                    "torrent".into()
+                } else {
+                    default_http_kind()
+                },
+                torrent_peers: None,
+                torrent_seeds: None,
+                torrent_ratio: None,
             };
             {
                 let mut items = self.items.lock().await;
@@ -680,6 +731,8 @@ impl DesktopEngine {
                     InnerItem {
                         view: view.clone(),
                         control: None,
+                        torrent_cancel: None,
+                        torrent_only_files: None,
                     },
                 );
             }
@@ -731,8 +784,17 @@ impl DesktopEngine {
             }
         }
         let settings = self.settings.lock().await.clone();
+        let is_torrent = crate::torrent_host::primary_is_torrent(&args.urls);
+        let mut filename = args.filename.clone();
+        if is_torrent && (filename.is_empty() || filename == "download") {
+            filename = crate::torrent_host::torrent_filename_hint(&args.urls);
+        }
         let id = self.next_id.fetch_add(1, Ordering::Relaxed);
-        let output = PathBuf::from(&args.output_dir).join(&args.filename);
+        let output = if is_torrent {
+            PathBuf::from(&args.output_dir)
+        } else {
+            PathBuf::from(&args.output_dir).join(&filename)
+        };
         let connections = if args.connections_auto {
             jyroxa_core::MAX_CONNECTIONS
         } else {
@@ -742,7 +804,7 @@ impl DesktopEngine {
         let view = DownloadView {
             id,
             urls: args.urls.clone(),
-            filename: args.filename.clone(),
+            filename,
             output: output.to_string_lossy().into_owned(),
             connections,
             connections_auto: args.connections_auto,
@@ -755,6 +817,10 @@ impl DesktopEngine {
             speed_bps: 0.0,
             segments: Vec::new(),
             error: None,
+            kind: if is_torrent { "torrent".into() } else { default_http_kind() },
+            torrent_peers: None,
+            torrent_seeds: None,
+            torrent_ratio: None,
         };
 
         {
@@ -764,6 +830,8 @@ impl DesktopEngine {
                 InnerItem {
                     view: view.clone(),
                     control: None,
+                    torrent_cancel: None,
+                    torrent_only_files: args.torrent_only_files.clone(),
                 },
             );
         }
@@ -814,8 +882,108 @@ impl DesktopEngine {
                 continue;
             }
 
-            engine.spawn_download(app.clone(), id);
+            let is_torrent = {
+                let items = engine.items.lock().await;
+                items
+                    .get(&id)
+                    .map(|i| i.view.kind == "torrent")
+                    .unwrap_or(false)
+            };
+            if is_torrent {
+                engine.spawn_torrent_download(app.clone(), id);
+            } else {
+                engine.spawn_download(app.clone(), id);
+            }
         }
+    }
+
+    fn spawn_torrent_download(self: &Arc<Self>, app: AppHandle, id: u64) {
+        let engine = Arc::clone(self);
+        tauri::async_runtime::spawn(async move {
+            let settings = engine.settings.lock().await.clone();
+            let (urls, output_dir, only_files) = {
+                let mut items = engine.items.lock().await;
+                let Some(inner) = items.get_mut(&id) else {
+                    return;
+                };
+                inner.view.status = TaskStatus::Starting;
+                (
+                    inner.view.urls.clone(),
+                    crate::torrent_host::sidecar_output_dir(&engine.data_dir, id),
+                    inner.torrent_only_files.clone(),
+                )
+            };
+            {
+                let mut items = engine.items.lock().await;
+                if let Some(inner) = items.get_mut(&id) {
+                    inner.view.output = output_dir.to_string_lossy().into_owned();
+                }
+            }
+            let _ = app.emit("downloads-changed", ());
+            {
+                let mut active = engine.active_count.lock().await;
+                *active += 1;
+            }
+            let (cancel_tx, cancel_rx) = tokio::sync::watch::channel(false);
+            {
+                let mut items = engine.items.lock().await;
+                if let Some(inner) = items.get_mut(&id) {
+                    inner.torrent_cancel = Some(cancel_tx.clone());
+                    inner.view.status = TaskStatus::Running;
+                }
+            }
+            let items_ref = Arc::clone(&engine.items);
+            let app_poll = app.clone();
+            let result = crate::torrent_host::spawn_torrent_sidecar(
+                &urls,
+                output_dir,
+                only_files,
+                &settings,
+                cancel_rx,
+                move |progress| {
+                    let items_ref = items_ref.clone();
+                    let app_poll = app_poll.clone();
+                    tauri::async_runtime::spawn(async move {
+                        let mut items = items_ref.lock().await;
+                        if let Some(inner) = items.get_mut(&id) {
+                            crate::torrent_host::apply_torrent_progress(
+                                &mut inner.view,
+                                &progress,
+                            );
+                        }
+                        let _ = app_poll.emit("downloads-changed", ());
+                    });
+                },
+            )
+            .await;
+            if *cancel_tx.borrow() {
+                let _ = result;
+            } else if let Err(e) = result {
+                let mut items = engine.items.lock().await;
+                if let Some(inner) = items.get_mut(&id) {
+                    if !matches!(e, jyroxa_core::Error::Cancelled) {
+                        inner.view.status = TaskStatus::Failed;
+                        inner.view.error = Some(e.to_string());
+                    }
+                }
+            } else {
+                let mut items = engine.items.lock().await;
+                if let Some(inner) = items.get_mut(&id) {
+                    crate::torrent_host::mark_torrent_completed(&mut inner.view);
+                }
+            }
+            {
+                let mut items = engine.items.lock().await;
+                if let Some(inner) = items.get_mut(&id) {
+                    inner.torrent_cancel = None;
+                }
+            }
+            let mut active = engine.active_count.lock().await;
+            *active = active.saturating_sub(1);
+            let _ = app.emit("downloads-changed", ());
+            let max = engine.settings.lock().await.max_concurrent;
+            engine.pump_queue(app.clone(), max).await;
+        });
     }
 
     fn spawn_download(self: &Arc<Self>, app: AppHandle, id: u64) {
@@ -967,12 +1135,24 @@ impl DesktopEngine {
     }
 
     pub async fn pause(&self, id: u64) -> bool {
-        let items = self.items.lock().await;
-        if let Some(inner) = items.get(&id) {
-            if let Some(c) = &inner.control {
-                c.pause();
-                return true;
+        let (http, torrent_cancel) = {
+            let items = self.items.lock().await;
+            let Some(inner) = items.get(&id) else {
+                return false;
+            };
+            (inner.control.clone(), inner.torrent_cancel.clone())
+        };
+        if let Some(c) = http {
+            c.pause();
+            return true;
+        }
+        if let Some(tx) = torrent_cancel {
+            let _ = tx.send(true);
+            let mut items = self.items.lock().await;
+            if let Some(inner) = items.get_mut(&id) {
+                inner.view.status = TaskStatus::Paused;
             }
+            return true;
         }
         false
     }
@@ -1029,8 +1209,12 @@ impl DesktopEngine {
                 return false;
             };
             let purge_files = inner.control.is_none();
+            let torrent_cancel = inner.torrent_cancel.clone();
             let cancelled = if let Some(c) = &inner.control {
                 c.cancel();
+                true
+            } else if let Some(tx) = &torrent_cancel {
+                let _ = tx.send(true);
                 true
             } else {
                 matches!(
@@ -1413,6 +1597,14 @@ pub async fn run_clipboard_monitor(app: AppHandle) {
             continue;
         }
         last_clipboard = text.clone();
+        if text.trim_start().starts_with("magnet:") {
+            let url = text.trim().to_string();
+            if url != last_emitted_url {
+                last_emitted_url = url.clone();
+                let _ = app.emit("clipboard-url", url);
+            }
+            continue;
+        }
         if let Some(m) = clipboard_url_re().find(&text) {
             let url = m.as_str().to_string();
             if url != last_emitted_url {

@@ -4,6 +4,7 @@ pub mod ext_id;
 pub mod framing;
 pub mod handoff;
 pub mod integration;
+pub mod torrent_associations;
 pub mod pipe_client;
 
 pub const NATIVE_HOST_NAME: &str = "com.jyroxa.browser";

@@ -397,8 +397,11 @@ mod tests {
         unsafe { std::env::remove_var("JYROXA_REGISTRY_PREFIX") };
     }
 
+    static MANIFEST_TEST_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
     #[test]
     fn preserves_ids_from_existing_manifest_on_disk() {
+        let _guard = MANIFEST_TEST_LOCK.lock().expect("manifest test lock");
         let tmp = tempfile::tempdir().expect("tempdir");
         let data = tmp.path().join("jyroxa-data");
         std::fs::create_dir_all(data.join("native-host")).expect("dir");

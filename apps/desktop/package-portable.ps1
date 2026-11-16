@@ -31,6 +31,12 @@ try {
     } else {
         Write-Warning "Missing $hostSrc - portable zip will omit jyroxa-native-host.exe"
     }
+    $cliSrc = Join-Path $targetDir "jyroxa.exe"
+    if (Test-Path $cliSrc) {
+        Copy-Item $cliSrc (Join-Path $stage "jyroxa.exe") -Force
+    } else {
+        Write-Warning "Missing $cliSrc - portable zip will omit jyroxa.exe (torrent sidecar)"
+    }
 
     New-Item -ItemType Directory -Path $distDir -Force | Out-Null
     $zipPath = Join-Path $distDir "Jyroxa-$version-windows-x64-portable.zip"

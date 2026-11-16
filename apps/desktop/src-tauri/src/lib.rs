@@ -2,6 +2,7 @@ mod browser_integration;
 mod commands;
 mod engine;
 mod platform;
+mod torrent_host;
 mod shell_paths;
 mod window_state;
 
@@ -215,11 +216,18 @@ async fn run_tray_updater(app: tauri::AppHandle) {
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     let args: Vec<String> = std::env::args().collect();
-    let maybe_url = args
-        .iter()
-        .skip(1)
-        .find(|a| a.starts_with("http://") || a.starts_with("https://"))
-        .cloned();
+    let maybe_url = args.iter().skip(1).find(|a| {
+        a.starts_with("http://")
+            || a.starts_with("https://")
+            || a.starts_with("magnet:")
+            || a.to_ascii_lowercase().ends_with(".torrent")
+            || (std::path::Path::new(a).is_file()
+                && std::path::Path::new(a)
+                    .extension()
+                    .and_then(|e| e.to_str())
+                    .map(|e| e.eq_ignore_ascii_case("torrent"))
+                    .unwrap_or(false))
+    }).cloned();
 
     let _single_instance_guard =
         match platform::try_acquire_single_instance("JyroxaSingleInstanceMutex") {
@@ -382,6 +390,7 @@ pub fn run() {
             commands::grab_links,
             commands::probe_links,
             commands::probe_url,
+            commands::probe_torrent,
             commands::probe_url_with_headers,
             commands::suggest_save_path,
             commands::default_category_dirs,

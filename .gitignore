@@ -4,6 +4,7 @@ target/
 apps/desktop/dist/
 apps/desktop/src-tauri/jyroxa-native-host.exe
 apps/desktop/src-tauri/jyroxa-browser-register.exe
+apps/desktop/src-tauri/jyroxa.exe
 dist/*.zip
 dist/*.exe
 *.apk

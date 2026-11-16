@@ -37,6 +37,7 @@ export function shouldInterceptDownload(item, settings) {
   if (!settings?.enabled) return false;
   const name = item.filename || item.suggestedFilename || item.url || "";
   const ext = extOf(name);
+  if (ext === "torrent") return true;
   if (!ext) {
     return true;
   }

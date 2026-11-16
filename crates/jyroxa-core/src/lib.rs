@@ -21,6 +21,8 @@ pub mod queue;
 pub mod segment;
 pub mod state;
 pub mod trace;
+#[cfg(not(target_os = "android"))]
+pub mod torrent;
 pub mod tuner;
 
 #[cfg(feature = "telegram")]
@@ -39,6 +41,13 @@ pub use probe::{probe_url, probe_url_with_headers, ProbeInfo};
 pub use queue::{QueueConfig, Scheduler, TaskId, TaskPriority, TaskSpec};
 pub use state::{DownloadState, SegmentState};
 pub use tuner::{parse_retry_after, Tuner, TunerInput, TunerOutput};
+#[cfg(not(target_os = "android"))]
+pub use torrent::{
+    is_magnet_uri, is_torrent_source, magnet_display_name, parse_info_hash_hex, TorrentFileProbe,
+    TorrentProbeInfo, TorrentTuning,
+};
+#[cfg(all(not(target_os = "android"), feature = "torrent-engine"))]
+pub use torrent::TorrentSession;
 
 #[cfg(feature = "telegram")]
 pub use telegram::{

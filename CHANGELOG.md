@@ -1,5 +1,24 @@
 # Changelog
 
+## 0.1.8 — 2026-11-16
+
+### BitTorrent
+
+- librqbit-based torrent engine in the CLI sidecar (`jyroxa.exe`); desktop avoids linking librqbit directly.
+- Magnet and `.torrent` URLs, file associations (HKCU), single-instance handoff, and browser extension handoff for magnets and `.torrent` downloads.
+- Add dialog resolves torrent metadata (name, size, multi-file checkboxes) before starting.
+- NSIS bundle ships `jyroxa.exe` beside `jyroxa-desktop.exe` for the sidecar.
+
+### Benchmark
+
+- Debian 13.7.0 netinst torrent: Jyroxa ~50 MiB/s vs tuned aria2c ~15 MiB/s on this host (see README).
+
+**Not included:** BEP-19 web seeds through the HTTP multi-connection engine.
+
+### Distribution
+
+- Workspace, desktop, extension, and Android 0.1.8; Android versionCode 8.
+
 ## 0.1.7 — 2026-11-16
 
 ### Browser handoff

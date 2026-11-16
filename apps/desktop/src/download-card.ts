@@ -637,10 +637,18 @@ export class DownloadCard {
     this.elapsedText.textContent = `${fmtDuration(this.elapsedSecs)} elapsed`;
 
     // Connections count
-    const connCount = this.activeConnections || d.connections || 8;
-    this.connText.textContent = d.connections_auto
-      ? `${connCount} conn (auto)`
-      : `${connCount} conn`;
+    if (d.kind === "torrent") {
+      const peers = d.torrent_peers ?? 0;
+      const seeds = d.torrent_seeds ?? 0;
+      const ratio = d.torrent_ratio;
+      const ratioStr = ratio != null ? ` · ratio ${ratio.toFixed(2)}` : "";
+      this.connText.textContent = `peers ${peers} · seeds ${seeds}${ratioStr}`;
+    } else {
+      const connCount = this.activeConnections || d.connections || 8;
+      this.connText.textContent = d.connections_auto
+        ? `${connCount} conn (auto)`
+        : `${connCount} conn`;
+    }
 
     // Resumable badge
     const isResumable = this.resumable ?? (d.segments.length > 1 || (total > 0 && downloaded > 0));
