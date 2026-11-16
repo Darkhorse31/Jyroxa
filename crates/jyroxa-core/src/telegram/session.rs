@@ -139,7 +139,7 @@ fn dpapi_protect(data: &[u8]) -> Result<Vec<u8>> {
     let mut out_blob = CRYPT_INTEGER_BLOB::default();
     unsafe {
         CryptProtectData(
-            &mut in_blob,
+            &in_blob,
             None,
             None,
             None,
@@ -164,7 +164,7 @@ fn dpapi_unprotect(data: &[u8]) -> Result<Vec<u8>> {
     let mut out_blob = CRYPT_INTEGER_BLOB::default();
     unsafe {
         CryptUnprotectData(
-            &mut in_blob,
+            &in_blob,
             None,
             None,
             None,

@@ -507,7 +507,7 @@ impl LinkGrabber {
                 Ok(item) => item.to_link_info(),
                 Err(_) => {
                     let mut info = LinkInfo::bare(url.to_string());
-                    info.filename = Some(format!("telegram_post"));
+                    info.filename = Some("telegram_post".to_string());
                     info
                 }
             };

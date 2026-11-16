@@ -1,5 +1,21 @@
 # Changelog
 
+## 0.1.5 — 2026-11-16
+
+### Telegram downloads
+
+- Public `t.me/channel/id` posts resolve via embed HTML with no login; private `t.me/c/…` links use optional MTProto sign-in (Settings → Telegram).
+- LinkGrabber and add-download flows recognize Telegram post URLs alongside regular HTTP links.
+
+### Desktop build
+
+- Windows GNU: desktop `crate-type` is `rlib` + `staticlib` only (no `cdylib`) so grammers does not blow the DLL export ordinal limit.
+
+### Distribution
+
+- Workspace, desktop, and Android version 0.1.5; Android versionCode 6.
+- Same artifact set as 0.1.4 (NSIS, portable ZIP with native host, browser extension ZIP, Android APK, SHA-256 checksums). Android APK does not include Telegram (desktop-only feature).
+
 ## 0.1.4 — 2026-11-13
 
 ### Desktop UI

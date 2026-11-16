@@ -144,11 +144,9 @@ impl TelegramClientPool {
     pub async fn submit_code(&self, code: String) -> Result<TelegramLoginStep> {
         let token = {
             let mut auth = self.auth.lock().await;
-            let token = auth
-                .pending_token
+            auth.pending_token
                 .take()
-                .ok_or_else(|| TelegramError::other("login not started"))?;
-            token
+                .ok_or_else(|| TelegramError::other("login not started"))?
         };
         let client = self.client().await?;
         match client.sign_in(&token, &code).await {
