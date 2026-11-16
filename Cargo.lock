@@ -2718,10 +2718,14 @@ dependencies = [
 name = "jyroxa-native-host"
 version = "0.1.5"
 dependencies = [
+ "base64 0.22.1",
  "serde",
  "serde_json",
+ "sha2 0.10.9",
+ "tempfile",
  "thiserror 1.0.69",
  "tokio",
+ "winreg 0.55.0",
 ]
 
 [[package]]

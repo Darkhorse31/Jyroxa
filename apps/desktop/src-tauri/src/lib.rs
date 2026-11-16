@@ -260,6 +260,20 @@ pub fn run() {
             tauri::async_runtime::block_on(async {
                 init_engine(&handle).await.expect("engine init failed");
             });
+            if let Ok(exe) = std::env::current_exe() {
+                let reg_handle = handle.clone();
+                tauri::async_runtime::spawn(async move {
+                    let settings = reg_handle
+                        .state::<EngineState>()
+                        .0
+                        .get_settings()
+                        .await;
+                    browser_integration::ensure_browser_integration_on_start(
+                        &exe,
+                        &settings.browser_integration,
+                    );
+                });
+            }
             tauri::async_runtime::spawn(run_clipboard_monitor(handle.clone()));
             tauri::async_runtime::spawn(run_tray_updater(handle.clone()));
 

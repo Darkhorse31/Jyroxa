@@ -450,7 +450,7 @@ export class SettingsView {
 
           <div class="settings-card">
             <h4 class="settings-group-title">Extension IDs (Chromium)</h4>
-            <p class="setting-desc">Copy from chrome://extensions after loading the unpacked extension.</p>
+            <p class="setting-desc">Shipped extension ID: <code>njgbdpacpmohafoefmcmnmhdjpjmjipe</code>. For other unpacked loads, copy the ID from chrome://extensions (optional).</p>
             <div class="setting-item">
               <input type="text" id="set-chrome-ext-id" class="form-input" placeholder="Chrome extension ID"
                 value="${this.escapeHtml(s.browser_integration?.chrome_extension_id || "")}" />

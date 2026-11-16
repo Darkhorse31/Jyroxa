@@ -4,22 +4,10 @@ use jyroxa_native_host::framing::{read_json_frame, write_json_frame, FramingErro
 use jyroxa_native_host::handoff::{parse_extension_message, ExtensionMessage, PipeMessage};
 use jyroxa_native_host::pipe_client::{forward_to_desktop, PipeError};
 use std::io::{self, Read, Write};
-use std::path::PathBuf;
 use std::process::Stdio;
 
-fn token_path() -> PathBuf {
-    std::env::var_os("LOCALAPPDATA")
-        .map(PathBuf::from)
-        .unwrap_or_else(std::env::temp_dir)
-        .join("Jyroxa")
-        .join("browser-integration.token")
-}
-
 fn read_install_token() -> Option<String> {
-    std::fs::read_to_string(token_path())
-        .ok()
-        .map(|s| s.trim().to_string())
-        .filter(|s| !s.is_empty())
+    jyroxa_native_host::integration::read_browser_token()
 }
 
 fn respond<W: Write>(w: &mut W, value: serde_json::Value) {
@@ -30,10 +18,7 @@ fn try_launch_desktop() {
     if std::env::var("JYROXA_NATIVE_HOST_NO_LAUNCH").is_ok() {
         return;
     }
-    let Some(appdata) = std::env::var_os("LOCALAPPDATA") else {
-        return;
-    };
-    let marker = PathBuf::from(appdata).join("Jyroxa").join("desktop-exe.txt");
+    let marker = jyroxa_native_host::integration::jyroxa_data_dir().join("desktop-exe.txt");
     let Ok(exe_text) = std::fs::read_to_string(&marker) else {
         return;
     };
