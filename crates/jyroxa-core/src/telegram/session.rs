@@ -132,7 +132,7 @@ fn decrypt_blob(data: &[u8]) -> Result<Vec<u8>> {
 
 #[cfg(windows)]
 fn dpapi_protect(data: &[u8]) -> Result<Vec<u8>> {
-    let mut in_blob = CRYPT_INTEGER_BLOB {
+    let in_blob = CRYPT_INTEGER_BLOB {
         cbData: data.len() as u32,
         pbData: data.as_ptr() as *mut u8,
     };
@@ -157,7 +157,7 @@ fn dpapi_protect(data: &[u8]) -> Result<Vec<u8>> {
 
 #[cfg(windows)]
 fn dpapi_unprotect(data: &[u8]) -> Result<Vec<u8>> {
-    let mut in_blob = CRYPT_INTEGER_BLOB {
+    let in_blob = CRYPT_INTEGER_BLOB {
         cbData: data.len() as u32,
         pbData: data.as_ptr() as *mut u8,
     };
