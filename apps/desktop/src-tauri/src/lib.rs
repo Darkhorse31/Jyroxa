@@ -374,6 +374,12 @@ pub fn run() {
             commands::get_browser_integration_status,
             commands::install_browser_integration_cmd,
             commands::uninstall_browser_integration_cmd,
+            commands::telegram_status,
+            commands::telegram_set_credentials,
+            commands::telegram_begin_login,
+            commands::telegram_submit_code,
+            commands::telegram_submit_password,
+            commands::telegram_sign_out,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

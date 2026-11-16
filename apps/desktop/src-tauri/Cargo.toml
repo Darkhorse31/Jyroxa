@@ -9,13 +9,15 @@ description = "Jyroxa desktop download manager (Tauri)"
 
 [lib]
 name = "jyroxa_desktop_lib"
-crate-type = ["staticlib", "cdylib", "rlib"]
+# Desktop links the lib as rlib/staticlib into the exe. cdylib on Windows pulls in
+# every grammers symbol into the DLL export table (65535 ordinal limit).
+crate-type = ["rlib", "staticlib"]
 
 [build-dependencies]
 tauri-build = { version = "2", features = [] }
 
 [dependencies]
-jyroxa-core = { path = "../../../crates/jyroxa-core" }
+jyroxa-core = { path = "../../../crates/jyroxa-core", features = ["telegram"] }
 jyroxa-native-host = { path = "../../../crates/jyroxa-native-host" }
 tauri = { version = "2", features = ["tray-icon", "image-png"] }
 tauri-plugin-opener = "2"

@@ -320,6 +320,10 @@ impl LinkGrabber {
     /// Grab from an input that is either a URL (fetched and parsed) or raw text.
     pub async fn grab(&self, input: &str, opts: &GrabOptions) -> Result<Vec<Package>> {
         let input = input.trim();
+        #[cfg(feature = "telegram")]
+        if is_single_url(input) && crate::telegram::is_telegram_post_url(input) {
+            return self.grab_telegram_post(input).await;
+        }
         let (base, text, is_page) = if is_single_url(input) {
             let base = Url::parse(input).ok();
             match self.fetch_text(input).await {
@@ -497,6 +501,17 @@ impl LinkGrabber {
     /// Probe a single link: HEAD first, then a ranged GET fallback, for
     /// filename / size / mime / resumability.
     pub async fn probe_link(&self, url: &str) -> LinkInfo {
+        #[cfg(feature = "telegram")]
+        if crate::telegram::is_telegram_post_url(url) {
+            return match crate::telegram::probe_post(&self.client, url).await {
+                Ok(item) => item.to_link_info(),
+                Err(_) => {
+                    let mut info = LinkInfo::bare(url.to_string());
+                    info.filename = Some(format!("telegram_post"));
+                    info
+                }
+            };
+        }
         match probe_url(&self.client, url, self.timeout).await {
             Ok(p) => LinkInfo {
                 url: p.final_url,
@@ -516,6 +531,15 @@ impl LinkGrabber {
     pub fn with_timeout(mut self, timeout: Duration) -> Self {
         self.timeout = timeout;
         self
+    }
+
+    #[cfg(feature = "telegram")]
+    async fn grab_telegram_post(&self, url: &str) -> Result<Vec<Package>> {
+        let items = crate::telegram::resolve_post(&self.client, url)
+            .await
+            .map_err(|e| crate::error::Error::other(e.to_string()))?;
+        let infos: Vec<LinkInfo> = items.into_iter().map(|i| i.to_link_info()).collect();
+        Ok(group_packages(infos))
     }
 }
 
