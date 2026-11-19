@@ -37,6 +37,11 @@ try {
     } else {
         Write-Warning "Missing $cliSrc - portable zip will omit jyroxa.exe (torrent sidecar)"
     }
+    $sidecarDir = Join-Path $PSScriptRoot "src-tauri"
+    foreach ($name in @("yt-dlp.exe", "ffmpeg.exe")) {
+        $p = Join-Path $sidecarDir $name
+        if (Test-Path $p) { Copy-Item $p (Join-Path $stage $name) -Force }
+    }
 
     New-Item -ItemType Directory -Path $distDir -Force | Out-Null
     $zipPath = Join-Path $distDir "Jyroxa-$version-windows-x64-portable.zip"

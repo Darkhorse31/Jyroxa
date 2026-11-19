@@ -91,6 +91,7 @@ export interface BrowserIntegrationSettings {
   disabled_hosts: string[];
   chrome_extension_id: string;
   edge_extension_id: string;
+  video_grab_enabled?: boolean;
 }
 
 export interface BrowserIntegrationStatus {

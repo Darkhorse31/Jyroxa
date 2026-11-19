@@ -49,6 +49,8 @@ pub struct BrowserIntegrationSettings {
     pub disabled_hosts: Vec<String>,
     pub chrome_extension_id: String,
     pub edge_extension_id: String,
+    #[serde(default = "default_true")]
+    pub video_grab_enabled: bool,
 }
 
 impl Default for BrowserIntegrationSettings {
@@ -1172,6 +1174,12 @@ impl DesktopEngine {
                 })
             });
 
+            let stream_manifest = request
+                .urls
+                .first()
+                .map(|u| jyroxa_core::is_stream_manifest_url(u))
+                .unwrap_or(false);
+
             let result = if let Some((chat_id, message_id)) = telegram_mtproto {
                 engine
                     .run_telegram_mtproto_download(
@@ -1182,6 +1190,26 @@ impl DesktopEngine {
                         control.clone(),
                     )
                     .await
+            } else if stream_manifest {
+                let url = request.urls[0].clone();
+                let headers = request.extra_headers.clone().unwrap_or_default();
+                jyroxa_core::stream_download(
+                    &url,
+                    &request.output,
+                    headers,
+                    request.connections,
+                    Some(tx.clone()),
+                    control.clone(),
+                )
+                .await
+                .map(|out| jyroxa_core::DownloadOutcome {
+                    output: out.output,
+                    total_size: out.total_size,
+                    elapsed: std::time::Duration::ZERO,
+                    average_bps: 0.0,
+                    connections_used: request.connections,
+                    resumed: false,
+                })
             } else {
                 let dl = downloader.read().await.clone();
                 dl.download(request, Some(tx), control.clone(), None)

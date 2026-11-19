@@ -1,5 +1,18 @@
 # Changelog
 
+## 0.1.11 — 2026-11-19
+
+### Browser video grab (IDM-style)
+
+- Floating teal download control on `<video>` / `<audio>` elements (MutationObserver, all frames).
+- Captures direct media, HLS `.m3u8`, and DASH `.mpd` via `webRequest`; MSE/blob pages hand off the page URL for yt-dlp.
+- Popup adds a global video-button toggle; per-site hide; connection auto-retry before errors (reload extension + restart Chrome after install/update).
+
+### Engine
+
+- Parallel HLS/DASH segment download and merge/remux to MP4 in `jyroxa-core`.
+- Windows bundles `yt-dlp.exe` and `ffmpeg.exe` beside the desktop app (NSIS + portable).
+
 ## 0.1.9 — 2026-11-19
 
 ### Telegram

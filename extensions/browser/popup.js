@@ -10,7 +10,19 @@ const statusEl = document.getElementById("status-text");
 const statusDetailEl = document.getElementById("status-detail");
 const toggle = document.getElementById("toggle-enabled");
 const toggleSilent = document.getElementById("toggle-silent");
+const toggleVideoGrab = document.getElementById("toggle-video-grab");
 const refreshBtn = document.getElementById("btn-refresh");
+
+async function pingWithRetry() {
+  const deadline = Date.now() + 4500;
+  let last = null;
+  while (Date.now() < deadline) {
+    last = await sendNative({ type: "ping" });
+    if (last?.ok && last.connected) return last;
+    await new Promise((r) => setTimeout(r, 600));
+  }
+  return last;
+}
 
 async function refreshStatus() {
   statusEl.textContent = "Checking connection…";
@@ -19,7 +31,7 @@ async function refreshStatus() {
     statusDetailEl.textContent = "";
     statusDetailEl.className = "muted";
   }
-  const res = await sendNative({ type: "ping" });
+  const res = await pingWithRetry();
   const ok = Boolean(res?.ok && res.connected);
   if (ok) {
     statusEl.textContent = "Connected to Jyroxa";
@@ -29,8 +41,10 @@ async function refreshStatus() {
     const reason = pingFailureFromResponse(res);
     statusEl.textContent = reason?.short ?? "Jyroxa not reachable";
     statusEl.className = "muted disconnected";
-    if (statusDetailEl && reason?.detail) {
-      statusDetailEl.textContent = reason.detail;
+    const extra =
+      " If you just installed or updated Jyroxa, reload this extension and fully quit Chrome (all windows), then reopen.";
+    if (statusDetailEl) {
+      statusDetailEl.textContent = `${reason?.detail || ""}${extra}`.trim();
       statusDetailEl.className = "muted disconnected";
     }
   }
@@ -38,6 +52,11 @@ async function refreshStatus() {
   const s = getCachedSettings();
   toggle.checked = s.enabled !== false;
   if (toggleSilent) toggleSilent.checked = Boolean(s.silentAdd);
+  if (toggleVideoGrab) {
+    const local = await api.storage.local.get("jyroxaVideoGrab");
+    const fromApp = s.videoGrabEnabled !== false;
+    toggleVideoGrab.checked = local.jyroxaVideoGrab !== false && fromApp;
+  }
 }
 
 toggle.addEventListener("change", async () => {
@@ -46,6 +65,20 @@ toggle.addEventListener("change", async () => {
   const local = await api.storage.local.get("jyroxaSettings");
   const merged = { ...(local.jyroxaSettings || {}), enabled };
   await api.storage.local.set({ jyroxaSettings: merged });
+});
+
+toggleVideoGrab?.addEventListener("change", async () => {
+  const on = toggleVideoGrab.checked;
+  await api.storage.local.set({ jyroxaVideoGrab: on });
+  const tabs = await api.tabs.query({});
+  for (const t of tabs) {
+    if (t.id != null) {
+      try {
+        await api.tabs.sendMessage(t.id, { type: "video-grab-refresh" });
+      } catch {
+      }
+    }
+  }
 });
 
 toggleSilent?.addEventListener("change", async () => {

@@ -3,6 +3,7 @@ mod commands;
 mod engine;
 mod platform;
 mod torrent_host;
+mod video_sidecar;
 mod shell_paths;
 mod window_state;
 
