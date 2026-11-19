@@ -45,6 +45,10 @@ export interface DownloadView {
   speed_bps: number;
   segments: SegmentState[];
   error?: string;
+  kind?: string;
+  torrent_peers?: number;
+  torrent_seeds?: number;
+  torrent_ratio?: number;
 }
 
 export interface AppSettings {
@@ -99,6 +103,18 @@ export interface BrowserIntegrationStatus {
   packaged_extension_id: string;
 }
 
+export interface TorrentFileProbe {
+  index: number;
+  path: string;
+  length: number;
+}
+
+export interface TorrentProbeInfo {
+  name: string;
+  total_bytes: number;
+  files: TorrentFileProbe[];
+}
+
 export interface AddDownloadArgs {
   urls: string[];
   output_dir: string;
@@ -108,6 +124,7 @@ export interface AddDownloadArgs {
   sha256?: string;
   md5?: string;
   http_headers?: Record<string, string>;
+  torrent_only_files?: number[];
 }
 
 export interface GrabOptionsDto {
@@ -221,6 +238,8 @@ export const api = {
     invoke<LinkInfo[]>("probe_links", { urls }),
   probeUrl: (url: string) =>
     invoke<ProbeInfo>("probe_url", { url }),
+  probeTorrent: (source: string) =>
+    invoke<TorrentProbeInfo>("probe_torrent", { source }),
   probeUrlWithHeaders: (url: string, headers: Record<string, string>) =>
     invoke<ProbeInfo>("probe_url_with_headers", { url, headers }),
   suggestSavePath: (dir: string, name: string) =>

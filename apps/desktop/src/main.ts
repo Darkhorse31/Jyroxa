@@ -118,6 +118,51 @@ async function boot() {
   const probeErrorMsg = document.getElementById("probe-error-msg")!;
   const btnRetryProbe = document.getElementById("btn-retry-probe")!;
   const btnProbeTelegramSettings = document.getElementById("btn-probe-telegram-settings")!;
+  const probeTorrentFilesEl = document.getElementById("probe-torrent-files")!;
+
+  let torrentOnlyFiles: number[] | undefined;
+
+  function isTorrentSource(s: string): boolean {
+    const t = s.trim();
+    if (!t) return false;
+    if (t.startsWith("magnet:")) return true;
+    if (/^https?:\/\//i.test(t) && t.toLowerCase().includes(".torrent")) return true;
+    return /\.torrent$/i.test(t);
+  }
+
+  function renderTorrentFileList(files: import("./api").TorrentFileProbe[]) {
+    probeTorrentFilesEl.innerHTML = "";
+    torrentOnlyFiles = undefined;
+    if (files.length <= 1) {
+      probeTorrentFilesEl.classList.add("hidden");
+      return;
+    }
+    probeTorrentFilesEl.classList.remove("hidden");
+    const selected = new Set(files.map((f) => f.index));
+    torrentOnlyFiles = [...selected];
+    for (const f of files) {
+      const li = document.createElement("li");
+      const cb = document.createElement("input");
+      cb.type = "checkbox";
+      cb.checked = true;
+      cb.dataset.index = String(f.index);
+      cb.addEventListener("change", () => {
+        if (cb.checked) {
+          selected.add(f.index);
+        } else {
+          selected.delete(f.index);
+        }
+        torrentOnlyFiles = selected.size === files.length ? undefined : [...selected].sort((a, b) => a - b);
+      });
+      const label = document.createElement("span");
+      label.textContent = f.path;
+      const size = document.createElement("span");
+      size.className = "file-size";
+      size.textContent = fmtBytes(f.length);
+      li.append(cb, label, size);
+      probeTorrentFilesEl.append(li);
+    }
+  }
 
   // Clipboard Dialog
   const dlgClip = document.getElementById("dlg-clipboard") as HTMLDialogElement;
@@ -315,7 +360,42 @@ async function boot() {
   // Live URL Probing and Auto-naming in Add Modal
   async function triggerProbe(url: string) {
     const trimmed = url.trim();
-    if (!trimmed || (!trimmed.startsWith("http") && !trimmed.includes("t.me"))) {
+    if (!trimmed) {
+      addProbeCard.classList.add("hidden");
+      return;
+    }
+    if (isTorrentSource(trimmed)) {
+      lastProbedUrl = trimmed;
+      addProbeCard.classList.remove("hidden");
+      probeLoadingEl.classList.remove("hidden");
+      probeDetailsEl.classList.add("hidden");
+      probeErrorEl.classList.add("hidden");
+      probeTorrentFilesEl.classList.add("hidden");
+      try {
+        const info = await api.probeTorrent(trimmed);
+        probeLoadingEl.classList.add("hidden");
+        probeDetailsEl.classList.remove("hidden");
+        probeSizeEl.textContent = `Size: ${fmtBytes(info.total_bytes)}`;
+        probeMimeEl.textContent = "Type: BitTorrent";
+        probeResumableEl.textContent = "Peer transfer";
+        probeResumableEl.className = "probe-badge yes";
+        probeCategoryEl.textContent = "torrent";
+        probeCategoryEl.className = "probe-badge cat cat-archives";
+        renderTorrentFileList(info.files);
+        if (!filenameUserEdited && info.name) {
+          addFilenameInput.value = info.name;
+        }
+      } catch (err: unknown) {
+        probeLoadingEl.classList.add("hidden");
+        probeErrorEl.classList.remove("hidden");
+        probeErrorMsg.textContent = String((err as Error)?.message || err || "Torrent probe failed");
+        if (!filenameUserEdited) {
+          addFilenameInput.value = basenameFromUrl(trimmed);
+        }
+      }
+      return;
+    }
+    if (!trimmed.startsWith("http") && !trimmed.includes("t.me")) {
       addProbeCard.classList.add("hidden");
       return;
     }
@@ -326,6 +406,8 @@ async function boot() {
     probeDetailsEl.classList.add("hidden");
     probeErrorEl.classList.add("hidden");
     btnProbeTelegramSettings.classList.add("hidden");
+    probeTorrentFilesEl.classList.add("hidden");
+    torrentOnlyFiles = undefined;
 
     try {
       const info = pendingBrowserHeaders
@@ -433,6 +515,9 @@ async function boot() {
     filenameUserEdited = false;
     folderUserEdited = false;
     addProbeCard.classList.add("hidden");
+    torrentOnlyFiles = undefined;
+    probeTorrentFilesEl.classList.add("hidden");
+    probeTorrentFilesEl.innerHTML = "";
 
     if (prefillUrl) {
       addUrlsInput.value = prefillUrl;
@@ -501,6 +586,7 @@ async function boot() {
       sha256,
       md5,
       http_headers: pendingBrowserHeaders,
+      torrent_only_files: torrentOnlyFiles,
     };
 
     try {

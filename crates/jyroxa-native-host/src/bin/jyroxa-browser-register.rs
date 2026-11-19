@@ -7,6 +7,9 @@ use jyroxa_native_host::framing::{read_json_frame, write_json_frame};
 use jyroxa_native_host::integration::{
     install_native_host, uninstall_native_host, BrowserOriginsConfig,
 };
+use jyroxa_native_host::torrent_associations::{
+    install_torrent_associations, uninstall_torrent_associations,
+};
 
 fn usage() -> ! {
     eprintln!(
@@ -55,8 +58,16 @@ fn main() {
                 eprintln!("install failed: {e}");
                 std::process::exit(1);
             }
+            if let Err(e) = install_torrent_associations(&desktop) {
+                eprintln!("torrent association install failed: {e}");
+                std::process::exit(1);
+            }
         }
         Some("uninstall") => {
+            if let Err(e) = uninstall_torrent_associations() {
+                eprintln!("torrent association uninstall failed: {e}");
+                std::process::exit(1);
+            }
             if let Err(e) = uninstall_native_host() {
                 eprintln!("uninstall failed: {e}");
                 std::process::exit(1);
