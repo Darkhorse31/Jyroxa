@@ -63,6 +63,7 @@ impl Default for BrowserIntegrationSettings {
             disabled_hosts: Vec::new(),
             chrome_extension_id: String::new(),
             edge_extension_id: String::new(),
+            video_grab_enabled: true,
         }
     }
 }
