@@ -20,6 +20,7 @@ pub mod probe;
 pub mod queue;
 pub mod segment;
 pub mod state;
+pub mod stream;
 pub mod trace;
 #[cfg(not(target_os = "android"))]
 pub mod torrent;
@@ -40,6 +41,10 @@ pub use naming::{category_for, dedupe_path, suggest_filename, Category};
 pub use probe::{probe_url, probe_url_with_headers, ProbeInfo};
 pub use queue::{QueueConfig, Scheduler, TaskId, TaskPriority, TaskSpec};
 pub use state::{DownloadState, SegmentState};
+pub use stream::{
+    dash_segment_urls, is_stream_manifest_url, parse_m3u8, parse_mpd, stream_download,
+    DashVariant, HlsPlaylist, HlsVariant, MpdInfo, StreamDownloadResult,
+};
 pub use tuner::{parse_retry_after, Tuner, TunerInput, TunerOutput};
 #[cfg(not(target_os = "android"))]
 pub use torrent::{

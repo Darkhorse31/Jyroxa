@@ -1,0 +1,78 @@
+.jx-vgrab-host {
+  position: absolute;
+  z-index: 2147483646;
+  pointer-events: none;
+  font-family: system-ui,Segoe UI,sans-serif;
+  font-size: 11px;
+  line-height: 1.2;
+}
+
+.jx-vgrab-btn {
+  pointer-events: auto;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 3px 6px;
+  border: 1px solid #0b5c56;
+  background: #0f766e;
+  color: #fff;
+  cursor: pointer;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.35);
+  border-radius: 0;
+}
+
+.jx-vgrab-btn:hover {
+  background: #0d6b64;
+}
+
+.jx-vgrab-menu {
+  pointer-events: auto;
+  margin-top: 4px;
+  min-width: 180px;
+  max-width: 260px;
+  max-height: 220px;
+  overflow: auto;
+  border: 1px solid #0b5c56;
+  background: #fff;
+  color: #111;
+  border-radius: 0;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.25);
+}
+
+.jx-vgrab-item {
+  display: block;
+  width: 100%;
+  text-align: left;
+  padding: 6px 8px;
+  border: 0;
+  border-bottom: 1px solid #e5e7eb;
+  background: #fff;
+  cursor: pointer;
+  border-radius: 0;
+}
+
+.jx-vgrab-item:hover {
+  background: #ecfeff;
+}
+
+.jx-vgrab-item:last-child {
+  border-bottom: 0;
+}
+
+.jx-vgrab-muted {
+  padding: 6px 8px;
+  color: #6b7280;
+}
+
+.jx-vgrab-hide {
+  display: block;
+  width: 100%;
+  text-align: left;
+  padding: 6px 8px;
+  border: 0;
+  border-top: 1px solid #e5e7eb;
+  background: #fafafa;
+  cursor: pointer;
+  color: #374151;
+  border-radius: 0;
+}

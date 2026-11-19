@@ -5,6 +5,8 @@ apps/desktop/dist/
 apps/desktop/src-tauri/jyroxa-native-host.exe
 apps/desktop/src-tauri/jyroxa-browser-register.exe
 apps/desktop/src-tauri/jyroxa.exe
+apps/desktop/src-tauri/yt-dlp.exe
+apps/desktop/src-tauri/ffmpeg.exe
 dist/*.zip
 dist/*.exe
 *.apk

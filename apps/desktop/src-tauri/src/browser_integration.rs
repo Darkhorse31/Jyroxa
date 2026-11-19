@@ -105,6 +105,27 @@ async fn handle_pipe_message(app: &AppHandle, env: PipeEnvelope) -> serde_json::
                 return serde_json::json!({ "ok": false, "error": "browser integration disabled" });
             }
 
+            let mut handoff = handoff;
+            if handoff.video_page == Some(true) {
+                match crate::video_sidecar::resolve_page_to_url(
+                    &handoff.url,
+                    handoff.format_id.as_deref(),
+                )
+                .await
+                {
+                    Ok((direct, name)) => {
+                        handoff.url = direct;
+                        if handoff.filename.as_deref().unwrap_or("").is_empty() {
+                            handoff.filename = Some(name);
+                        }
+                        handoff.video_page = None;
+                    }
+                    Err(e) => {
+                        tracing::warn!("yt-dlp resolve failed: {e}");
+                    }
+                }
+            }
+
             let headers = headers_map(&handoff);
             let torrent_handoff = is_torrent_source(&handoff.url);
             let mut filename = handoff

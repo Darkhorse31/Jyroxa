@@ -8,6 +8,13 @@ import {
   createHandoffTracker,
   urlHasKnownExtension,
 } from "./handoff-dedupe.js";
+import {
+  recordMedia,
+  listMediaForTab,
+  clearTab,
+  mediaLabel,
+  formatBytes,
+} from "./media-monitor.js";
 
 const api = globalThis.browser ?? globalThis.chrome;
 
@@ -27,11 +34,91 @@ function claimMagnetUrl(url) {
   return true;
 }
 
-api.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
+try {
+  api.webRequest.onCompleted.addListener(
+    (details) => recordMedia(details),
+    { urls: ["<all_urls>"] },
+    ["responseHeaders"],
+  );
+} catch {
+}
+
+api.tabs.onRemoved.addListener((tabId) => clearTab(tabId));
+
+api.runtime.onMessage.addListener((msg, sender, sendResponse) => {
   if (msg?.type === "alt-bypass") {
     bypassUntil = Date.now() + 30_000;
     sendResponse({ ok: true });
     return false;
+  }
+  if (msg?.type === "video-grab-list") {
+    void (async () => {
+      const tabId = sender.tab?.id ?? -1;
+      let items = tabId >= 0 ? listMediaForTab(tabId) : [];
+      if (!msg.blobLike && msg.elementSrc?.startsWith("http")) {
+        const dup = items.some((i) => i.url === msg.elementSrc);
+        if (!dup) {
+          items = [
+            {
+              url: msg.elementSrc,
+              kind: "video",
+              size: null,
+            },
+            ...items,
+          ];
+        }
+      }
+      if (msg.blobLike) {
+        items = [
+          ...items,
+          {
+            url: msg.pageUrl,
+            kind: "page",
+            video_page: true,
+          },
+        ];
+      }
+      sendResponse({
+        items: items.map((it) => ({
+          url: it.url,
+          kind: it.kind,
+          label: mediaLabel(it),
+          sizeLabel: it.size ? formatBytes(it.size) : "",
+          filename: guessFilename(it.url),
+          format_id: it.format_id,
+          video_page: it.video_page,
+        })),
+      });
+    })();
+    return true;
+  }
+  if (msg?.type === "video-grab-handoff") {
+    void (async () => {
+      const payload = { ...msg.payload };
+      const tabId = sender.tab?.id;
+      if (tabId != null) {
+        const items = listMediaForTab(tabId);
+        const hit = items.find((i) => i.url === payload.url);
+        if (hit?.initiator && !payload.referrer) {
+          payload.referrer = hit.initiator;
+        }
+      }
+      if (!payload.referrer && msg.payload?.page_url) {
+        payload.referrer = msg.payload.page_url;
+      }
+      if (payload.video_page) {
+        payload.type = "handoff";
+        payload.url = payload.page_url || payload.url;
+        payload.video_page = true;
+      }
+      const cookies = await cookiesForUrl(payload.url);
+      payload.cookies = cookies || undefined;
+      payload.user_agent = navigator.userAgent;
+      const res = await sendNative(payload);
+      if (!res?.ok) notifyHandoffFailure(res);
+      sendResponse(res);
+    })();
+    return true;
   }
   if (msg?.type === "magnet-handoff" && msg.url?.startsWith("magnet:")) {
     if (!extEnabled() || Date.now() < bypassUntil) {
@@ -54,6 +141,15 @@ api.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
   }
   return false;
 });
+
+function guessFilename(url) {
+  try {
+    const p = new URL(url).pathname.split("/").pop() || "video";
+    return p.includes(".") ? p : "video.mp4";
+  } catch {
+    return "video.mp4";
+  }
+}
 
 async function cookiesForUrl(url) {
   try {

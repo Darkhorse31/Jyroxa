@@ -5,6 +5,7 @@ mod launch_args;
 mod launch_dedupe;
 mod platform;
 mod torrent_host;
+mod video_sidecar;
 mod shell_paths;
 mod window_state;
 

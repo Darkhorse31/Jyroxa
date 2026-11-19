@@ -14,6 +14,7 @@ const DEFAULT_SETTINGS = {
   },
   silentAdd: false,
   disabledHosts: [],
+  videoGrabEnabled: true,
 };
 
 let cachedSettings = { ...DEFAULT_SETTINGS, disabledHosts: [] };
@@ -35,6 +36,7 @@ function mapSettings(raw) {
     },
     silentAdd: Boolean(raw.silent_add ?? raw.silentAdd),
     disabledHosts: raw.disabled_hosts || raw.disabledHosts || [],
+    videoGrabEnabled: raw.video_grab_enabled ?? raw.videoGrabEnabled ?? true,
   };
 }
 
@@ -80,6 +82,12 @@ export function connectionFailureReason(errText) {
     return {
       short: "Jyroxa not running",
       detail: "Start Jyroxa on this PC, then refresh the connection.",
+    };
+  }
+  if (m.includes("chrome") || m.includes("reload")) {
+    return {
+      short: "Jyroxa not reachable",
+      detail: m,
     };
   }
   return {
