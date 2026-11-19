@@ -16,12 +16,41 @@ api.contextMenus.onClicked.addListener(onContextMenuClick);
 
 let bypassUntil = 0;
 const handoffTracker = createHandoffTracker();
+const recentMagnetHandoffs = new Map();
+const MAGNET_DEDUPE_MS = 3000;
+
+function claimMagnetUrl(url) {
+  const now = Date.now();
+  const prev = recentMagnetHandoffs.get(url);
+  if (prev && now - prev < MAGNET_DEDUPE_MS) return false;
+  recentMagnetHandoffs.set(url, now);
+  return true;
+}
 
 api.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
   if (msg?.type === "alt-bypass") {
     bypassUntil = Date.now() + 30_000;
     sendResponse({ ok: true });
     return false;
+  }
+  if (msg?.type === "magnet-handoff" && msg.url?.startsWith("magnet:")) {
+    if (!extEnabled() || Date.now() < bypassUntil) {
+      sendResponse({ ok: false, error: "extension disabled" });
+      return false;
+    }
+    if (!claimMagnetUrl(msg.url)) {
+      sendResponse({ ok: true, deduped: true });
+      return false;
+    }
+    void (async () => {
+      const res = await sendNative({
+        type: "handoff",
+        url: msg.url,
+        user_agent: navigator.userAgent,
+      });
+      sendResponse(res);
+    })();
+    return true;
   }
   return false;
 });
@@ -88,6 +117,7 @@ async function interceptDownload(item, { viaCreated }) {
   if (!extEnabled()) return;
   if (Date.now() < bypassUntil) return;
   if (item.url?.startsWith("magnet:")) {
+    if (!claimMagnetUrl(item.url)) return;
     await sendNative({
       type: "handoff",
       url: item.url,

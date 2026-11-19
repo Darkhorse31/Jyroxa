@@ -1,6 +1,8 @@
 mod browser_integration;
 mod commands;
 mod engine;
+mod launch_args;
+mod launch_dedupe;
 mod platform;
 mod torrent_host;
 mod shell_paths;
@@ -216,25 +218,14 @@ async fn run_tray_updater(app: tauri::AppHandle) {
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     let args: Vec<String> = std::env::args().collect();
-    let maybe_url = args.iter().skip(1).find(|a| {
-        a.starts_with("http://")
-            || a.starts_with("https://")
-            || a.starts_with("magnet:")
-            || a.to_ascii_lowercase().ends_with(".torrent")
-            || (std::path::Path::new(a).is_file()
-                && std::path::Path::new(a)
-                    .extension()
-                    .and_then(|e| e.to_str())
-                    .map(|e| e.eq_ignore_ascii_case("torrent"))
-                    .unwrap_or(false))
-    }).cloned();
+    let maybe_url = launch_args::launch_target_from_args(args.clone());
 
     let _single_instance_guard =
         match platform::try_acquire_single_instance("JyroxaSingleInstanceMutex") {
             Some(g) => g,
             None => {
                 platform::send_to_first_instance(maybe_url.as_deref());
-                platform::focus_existing_window("jyroxa");
+                platform::focus_existing_window("Jyroxa");
                 return;
             }
         };

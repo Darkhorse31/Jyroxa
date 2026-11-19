@@ -19,3 +19,18 @@ document.addEventListener(
   },
   true,
 );
+
+document.addEventListener(
+  "click",
+  (e) => {
+    const anchor = e.target?.closest?.('a[href^="magnet:"]');
+    if (!anchor) return;
+    const href = anchor.href || anchor.getAttribute("href") || "";
+    if (!href.startsWith("magnet:")) return;
+    e.preventDefault();
+    e.stopImmediatePropagation();
+    const api = globalThis.browser ?? globalThis.chrome;
+    void api.runtime.sendMessage({ type: "magnet-handoff", url: href });
+  },
+  true,
+);
