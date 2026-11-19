@@ -30,6 +30,11 @@ export class SettingsView {
     this.render();
   }
 
+  public openTab(tab: SettingsTab) {
+    this.activeTab = tab;
+    this.render();
+  }
+
   private render() {
     if (!this.settings) return;
     const s = this.settings;

@@ -12,6 +12,8 @@ For URLs such as:
 
 the resolver fetches the public embed page (`?embed=1&mode=tme`), parses video `src`, documents, and photos, then hands **direct HTTPS CDN URLs** to the normal segmented download engine. Albums (grouped media) return multiple files.
 
+Some posts (large documents/videos) show “Please open Telegram to view this post” in the embed. With **Settings → Telegram** signed in, Jyroxa resolves those posts via MTProto (`contacts.resolveUsername` + `channels.getMessages`) and downloads with grammers’ parallel `upload.getFile` workers (512 KiB parts, FILE_MIGRATE / CDN handling for big files).
+
 Example used in tests: [t.me/telegram/193](https://t.me/telegram/193) (official @telegram channel).
 
 ## Private posts (your account)

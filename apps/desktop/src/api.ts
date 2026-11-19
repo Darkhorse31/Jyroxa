@@ -158,6 +158,7 @@ export interface ProbeInfo {
   category: FileCategory;
   server: string;
   protocol: string;
+  telegram_login_required?: boolean;
 }
 
 export interface DownloadFinishedPayload {

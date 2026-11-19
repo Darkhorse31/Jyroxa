@@ -1,5 +1,16 @@
 # Changelog
 
+## 0.1.9 — 2026-11-19
+
+### Telegram
+
+- Public channel posts whose embed widget says “Please open Telegram to view this post” resolve through the signed-in MTProto session when available.
+- Add-dialog probe shows Settings guidance when the file is embed-hidden and no Telegram account is connected.
+
+### Distribution
+
+- Workspace, desktop, extension, and Android 0.1.9; Android versionCode 9.
+
 ## 0.1.8 — 2026-11-16
 
 ### BitTorrent

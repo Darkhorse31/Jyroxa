@@ -23,6 +23,9 @@ pub enum TelegramError {
     #[error("no downloadable media in this post")]
     NoMedia,
 
+    #[error("Telegram hides this file from the web preview; connect your Telegram account in Settings > Telegram to download it")]
+    MediaNeedsAccount,
+
     #[error("Telegram rate limit: retry after {retry_after:?}")]
     FloodWait { retry_after: Duration },
 

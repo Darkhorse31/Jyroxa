@@ -55,7 +55,6 @@ pub fn parse_embed_html(html: &str, source_post_url: &str) -> Result<Vec<Telegra
     if html.contains("Post not found") {
         return Err(TelegramError::NotFound);
     }
-
     let mut items = Vec::new();
 
     if let Some(cap) = grouped_wrap_re().captures(html) {
@@ -66,6 +65,9 @@ pub fn parse_embed_html(html: &str, source_post_url: &str) -> Result<Vec<Telegra
     }
 
     if items.is_empty() {
+        if html.contains("Please open Telegram to view this post") {
+            return Err(TelegramError::MediaNeedsAccount);
+        }
         return Err(TelegramError::NoMedia);
     }
     Ok(items)
@@ -234,6 +236,17 @@ fn parse_human_size(text: &str) -> Option<u64> {
 mod tests {
     use super::*;
     use std::fs;
+
+    #[test]
+    fn parse_fixture_embed_hidden_media() {
+        let html = fs::read_to_string(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/tests/fixtures/telegram_embed_media_not_supported.html"
+        ))
+        .expect("fixture");
+        let err = parse_embed_html(&html, "https://t.me/mathsbyashisharorasir/1118").unwrap_err();
+        assert!(matches!(err, TelegramError::MediaNeedsAccount));
+    }
 
     #[test]
     fn parse_fixture_video() {

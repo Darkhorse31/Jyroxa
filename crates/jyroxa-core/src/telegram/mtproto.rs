@@ -4,7 +4,9 @@ use std::path::Path;
 use std::sync::Arc;
 
 use grammers_client::client::{LoginToken, PasswordToken};
-use grammers_client::media::{Document, Media};
+use grammers_client::media::{Document, Media, Photo};
+use grammers_client::message::Message;
+use grammers_client::peer::Peer;
 use grammers_client::{Client, SignInError};
 use grammers_mtsender::SenderPool;
 use grammers_session::storages::MemorySession;
@@ -222,6 +224,46 @@ impl TelegramClientPool {
         Ok(())
     }
 
+    pub async fn resolve_public_channel_media(
+        &self,
+        username: &str,
+        message_id: u32,
+        raw_url: &str,
+    ) -> Result<Vec<TelegramMediaItem>> {
+        let client = self.client().await?;
+        let channel = username.trim_start_matches('@');
+        let peer = client
+            .resolve_username(channel)
+            .await
+            .map_err(TelegramError::from_invocation)?
+            .ok_or(TelegramError::NotFound)?;
+        let peer_ref = peer
+            .to_ref()
+            .await
+            .map_err(|e| TelegramError::other(e.to_string()))?
+            .ok_or(TelegramError::NotFound)?;
+        let chat_id = peer
+            .id()
+            .bot_api_dialog_id()
+            .ok_or_else(|| TelegramError::other("channel has no dialog id"))?;
+        let messages = collect_post_messages(&client, &peer, peer_ref, message_id).await?;
+        let mut items = Vec::new();
+        for message in messages {
+            if let Some(media) = message.media() {
+                items.push(media_item_from_grammers(
+                    &media,
+                    raw_url,
+                    chat_id,
+                    message.id() as u32,
+                )?);
+            }
+        }
+        if items.is_empty() {
+            return Err(TelegramError::NoMedia);
+        }
+        Ok(items)
+    }
+
     pub async fn resolve_private_media(
         &self,
         chat_id: i64,
@@ -255,7 +297,7 @@ impl TelegramClientPool {
         Ok(items)
     }
 
-    pub async fn download_private_media(
+    pub async fn download_mtproto_media(
         &self,
         chat_id: i64,
         message_id: u32,
@@ -305,6 +347,15 @@ impl TelegramClientPool {
         Ok(size)
     }
 
+    pub async fn download_private_media(
+        &self,
+        chat_id: i64,
+        message_id: u32,
+        output: &Path,
+    ) -> Result<u64> {
+        self.download_mtproto_media(chat_id, message_id, output).await
+    }
+
     async fn client(&self) -> Result<Client> {
         let guard = self.pool.lock().await;
         let running = guard
@@ -345,6 +396,47 @@ impl TelegramClientPool {
     }
 }
 
+async fn collect_post_messages(
+    client: &Client,
+    _peer: &Peer,
+    peer_ref: grammers_session::types::PeerRef,
+    message_id: u32,
+) -> Result<Vec<Message>> {
+    let id = message_id as i32;
+    let window: Vec<i32> = (id.saturating_sub(20)..=id.saturating_add(20)).collect();
+    let fetched = client
+        .get_messages_by_id(peer_ref, &window)
+        .await
+        .map_err(TelegramError::from_invocation)?;
+    let anchor = fetched
+        .iter()
+        .flatten()
+        .find(|m| m.id() == id)
+        .cloned()
+        .ok_or(TelegramError::NotFound)?;
+    let grouped = anchor.grouped_id();
+    let mut out: Vec<Message> = if let Some(gid) = grouped {
+        fetched
+            .into_iter()
+            .flatten()
+            .filter(|m| m.grouped_id() == Some(gid))
+            .collect()
+    } else {
+        vec![anchor]
+    };
+    out.sort_by_key(|m| m.id());
+    Ok(out)
+}
+
+fn photo_meta(photo: &Photo, message_id: u32) -> (String, Option<u64>, Option<String>) {
+    let size = photo.size().map(|s| s as u64);
+    (
+        format!("photo_{message_id}.jpg"),
+        size,
+        Some("image/jpeg".into()),
+    )
+}
+
 fn media_item_from_grammers(
     media: &Media,
     raw_url: &str,
@@ -353,11 +445,7 @@ fn media_item_from_grammers(
 ) -> Result<TelegramMediaItem> {
     let (filename, size, mime) = match media {
         Media::Document(doc) => document_meta(doc),
-        Media::Photo(photo) => (
-            format!("photo_{message_id}.jpg"),
-            photo.size().map(|s| s as u64),
-            Some("image/jpeg".into()),
-        ),
+        Media::Photo(photo) => photo_meta(photo, message_id),
         _ => (
             format!("telegram_{message_id}"),
             None,
