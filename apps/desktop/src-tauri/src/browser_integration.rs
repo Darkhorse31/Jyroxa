@@ -3,6 +3,7 @@
 use std::collections::HashMap;
 use std::path::Path;
 
+use jyroxa_core::torrent::is_torrent_source;
 use jyroxa_native_host::handoff::{handoff_to_headers, BrowserHandoff, PipeEnvelope, PipeMessage};
 use jyroxa_native_host::integration::{self, install_native_host, uninstall_native_host, BrowserOriginsConfig};
 pub use jyroxa_native_host::integration::BrowserIntegrationStatus;
@@ -105,18 +106,21 @@ async fn handle_pipe_message(app: &AppHandle, env: PipeEnvelope) -> serde_json::
             }
 
             let headers = headers_map(&handoff);
+            let torrent_handoff = is_torrent_source(&handoff.url);
             let mut filename = handoff
                 .filename
                 .clone()
                 .filter(|s| !s.is_empty())
                 .unwrap_or_else(|| "download".into());
-            if let Ok(info) = state
-                .0
-                .probe_url_with_headers(&handoff.url, headers.clone())
-                .await
-            {
-                if !info.suggested_name.is_empty() && info.suggested_name != "download" {
-                    filename = info.suggested_name;
+            if !torrent_handoff {
+                if let Ok(info) = state
+                    .0
+                    .probe_url_with_headers(&handoff.url, headers.clone())
+                    .await
+                {
+                    if !info.suggested_name.is_empty() && info.suggested_name != "download" {
+                        filename = info.suggested_name;
+                    }
                 }
             }
 

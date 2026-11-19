@@ -191,7 +191,9 @@ mod win {
 
                 crate::bring_main_window_to_front(&app);
 
-                if msg.starts_with("http://") || msg.starts_with("https://") {
+                if crate::launch_args::should_emit_external_url(&msg)
+                    && crate::launch_dedupe::accept_external_url(&msg)
+                {
                     let _ = app.emit("external-url", msg);
                 }
 

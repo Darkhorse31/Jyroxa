@@ -1,5 +1,17 @@
 # Changelog
 
+## 0.1.10 — 2026-11-19
+
+### BitTorrent / magnets
+
+- Single-instance pipe now emits `external-url` for `magnet:` and `.torrent` handoffs, not only HTTP(S).
+- Launch argv parsing and dedupe helpers; extension intercepts magnet link clicks via native host.
+- Restores and focuses the main window when a second instance forwards a torrent target.
+
+### Distribution
+
+- Workspace, desktop, extension, and Android 0.1.10; Android versionCode 10.
+
 ## 0.1.9 — 2026-11-19
 
 ### Telegram
