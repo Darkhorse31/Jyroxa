@@ -12,6 +12,15 @@ const toggle = document.getElementById("toggle-enabled");
 const toggleSilent = document.getElementById("toggle-silent");
 const toggleVideoGrab = document.getElementById("toggle-video-grab");
 const refreshBtn = document.getElementById("btn-refresh");
+const extIdEl = document.getElementById("ext-id");
+
+if (extIdEl) {
+  try {
+    extIdEl.textContent = api.runtime.id;
+  } catch {
+    extIdEl.textContent = "";
+  }
+}
 
 async function pingWithRetry() {
   const deadline = Date.now() + 4500;
@@ -42,7 +51,7 @@ async function refreshStatus() {
     statusEl.textContent = reason?.short ?? "Jyroxa not reachable";
     statusEl.className = "muted disconnected";
     const extra =
-      " If you just installed or updated Jyroxa, reload this extension and fully quit Chrome (all windows), then reopen.";
+      " Reload this extension on chrome://extensions, then fully quit Chrome (all windows) and reopen. Your extension ID is shown below — add it in Jyroxa Settings → Browser if needed.";
     if (statusDetailEl) {
       statusDetailEl.textContent = `${reason?.detail || ""}${extra}`.trim();
       statusDetailEl.className = "muted disconnected";

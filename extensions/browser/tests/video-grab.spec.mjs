@@ -74,7 +74,7 @@ await page.addInitScript(() => {
               {
                 url: `${location.origin}/clip.mp4`,
                 kind: "video",
-                label: "VIDEO",
+                label: "clip.mp4",
                 sizeLabel: "128 B",
                 filename: "clip.mp4",
               },

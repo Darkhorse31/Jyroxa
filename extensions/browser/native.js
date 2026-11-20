@@ -41,7 +41,8 @@ function mapSettings(raw) {
 }
 
 export function connectionFailureReason(errText) {
-  const m = (errText || "").toLowerCase();
+  const raw = (errText || "").trim();
+  const m = raw.toLowerCase();
   if (!m) {
     return {
       short: "Jyroxa not reachable",
@@ -50,13 +51,13 @@ export function connectionFailureReason(errText) {
   }
   if (
     m.includes("native messaging host not found") ||
-    m.includes("specify native messaging host") ||
-    m.includes("not found")
+    m.includes("specified native messaging host not found") ||
+    m.includes("specify native messaging host")
   ) {
     return {
       short: "Host not registered",
       detail:
-        "Chrome cannot find com.jyroxa.browser. Install Jyroxa or restart the desktop app to register the host.",
+        "Chrome cannot find com.jyroxa.browser. Start Jyroxa once, then fully quit Chrome (all windows) and reopen.",
     };
   }
   if (m.includes("forbidden") || m.includes("access to the specified native messaging host")) {
@@ -78,10 +79,22 @@ export function connectionFailureReason(errText) {
       detail: "The native host did not answer in time. Jyroxa may not be running.",
     };
   }
-  if (m.includes("pipe") || m.includes("unavailable") || m.includes("disconnected")) {
+  if (
+    m.includes("desktop pipe not available") ||
+    m.includes("pipe not available") ||
+    m.includes("unavailable")
+  ) {
     return {
       short: "Jyroxa not running",
-      detail: "Start Jyroxa on this PC, then refresh the connection.",
+      detail:
+        "The native host is registered but Jyroxa is not responding. Start Jyroxa, then click Refresh connection.",
+    };
+  }
+  if (m === "disconnected" || m.includes("disconnected from port")) {
+    return {
+      short: "Connection lost",
+      detail:
+        "The native host closed the connection. Restart Jyroxa and fully quit Chrome if you just updated.",
     };
   }
   if (m.includes("chrome") || m.includes("reload")) {
@@ -96,7 +109,7 @@ export function connectionFailureReason(errText) {
   };
 }
 
-export async function sendNative(payload) {
+export async function sendNative(payload, timeoutMs = 12_000) {
   return new Promise((resolve) => {
     const port = api.runtime.connectNative(HOST);
     const timer = setTimeout(() => {
@@ -105,7 +118,7 @@ export async function sendNative(payload) {
       } catch {
       }
       resolve({ ok: false, error: "timeout" });
-    }, 12_000);
+    }, timeoutMs);
 
     port.onMessage.addListener((msg) => {
       clearTimeout(timer);
@@ -142,6 +155,13 @@ export async function refreshSettingsFromApp() {
     cachedSettings.enabled = false;
   }
   return cachedSettings;
+}
+
+export async function probeVideoFormats(pageUrl) {
+  return sendNative(
+    { type: "probe_video_formats", page_url: pageUrl },
+    120_000,
+  );
 }
 
 export async function pingApp() {

@@ -40,6 +40,9 @@ fn extension_to_pipe(msg: ExtensionMessage) -> PipeMessage {
         ExtensionMessage::GetSettings => PipeMessage::GetSettings,
         ExtensionMessage::SetSilentAdd { silent_add } => PipeMessage::SetSilentAdd { silent_add },
         ExtensionMessage::GrabLinks { html, page_url } => PipeMessage::GrabLinks { html, page_url },
+        ExtensionMessage::ProbeVideoFormats { page_url } => {
+            PipeMessage::ProbeVideoFormats { page_url }
+        }
         ExtensionMessage::Handoff(h) | ExtensionMessage::DownloadUrl(h) => PipeMessage::Handoff(h),
     }
 }
@@ -87,17 +90,26 @@ fn handle_message(
     Ok(())
 }
 
-fn main() {
-    let stdin = io::stdin();
-    let mut stdin_lock = stdin.lock();
-    let stdout = io::stdout();
-    let mut stdout_lock = stdout.lock();
-
+fn run_host_loop(stdin: &mut impl Read, stdout: &mut impl Write) {
     loop {
-        match read_json_frame(&mut stdin_lock) {
+        let frame = read_json_frame(&mut *stdin);
+        match frame {
             Ok(v) => {
-                if handle_message(&mut stdin_lock, &mut stdout_lock, v).is_err() {
-                    break;
+                let handled = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                    handle_message(&mut *stdin, &mut *stdout, v)
+                }));
+                match handled {
+                    Ok(Ok(())) => {}
+                    Ok(Err(_)) => break,
+                    Err(_) => {
+                        respond(
+                            stdout,
+                            serde_json::json!({
+                                "ok": false,
+                                "error": "native host internal error"
+                            }),
+                        );
+                    }
                 }
             }
             Err(FramingError::Io(e))
@@ -109,4 +121,14 @@ fn main() {
             Err(_) => break,
         }
     }
+}
+
+fn main() {
+    let stdin = io::stdin();
+    let mut stdin_lock = stdin.lock();
+    let stdout = io::stdout();
+    let mut stdout_lock = stdout.lock();
+    let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        run_host_loop(&mut stdin_lock, &mut stdout_lock);
+    }));
 }

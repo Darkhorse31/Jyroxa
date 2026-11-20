@@ -1243,6 +1243,87 @@ impl DesktopEngine {
                 }
             };
 
+            let ytdlp_page = request
+                .extra_headers
+                .as_ref()
+                .and_then(|h| h.get("X-Jyroxa-Ytdlp-Page"))
+                .is_some_and(|v| v == "1");
+            if ytdlp_page {
+                let page_url = request.urls.first().cloned().unwrap_or_default();
+                let format_id = request
+                    .extra_headers
+                    .as_ref()
+                    .and_then(|h| h.get("X-Jyroxa-Ytdlp-Format"))
+                    .map(|s| s.as_str());
+                {
+                    let mut items = engine.items.lock().await;
+                    if let Some(inner) = items.get_mut(&id) {
+                        inner.view.status = TaskStatus::Running;
+                    }
+                }
+                let _ = app.emit("downloads-changed", ());
+                {
+                    let mut active = engine.active_count.lock().await;
+                    *active += 1;
+                }
+                let dl_result = crate::video_sidecar::download_via_ytdlp(
+                    &page_url,
+                    &request.output,
+                    format_id,
+                )
+                .await;
+                let notifications_on = engine.settings.lock().await.notifications;
+                let mut native_toast: Option<(String, String)> = None;
+                {
+                    let mut items = engine.items.lock().await;
+                    if let Some(inner) = items.get_mut(&id) {
+                        match dl_result {
+                            Ok(total) => {
+                                inner.view.status = TaskStatus::Completed;
+                                inner.view.downloaded = total;
+                                inner.view.total = Some(total);
+                                inner.view.speed_bps = 0.0;
+                                let finished = DownloadFinishedPayload {
+                                    id,
+                                    path: inner.view.output.clone(),
+                                    filename: inner.view.filename.clone(),
+                                    total,
+                                };
+                                let _ = app.emit("download-finished", finished);
+                                if notifications_on {
+                                    native_toast = Some((
+                                        "Download complete".into(),
+                                        inner.view.filename.clone(),
+                                    ));
+                                }
+                            }
+                            Err(e) => {
+                                inner.view.status = TaskStatus::Failed;
+                                inner.view.error = Some(e.clone());
+                                if notifications_on {
+                                    native_toast = Some((
+                                        format!("Download failed: {}", inner.view.filename),
+                                        e,
+                                    ));
+                                }
+                            }
+                        }
+                    }
+                }
+                if let Some((title, body)) = native_toast {
+                    show_native_notification(&app, &title, &body);
+                }
+                {
+                    let mut active = engine.active_count.lock().await;
+                    *active = active.saturating_sub(1);
+                }
+                let _ = app.emit("downloads-changed", ());
+                let max = engine.settings.lock().await.max_concurrent;
+                let _ = engine.save_queue_snapshot().await;
+                engine.pump_queue(app.clone(), max).await;
+                return;
+            }
+
             let _ = app.emit("downloads-changed", ());
             {
                 let mut active = engine.active_count.lock().await;

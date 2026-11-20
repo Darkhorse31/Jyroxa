@@ -79,7 +79,7 @@ pub fn uninstall_torrent_associations() -> Result<(), String> {
     let _ = delete_tree(&hkcu, &format!(r"{root}\magnet"));
     let _ = delete_tree(&hkcu, &format!(r"{root}\{TORRENT_PROG_ID}"));
     let (ext_key, _) = hkcu
-        .create_subkey(&format!(r"{root}\.torrent"))
+        .create_subkey(format!(r"{root}\.torrent"))
         .map_err(|e| e.to_string())?;
     let _ = ext_key.delete_value("");
     Ok(())

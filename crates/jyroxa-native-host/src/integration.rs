@@ -5,7 +5,8 @@ use std::path::{Path, PathBuf};
 use serde::{Deserialize, Serialize};
 
 use crate::ext_id::{
-    extension_display_name, packaged_chrome_extension_id, PACKAGED_CHROME_EXTENSION_ID,
+    extension_display_name, packaged_chrome_extension_id, LEGACY_CHROME_EXTENSION_IDS,
+    PACKAGED_CHROME_EXTENSION_ID,
 };
 use crate::NATIVE_HOST_NAME;
 
@@ -70,16 +71,36 @@ pub fn ensure_browser_token() -> std::io::Result<String> {
     Ok(token)
 }
 
-fn native_host_exe_path(desktop_exe: &Path) -> PathBuf {
-    let sibling = desktop_exe
+fn native_host_exe_beside_desktop(desktop_exe: &Path) -> Option<PathBuf> {
+    desktop_exe
         .parent()
-        .map(|p| p.join("jyroxa-native-host.exe"));
-    if let Some(ref p) = sibling {
-        if p.is_file() {
-            return p.clone();
-        }
+        .map(|p| p.join("jyroxa-native-host.exe"))
+        .filter(|p| p.is_file())
+}
+
+fn native_host_exe_path(desktop_exe: &Path) -> PathBuf {
+    if let Some(p) = native_host_exe_beside_desktop(desktop_exe) {
+        return p;
     }
     jyroxa_data_dir().join("jyroxa-native-host.exe")
+}
+
+/// Stable path under `%LOCALAPPDATA%\\Jyroxa` (Chrome reads this from the manifest).
+fn sync_native_host_exe_to_data_dir(desktop_exe: &Path) -> Result<PathBuf, String> {
+    let dest = jyroxa_data_dir().join("jyroxa-native-host.exe");
+    let source = native_host_exe_beside_desktop(desktop_exe)
+        .or_else(|| dest.is_file().then(|| dest.clone()))
+        .ok_or_else(|| {
+            format!(
+                "native host not found beside {} or at {}",
+                desktop_exe.display(),
+                dest.display()
+            )
+        })?;
+    if source != dest {
+        std::fs::copy(&source, &dest).map_err(|e| e.to_string())?;
+    }
+    Ok(dest)
 }
 
 fn push_chrome_id(ids: &mut Vec<String>, raw: &str) {
@@ -109,10 +130,11 @@ fn native_messaging_registry_key(browser_vendor: &str) -> String {
     }
 }
 
-fn native_messaging_registry_keys() -> [String; 3] {
+fn native_messaging_registry_keys() -> [String; 4] {
     [
         native_messaging_registry_key(r"Google\Chrome"),
         native_messaging_registry_key(r"Microsoft\Edge"),
+        native_messaging_registry_key(r"BraveSoftware\Brave-Browser"),
         native_messaging_registry_key(r"Mozilla"),
     ]
 }
@@ -144,6 +166,9 @@ fn push_chrome_ids_from_existing_manifest(ids: &mut Vec<String>) {
 pub fn build_allowed_origins(config: &BrowserOriginsConfig) -> Vec<String> {
     let mut ids = Vec::new();
     push_chrome_id(&mut ids, PACKAGED_CHROME_EXTENSION_ID);
+    for legacy in LEGACY_CHROME_EXTENSION_IDS {
+        push_chrome_id(&mut ids, legacy);
+    }
     push_chrome_id(&mut ids, config.chrome_extension_id.trim());
     push_chrome_id(&mut ids, config.edge_extension_id.trim());
     for id in discover_chromium_extension_ids() {
@@ -167,6 +192,10 @@ fn chromium_user_data_roots() -> Vec<PathBuf> {
     vec![
         local.join("Google").join("Chrome").join("User Data"),
         local.join("Microsoft").join("Edge").join("User Data"),
+        local
+            .join("BraveSoftware")
+            .join("Brave-Browser")
+            .join("User Data"),
     ]
 }
 
@@ -245,10 +274,7 @@ pub fn install_native_host(
     )
     .map_err(|e| e.to_string())?;
 
-    let host_exe = native_host_exe_path(desktop_exe);
-    if !host_exe.is_file() {
-        return Err(format!("native host not found at {}", host_exe.display()));
-    }
+    let host_exe = sync_native_host_exe_to_data_dir(desktop_exe)?;
 
     let manifest_dir = data.join("native-host");
     std::fs::create_dir_all(&manifest_dir).map_err(|e| e.to_string())?;
@@ -299,6 +325,7 @@ pub struct BrowserIntegrationStatus {
     pub host_manifest_present: bool,
     pub chrome_registry: bool,
     pub edge_registry: bool,
+    pub brave_registry: bool,
     pub firefox_registry: bool,
     pub native_host_installed: bool,
     pub packaged_extension_id: String,
@@ -319,17 +346,23 @@ pub fn integration_status(desktop_exe: &Path) -> BrowserIntegrationStatus {
     #[cfg(windows)]
     let keys = native_messaging_registry_keys();
     #[cfg(windows)]
-    let (chrome_registry, edge_registry, firefox_registry) =
-        (reg_ok(&keys[0]), reg_ok(&keys[1]), reg_ok(&keys[2]));
+    let (chrome_registry, edge_registry, brave_registry, firefox_registry) = (
+        reg_ok(&keys[0]),
+        reg_ok(&keys[1]),
+        reg_ok(&keys[2]),
+        reg_ok(&keys[3]),
+    );
 
     #[cfg(not(windows))]
-    let (chrome_registry, edge_registry, firefox_registry) = (false, false, false);
+    let (chrome_registry, edge_registry, brave_registry, firefox_registry) =
+        (false, false, false, false);
 
     BrowserIntegrationStatus {
         token_present,
         host_manifest_present,
         chrome_registry,
         edge_registry,
+        brave_registry,
         firefox_registry,
         native_host_installed,
         packaged_extension_id: packaged_chrome_extension_id().to_string(),
@@ -347,6 +380,11 @@ mod tests {
         assert!(origins
             .iter()
             .any(|o| o == &format!("chrome-extension://{PACKAGED_CHROME_EXTENSION_ID}/")));
+        for legacy in LEGACY_CHROME_EXTENSION_IDS {
+            assert!(origins
+                .iter()
+                .any(|o| o == &format!("chrome-extension://{legacy}/")));
+        }
         assert!(origins
             .iter()
             .any(|o| o == "moz-extension://jyroxa-browser@jyroxa/"));

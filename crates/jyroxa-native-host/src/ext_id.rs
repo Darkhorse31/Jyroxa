@@ -8,6 +8,12 @@ pub const PACKAGED_EXTENSION_PUBLIC_KEY_B64: &str = "MIIBIjANBgkqhkiG9w0BAQEFAAO
 /// Chromium extension ID for the keyed shipped manifest (`chrome-extension://…/`).
 pub const PACKAGED_CHROME_EXTENSION_ID: &str = "njgbdpacpmohafoefmcmnmhdjpjmjipe";
 
+/// Prior shipped / sideloaded extension IDs (must stay in native host `allowed_origins`).
+pub const LEGACY_CHROME_EXTENSION_IDS: &[&str] = &[
+    "hehgieooaeknhlodfpkommnhinaahkjf",
+    "lkcpmllaclbmggbphpaojdklcjgmjaad",
+];
+
 const EXT_NAME: &str = "Jyroxa Download Integration";
 
 pub fn chrome_extension_id_from_spki_der(der: &[u8]) -> String {
