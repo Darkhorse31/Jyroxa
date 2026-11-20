@@ -44,7 +44,6 @@ const base = `http://127.0.0.1:${port}/`;
 
 const viewports = [
   { name: "375", width: 375, height: 812 },
-  { name: "768", width: 768, height: 1024 },
   { name: "1440", width: 1440, height: 900 },
 ];
 

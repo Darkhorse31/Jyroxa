@@ -4,14 +4,14 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>Screenshots — Jyroxa</title>
-  <meta name="description" content="Jyroxa desktop UI in dark and light themes: main window and add-download dialog.">
+  <meta name="description" content="Jyroxa desktop UI in dark and light themes: main window, add download, settings, and LinkGrabber.">
   <link rel="icon" href="assets/logo.svg" type="image/svg+xml">
   <script>
     (function () {
       var k = "jyroxa-site-theme";
       try {
         var s = localStorage.getItem(k);
-        var t = s === "light" || s === "dark" ? s : window.matchMedia("(prefers-color-scheme: light)").matches ? "light" : "dark";
+        var t = s === "light" || s === "dark" ? s : "dark";
         document.documentElement.setAttribute("data-theme", t);
       } catch (e) {
         document.documentElement.setAttribute("data-theme", "dark");
@@ -44,24 +44,28 @@
 
   <main id="main">
     <h1 class="page-title">Screenshots</h1>
-    <p class="page-intro">Design v3 previews from the desktop shell (1280×800). Torrent-specific captures are not in this set yet.</p>
+    <p class="page-intro">Design v3 captures from the desktop shell (1280×800). Shots follow your theme—warm dark or light.</p>
 
     <div class="shot-grid">
       <figure>
-        <img src="assets/dark-main.png" width="1280" height="800" alt="Main window, dark theme, multiple active downloads">
-        <figcaption>Main window — dark theme</figcaption>
+        <img class="theme-shot--dark" src="assets/dark-main.png" width="1280" height="800" alt="Main window, dark theme, multiple active downloads">
+        <img class="theme-shot--light" src="assets/light-main.png" width="1280" height="800" alt="Main window, light theme">
+        <figcaption>Main window</figcaption>
       </figure>
       <figure>
-        <img src="assets/light-main.png" width="1280" height="800" alt="Main window, light theme">
-        <figcaption>Main window — light theme</figcaption>
+        <img class="theme-shot--dark" src="assets/dark-add.png" width="1280" height="800" alt="Add download dialog, dark theme">
+        <img class="theme-shot--light" src="assets/light-add.png" width="1280" height="800" alt="Add download dialog, light theme">
+        <figcaption>Add download</figcaption>
       </figure>
       <figure>
-        <img src="assets/dark-add.png" width="1280" height="800" alt="Add download dialog, dark theme">
-        <figcaption>Add download — dark theme</figcaption>
+        <img class="theme-shot--dark" src="assets/dark-settings.png" width="1280" height="800" alt="Settings dialog, dark theme">
+        <img class="theme-shot--light" src="assets/light-settings.png" width="1280" height="800" alt="Settings dialog, light theme">
+        <figcaption>Settings</figcaption>
       </figure>
       <figure>
-        <img src="assets/light-add.png" width="1280" height="800" alt="Add download dialog, light theme">
-        <figcaption>Add download — light theme</figcaption>
+        <img class="theme-shot--dark" src="assets/dark-details.png" width="1280" height="800" alt="LinkGrabber and download details, dark theme">
+        <img class="theme-shot--light" src="assets/light-details.png" width="1280" height="800" alt="LinkGrabber and download details, light theme">
+        <figcaption>LinkGrabber and details</figcaption>
       </figure>
     </div>
   </main>
