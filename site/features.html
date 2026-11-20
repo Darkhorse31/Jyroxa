@@ -1,0 +1,104 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Features — Jyroxa</title>
+  <meta name="description" content="Multi-connection HTTP, BitTorrent, browser extension, Telegram downloads, scheduler, and desktop integration in Jyroxa.">
+  <link rel="icon" href="assets/logo.svg" type="image/svg+xml">
+  <link rel="stylesheet" href="css/style.css">
+</head>
+<body>
+  <a class="skip-link" href="#main">Skip to content</a>
+  <header class="site-header">
+    <div class="header-inner">
+      <a class="brand" href="index.html"><img src="assets/logo.svg" width="36" height="36" alt=""><span>Jyroxa</span></a>
+      <button type="button" class="nav-toggle" data-nav-toggle aria-expanded="false" aria-controls="site-nav">Menu</button>
+      <nav class="site-nav" id="site-nav" data-site-nav aria-label="Primary">
+        <ul>
+          <li><a href="index.html">Home</a></li>
+          <li><a href="features.html" aria-current="page">Features</a></li>
+          <li><a href="screenshots.html">Screenshots</a></li>
+          <li><a href="install.html">Install</a></li>
+          <li><a href="faq.html">FAQ</a></li>
+          <li><a href="index.html#sponsor">Sponsor</a></li>
+        </ul>
+      </nav>
+    </div>
+  </header>
+
+  <main id="main">
+    <h1 class="page-title">Features</h1>
+    <p class="page-intro">Everything listed here exists in the repository today. Optional components are called out explicitly.</p>
+
+    <div class="grid-2">
+      <article class="card">
+        <h3>Adaptive multi-connection HTTP</h3>
+        <ul>
+          <li>Auto-tuner probes wider connection counts and reverts failed trials</li>
+          <li>Per-segment HTTP/1.1 with work-stealing when servers support ranges</li>
+          <li>429/503 backoff, stall detection, mirrors, and checksum verification</li>
+        </ul>
+      </article>
+
+      <article class="card" id="torrent">
+        <h3>BitTorrent and magnets</h3>
+        <ul>
+          <li>Add torrent files or magnet URIs from the main window</li>
+          <li>librqbit backend (DHT, LPD, PEX); no BEP-19 web seeds via HTTP engine in v0.1.8</li>
+        </ul>
+        <p class="stat-line">Measured on Debian 13.7.0 amd64 netinst (~756&nbsp;MiB): Jyroxa median ~16.4&nbsp;s / ~50&nbsp;MiB/s; aria2c 1.37.0 with tuned flags ~50&nbsp;s / ~15&nbsp;MiB/s (three runs each, same Windows host). Source: <code>reports/torrent-bench-0.1.8.tsv</code>.</p>
+      </article>
+
+      <article class="card">
+        <h3>Browser extension</h3>
+        <ul>
+          <li>Chrome, Edge, Brave (Chromium WebExtension), and Firefox builds in releases</li>
+          <li>Intercepts downloads and sends them to <code>com.jyroxa.browser</code> via native messaging</li>
+          <li>Stable Chromium extension ID <code>njgbdpacpmohafoefmcmnmhdjpjmjipe</code></li>
+          <li>Optional video grab and file-type filters (<code>videoGrabEnabled</code>)</li>
+        </ul>
+      </article>
+
+      <article class="card">
+        <h3>Desktop workflow</h3>
+        <ul>
+          <li>LinkGrabber, drag-and-drop, bulk actions, tray icon, start with Windows</li>
+          <li>Quick category buttons including <strong>Video</strong> on the add-download panel</li>
+          <li>Light/dark themes, native notifications, single-instance mutex</li>
+        </ul>
+      </article>
+
+      <article class="card">
+        <h3>Download scheduler</h3>
+        <ul>
+          <li>Settings → Scheduler: start/stop times and days of week</li>
+          <li>Persisted in desktop engine settings (<code>scheduler_start</code>, <code>scheduler_stop</code>, <code>scheduler_days</code>)</li>
+        </ul>
+      </article>
+
+      <article class="card">
+        <h3>Telegram (optional build)</h3>
+        <ul>
+          <li>Cargo feature <code>telegram</code> — resolve public and signed-in posts via grammers</li>
+          <li>Settings → Telegram for API credentials and session</li>
+          <li>Documented in <code>docs/TELEGRAM.md</code></li>
+        </ul>
+      </article>
+
+      <article class="card">
+        <h3>Android</h3>
+        <ul>
+          <li>Material 3 UI, foreground download service, WorkManager resume</li>
+          <li>Universal APK from GitHub Releases</li>
+        </ul>
+      </article>
+    </div>
+  </main>
+
+  <footer class="site-footer">
+    <p>© 2026 Prateek Kumar · <a href="https://github.com/Darkhorse31/Jyroxa/blob/main/LICENSE">MIT License</a></p>
+  </footer>
+  <script src="js/main.js" defer></script>
+</body>
+</html>
