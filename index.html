@@ -1,0 +1,96 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Jyroxa — open-source download manager for Windows and Android</title>
+  <meta name="description" content="Jyroxa is a fast, open-source download manager with multi-connection HTTP, BitTorrent, browser integration, and a polished desktop UI.">
+  <meta name="author" content="Prateek Kumar">
+  <link rel="canonical" href="https://darkhorse31.github.io/Jyroxa/">
+  <meta property="og:type" content="website">
+  <meta property="og:title" content="Jyroxa — download manager">
+  <meta property="og:description" content="Rust engine, adaptive multi-connection downloads, torrents, browser extension, Windows and Android.">
+  <meta property="og:url" content="https://darkhorse31.github.io/Jyroxa/">
+  <meta property="og:image" content="https://darkhorse31.github.io/Jyroxa/assets/og-image.png">
+  <meta name="twitter:card" content="summary_large_image">
+  <link rel="icon" href="assets/logo.svg" type="image/svg+xml">
+  <link rel="stylesheet" href="css/style.css">
+</head>
+<body>
+  <a class="skip-link" href="#main">Skip to content</a>
+  <header class="site-header">
+    <div class="header-inner">
+      <a class="brand" href="index.html">
+        <img src="assets/logo.svg" width="36" height="36" alt="">
+        <span>Jyroxa</span>
+      </a>
+      <button type="button" class="nav-toggle" data-nav-toggle aria-expanded="false" aria-controls="site-nav">Menu</button>
+      <nav class="site-nav" id="site-nav" data-site-nav aria-label="Primary">
+        <ul>
+          <li><a href="index.html" aria-current="page">Home</a></li>
+          <li><a href="features.html">Features</a></li>
+          <li><a href="screenshots.html">Screenshots</a></li>
+          <li><a href="install.html">Install</a></li>
+          <li><a href="faq.html">FAQ</a></li>
+          <li><a href="#sponsor">Sponsor</a></li>
+        </ul>
+      </nav>
+    </div>
+  </header>
+
+  <main id="main">
+    <section class="hero">
+      <div>
+        <h1>Downloads that stay under your control</h1>
+        <p class="lead">
+          Jyroxa is an open-source download manager for Windows and Android. A Rust engine handles HTTP with adaptive multi-connection tuning, BitTorrent and magnets, LinkGrabber, tray integration, and optional Telegram and browser capture.
+        </p>
+        <div class="hero-actions">
+          <a class="btn btn-primary" href="https://github.com/Darkhorse31/Jyroxa/releases/latest">Download for Windows</a>
+          <a class="btn btn-ghost" href="https://github.com/Darkhorse31/Jyroxa/releases/latest">Android APK</a>
+          <a class="btn btn-ghost" href="https://github.com/Darkhorse31/Jyroxa">View on GitHub</a>
+        </div>
+        <p class="stat-line">BitTorrent (Debian 13.7.0 netinst ISO, same host): Jyroxa median ~50&nbsp;MiB/s vs tuned aria2c ~15&nbsp;MiB/s — see <a href="features.html#torrent">method</a>.</p>
+      </div>
+      <div class="hero-panel">
+        <img src="assets/dark-main.png" width="960" height="600" alt="Jyroxa main window with active downloads, dark theme">
+      </div>
+    </section>
+
+    <section class="section" id="highlights">
+      <h2>Built for everyday use</h2>
+      <div class="grid-2">
+        <article class="card">
+          <h3>HTTP that adapts</h3>
+          <p>Work-stealing segments, auto-tuned connection counts, resume via <code>.jxstate</code> sidecars, and global or per-download speed limits.</p>
+        </article>
+        <article class="card">
+          <h3>BitTorrent in the app</h3>
+          <p>Add <code>.torrent</code> files or magnet links. Peers, DHT, and LPD through the embedded librqbit stack.</p>
+        </article>
+        <article class="card">
+          <h3>Browser handoff</h3>
+          <p>Chromium extension for Chrome, Edge, and Brave forwards downloads to the desktop app through the native messaging host.</p>
+        </article>
+        <article class="card">
+          <h3>More when you need it</h3>
+          <p>LinkGrabber, category filters, download scheduler windows, optional Telegram media (feature <code>telegram</code>), light and dark UI themes.</p>
+        </article>
+      </div>
+    </section>
+
+    <section class="section sponsor-box" id="sponsor">
+      <h2>Support development</h2>
+      <p>Upstream hosting and release builds are funded by the maintainer. Sponsorship helps keep releases and benchmarks moving.</p>
+      <p><a class="btn btn-ghost" href="https://github.com/sponsors/Darkhorse31">GitHub Sponsors</a></p>
+      <p class="todo-note">TODO: confirm sponsor tier copy and benefits before launch marketing.</p>
+    </section>
+  </main>
+
+  <footer class="site-footer">
+    <p>© 2026 Prateek Kumar · <a href="https://github.com/Darkhorse31/Jyroxa/blob/main/LICENSE">MIT License</a></p>
+    <p><a href="https://github.com/Darkhorse31/Jyroxa">github.com/Darkhorse31/Jyroxa</a></p>
+  </footer>
+  <script src="js/main.js" defer></script>
+</body>
+</html>
