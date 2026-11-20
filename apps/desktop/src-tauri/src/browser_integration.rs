@@ -82,6 +82,20 @@ async fn handle_pipe_message(app: &AppHandle, env: PipeEnvelope) -> serde_json::
             );
             serde_json::json!({ "ok": true })
         }
+        PipeMessage::ProbeVideoFormats { page_url } => {
+            match crate::video_sidecar::probe_page_formats(&page_url).await {
+                Ok(info) => {
+                    let title = info.title.clone().unwrap_or_default();
+                    let formats = crate::video_sidecar::formats_for_menu(&info);
+                    serde_json::json!({
+                        "ok": true,
+                        "title": title,
+                        "formats": formats,
+                    })
+                }
+                Err(e) => serde_json::json!({ "ok": false, "error": e }),
+            }
+        }
         PipeMessage::SetSilentAdd { silent_add } => {
             let mut settings = state.0.get_settings().await;
             settings.browser_integration.silent_add = silent_add;
@@ -106,27 +120,51 @@ async fn handle_pipe_message(app: &AppHandle, env: PipeEnvelope) -> serde_json::
             }
 
             let mut handoff = handoff;
-            if handoff.video_page == Some(true) {
-                match crate::video_sidecar::resolve_page_to_url(
-                    &handoff.url,
-                    handoff.format_id.as_deref(),
-                )
-                .await
-                {
-                    Ok((direct, name)) => {
+            let mut ytdlp_page = false;
+            if handoff.video_page == Some(true) || handoff.format_id.is_some() {
+                let page = handoff
+                    .page_url
+                    .clone()
+                    .filter(|s| !s.is_empty())
+                    .unwrap_or_else(|| handoff.url.clone());
+                let fid = handoff.format_id.as_deref();
+                let force_ytdlp = fid.is_some_and(|f| f.contains('+') || f.contains('*'));
+                let mut resolved = false;
+                if !force_ytdlp {
+                    if let Ok((direct, name)) =
+                        crate::video_sidecar::resolve_page_to_url(&page, fid).await
+                    {
                         handoff.url = direct;
                         if handoff.filename.as_deref().unwrap_or("").is_empty() {
                             handoff.filename = Some(name);
                         }
-                        handoff.video_page = None;
-                    }
-                    Err(e) => {
-                        tracing::warn!("yt-dlp resolve failed: {e}");
+                        resolved = true;
                     }
                 }
+                if !resolved {
+                    handoff.url = page;
+                    ytdlp_page = true;
+                    if handoff.filename.as_deref().unwrap_or("").is_empty() {
+                        if let Ok(info) = crate::video_sidecar::probe_page_formats(&page).await {
+                            let title = info
+                                .title
+                                .unwrap_or_else(|| "video".to_string());
+                            handoff.filename = Some(crate::video_sidecar::sanitize_filename_public(
+                                &format!("{title}.mp4"),
+                            ));
+                        }
+                    }
+                }
+                handoff.video_page = None;
             }
 
-            let headers = headers_map(&handoff);
+            let mut headers = headers_map(&handoff);
+            if ytdlp_page {
+                headers.insert("X-Jyroxa-Ytdlp-Page".into(), "1".into());
+                if let Some(fid) = handoff.format_id.clone() {
+                    headers.insert("X-Jyroxa-Ytdlp-Format".into(), fid);
+                }
+            }
             let torrent_handoff = is_torrent_source(&handoff.url);
             let mut filename = handoff
                 .filename

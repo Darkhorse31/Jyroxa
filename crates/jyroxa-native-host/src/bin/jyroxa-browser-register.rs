@@ -1,6 +1,6 @@
 //! Install/uninstall native messaging host (NSIS hooks + manual/CI verification).
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 
 use jyroxa_native_host::framing::{read_json_frame, write_json_frame};
@@ -18,7 +18,7 @@ fn usage() -> ! {
     std::process::exit(2);
 }
 
-fn host_exe_beside(desktop: &PathBuf) -> PathBuf {
+fn host_exe_beside(desktop: &Path) -> PathBuf {
     desktop
         .parent()
         .map(|p| p.join("jyroxa-native-host.exe"))

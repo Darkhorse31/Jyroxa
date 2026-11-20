@@ -100,6 +100,7 @@ export interface BrowserIntegrationStatus {
   host_manifest_present: boolean;
   chrome_registry: boolean;
   edge_registry: boolean;
+  brave_registry: boolean;
   firefox_registry: boolean;
   native_host_installed: boolean;
   packaged_extension_id: string;

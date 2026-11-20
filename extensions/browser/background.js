@@ -1,4 +1,9 @@
-import { sendNative, refreshSettingsFromApp, connectionFailureReason } from "./native.js";
+import {
+  sendNative,
+  refreshSettingsFromApp,
+  connectionFailureReason,
+  probeVideoFormats,
+} from "./native.js";
 import { shouldInterceptDownload, extEnabled } from "./intercept.js";
 import {
   registerContextMenus,
@@ -68,27 +73,66 @@ api.runtime.onMessage.addListener((msg, sender, sendResponse) => {
           ];
         }
       }
-      if (msg.blobLike) {
+
+      const expanded = await expandHlsVariants(items);
+      items = expanded;
+
+      let probeError = null;
+      const shouldProbe =
+        Boolean(msg.blobLike) ||
+        items.length === 0 ||
+        items.every((it) => {
+          const lab = mediaLabel(it);
+          return lab === "Media stream" || lab === "VIDEO";
+        });
+      if (shouldProbe && msg.pageUrl) {
+        const probe = await probeVideoFormats(msg.pageUrl);
+        if (!probe?.ok) {
+          const reason = connectionFailureReason(probe?.error);
+          probeError =
+            reason.detail ||
+            reason.short ||
+            "Could not find video qualities. Start Jyroxa and try again.";
+        } else {
+          const title = probe.title || guessFilename(msg.pageUrl);
+          const formats = probe.formats || [];
+          const fromProbe = formats.map((f) => ({
+            url: msg.pageUrl,
+            kind: "page",
+            video_page: true,
+            format_id: f.format_id,
+            label: f.label,
+            size: f.size_bytes,
+            filename: sanitizeMediaName(title),
+          }));
+          if (fromProbe.length) {
+            items = msg.blobLike
+              ? fromProbe
+              : [...items.filter((it) => !it.video_page), ...fromProbe];
+          }
+        }
+      } else if (msg.blobLike && msg.pageUrl) {
         items = [
-          ...items,
           {
             url: msg.pageUrl,
             kind: "page",
             video_page: true,
           },
+          ...items,
         ];
       }
-      sendResponse({
-        items: items.map((it) => ({
-          url: it.url,
-          kind: it.kind,
-          label: mediaLabel(it),
-          sizeLabel: it.size ? formatBytes(it.size) : "",
-          filename: guessFilename(it.url),
-          format_id: it.format_id,
-          video_page: it.video_page,
-        })),
-      });
+
+      const mapped = items.map((it) => ({
+        url: it.url,
+        kind: it.kind,
+        label: it.label || mediaLabel(it),
+        sizeLabel: it.size ? formatBytes(it.size) : "",
+        filename: it.filename || sanitizeMediaName(guessFilename(it.url)),
+        format_id: it.format_id,
+        video_page: it.video_page,
+      }));
+
+      sendResponse({ items: mapped, error: probeError });
     })();
     return true;
   }
@@ -141,6 +185,57 @@ api.runtime.onMessage.addListener((msg, sender, sendResponse) => {
   }
   return false;
 });
+
+async function expandHlsVariants(items) {
+  const out = [];
+  for (const it of items) {
+    if (it.kind !== "hls" || !it.url?.includes(".m3u8")) {
+      out.push(it);
+      continue;
+    }
+    const vars = await parseHlsMaster(it.url);
+    if (vars.length) {
+      out.push(...vars);
+    } else {
+      out.push(it);
+    }
+  }
+  return out;
+}
+
+async function parseHlsMaster(url) {
+  try {
+    const res = await fetch(url);
+    if (!res.ok) return [];
+    const text = await res.text();
+    if (!/#EXT-X-STREAM-INF/i.test(text)) return [];
+    const variants = [];
+    const lines = text.split(/\r?\n/);
+    for (let i = 0; i < lines.length; i += 1) {
+      const line = lines[i];
+      if (!line.startsWith("#EXT-X-STREAM-INF")) continue;
+      const bw = /BANDWIDTH=(\d+)/i.exec(line)?.[1];
+      const reso = /RESOLUTION=(\d+x\d+)/i.exec(line)?.[1];
+      const uri = lines[i + 1]?.trim();
+      if (!uri || uri.startsWith("#")) continue;
+      const abs = new URL(uri, url).href;
+      variants.push({
+        url: abs,
+        kind: "hls",
+        bandwidth: bw ? Number(bw) : null,
+        resolution: reso || null,
+      });
+    }
+    return variants;
+  } catch {
+    return [];
+  }
+}
+
+function sanitizeMediaName(name) {
+  const bad = /[<>:"/\\|?*]/g;
+  return (name || "video").replace(bad, "_").trim() || "video";
+}
 
 function guessFilename(url) {
   try {
