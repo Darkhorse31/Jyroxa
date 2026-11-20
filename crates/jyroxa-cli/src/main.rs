@@ -578,7 +578,10 @@ async fn resolve_output(
             let s = p.to_string_lossy();
             if s.ends_with('/') || s.ends_with('\\') {
                 std::fs::create_dir_all(p).ok();
-                let name = url_name.unwrap_or_else(|| "download.bin".into());
+                let name = probe_name(engine, url)
+                    .await
+                    .or(url_name)
+                    .unwrap_or_else(|| "download.bin".into());
                 Ok(p.join(name))
             } else {
                 Ok(p.to_path_buf())

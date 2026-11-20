@@ -17,6 +17,8 @@ default = []
 http3 = []
 
 [dependencies]
+scraper = "0.22"
+async-trait = "0.1"
 tokio = { workspace = true }
 futures = { workspace = true }
 serde = { workspace = true }
@@ -37,6 +39,7 @@ reqwest = { version = "0.12", default-features = false, features = [
     "rustls-tls",
     "rustls-tls-webpki-roots",
     "stream",
+    "cookies",
     "http2",
     "charset",
     "gzip",
@@ -45,7 +48,7 @@ reqwest = { version = "0.12", default-features = false, features = [
 ] }
 
 [target.'cfg(not(target_os = "android"))'.dependencies]
-reqwest = { workspace = true }
+reqwest = { workspace = true, features = ["cookies"] }
 
 [dev-dependencies]
 axum = "0.7"

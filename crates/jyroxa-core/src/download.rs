@@ -56,19 +56,30 @@ impl Control {
         Control { tx }
     }
     pub fn pause(&self) {
-        let _ = self.tx.send(Cmd::Paused);
+        let _ = self.tx.send_replace(Cmd::Paused);
     }
     pub fn resume(&self) {
-        let _ = self.tx.send(Cmd::Run);
+        let _ = self.tx.send_replace(Cmd::Run);
     }
     pub fn cancel(&self) {
-        let _ = self.tx.send(Cmd::Cancelled);
+        let _ = self.tx.send_replace(Cmd::Cancelled);
     }
     pub fn is_cancelled(&self) -> bool {
         *self.tx.borrow() == Cmd::Cancelled
     }
     pub fn is_paused(&self) -> bool {
         *self.tx.borrow() == Cmd::Paused
+    }
+    pub(crate) async fn cancelled(&self) {
+        let mut rx = self.subscribe();
+        loop {
+            if *rx.borrow_and_update() == Cmd::Cancelled {
+                return;
+            }
+            if rx.changed().await.is_err() {
+                return;
+            }
+        }
     }
     fn subscribe(&self) -> watch::Receiver<Cmd> {
         self.tx.subscribe()
@@ -611,7 +622,9 @@ impl Ctx {
 // ---------------------------------------------------------------------------
 
 /// The download engine. Cheap to clone-share via the owned client.
+#[derive(Clone)]
 pub struct Downloader {
+    cookie_jar: Arc<reqwest::cookie::Jar>,
     client: reqwest::Client,
     segment_client: reqwest::Client,
     global_limiter: Arc<RateLimiter>,
@@ -622,9 +635,13 @@ pub struct Downloader {
 impl Downloader {
     /// Build an engine with a fresh client and the given config.
     pub fn new(config: DownloadConfig) -> Result<Self> {
+        let cookie_jar = Arc::new(reqwest::cookie::Jar::default());
+        let (client, segment_client) =
+            crate::resolver::session_clients(config.read_timeout, cookie_jar.clone(), None)?;
         Ok(Downloader {
-            client: crate::build_client_with(config.read_timeout)?,
-            segment_client: crate::build_segment_client_with(config.read_timeout)?,
+            cookie_jar,
+            client,
+            segment_client,
             global_limiter: Arc::new(RateLimiter::unlimited()),
             host_stats: Arc::new(HostStats::in_memory()),
             config,
@@ -662,7 +679,7 @@ impl Downloader {
     /// Run a download to completion (or cancellation/failure).
     pub async fn download(
         &self,
-        req: DownloadRequest,
+        mut req: DownloadRequest,
         events: Option<EventSender>,
         control: Control,
         refresher: Option<RefreshFn>,
@@ -671,6 +688,34 @@ impl Downloader {
             return Err(Error::NoUrl);
         }
 
+        let referer =
+            crate::resolver::prepare_download_controlled(
+                &self.client,
+                &mut req,
+                self.config.request_timeout,
+                &control,
+            )
+            .await?;
+        let mut session = self.clone();
+        if let Some(referer) = referer {
+            (session.client, session.segment_client) = crate::resolver::session_clients(
+                self.config.read_timeout,
+                self.cookie_jar.clone(),
+                Some(&referer),
+            )?;
+        }
+        session
+            .download_resolved(req, events, control, refresher)
+            .await
+    }
+
+    async fn download_resolved(
+        &self,
+        req: DownloadRequest,
+        events: Option<EventSender>,
+        control: Control,
+        refresher: Option<RefreshFn>,
+    ) -> Result<DownloadOutcome> {
         // Probe mirrors; the first that answers provides the reference metadata.
         let mut meta: Option<Meta> = None;
         'mirrors: for u in &req.urls {
@@ -1652,6 +1697,7 @@ fn persist_state(
 pub fn preallocate(path: &std::path::Path, size: u64) -> Result<()> {
     let file = std::fs::OpenOptions::new()
         .create(true)
+        .truncate(false)
         .write(true)
         .read(true)
         .open(path)?;

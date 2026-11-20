@@ -20,6 +20,9 @@ pub enum Error {
     #[error("JSON error: {0}")]
     Json(#[from] serde_json::Error),
 
+    #[error("This link is a web page; no direct file found")]
+    PageNotFile { url: String },
+
     #[error("no usable URL was provided")]
     NoUrl,
 

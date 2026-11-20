@@ -18,12 +18,15 @@ pub mod linkgrabber;
 pub mod naming;
 pub mod probe;
 pub mod queue;
+pub mod resolver;
 pub mod segment;
 pub mod state;
 pub mod trace;
 pub mod tuner;
 
-pub use download::{Control, DownloadConfig, DownloadOutcome, DownloadRequest, Downloader, RefreshFn};
+pub use download::{
+    Control, DownloadConfig, DownloadOutcome, DownloadRequest, Downloader, RefreshFn,
+};
 pub use error::{Error, Result};
 pub use events::ProgressEvent;
 pub use hoststats::HostStats;
@@ -60,6 +63,7 @@ pub fn build_client() -> Result<reqwest::Client> {
 pub fn build_client_with(read_timeout: std::time::Duration) -> Result<reqwest::Client> {
     let client = reqwest::Client::builder()
         .user_agent(USER_AGENT)
+        .cookie_store(true)
         .pool_max_idle_per_host(MAX_CONNECTIONS)
         .tcp_keepalive(std::time::Duration::from_secs(30))
         .connect_timeout(std::time::Duration::from_secs(20))
@@ -82,6 +86,7 @@ pub fn build_segment_client() -> Result<reqwest::Client> {
 pub fn build_segment_client_with(read_timeout: std::time::Duration) -> Result<reqwest::Client> {
     let client = reqwest::Client::builder()
         .user_agent(USER_AGENT)
+        .cookie_store(true)
         .http1_only()
         .pool_max_idle_per_host(MAX_CONNECTIONS)
         .tcp_nodelay(true)

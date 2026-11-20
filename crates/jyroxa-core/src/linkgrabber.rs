@@ -16,19 +16,19 @@ use serde::{Deserialize, Serialize};
 use url::Url;
 
 use crate::error::Result;
-use crate::naming::{suggest_filename, filename_from_url_path};
+use crate::naming::{filename_from_url_path, suggest_filename};
 use crate::probe::probe_url;
 
 /// Common downloadable file extensions used by the bare-URL and filter logic.
 pub const COMMON_EXTENSIONS: &[&str] = &[
     "zip", "rar", "7z", "tar", "gz", "tgz", "bz2", "xz", "iso", "exe", "msi", "dmg", "pkg", "deb",
-    "rpm", "apk", "appimage", "bin", "img", "mp4", "mkv", "avi", "mov", "webm", "flv", "wmv", "m4v",
-    "mp3", "flac", "wav", "aac", "ogg", "opus", "m4a", "pdf", "epub", "mobi", "doc", "docx", "xls",
-    "xlsx", "ppt", "pptx", "csv", "jpg", "jpeg", "png", "gif", "webp", "svg", "torrent",
+    "rpm", "apk", "appimage", "bin", "img", "mp4", "mkv", "avi", "mov", "webm", "flv", "wmv",
+    "m4v", "mp3", "flac", "wav", "aac", "ogg", "opus", "m4a", "pdf", "epub", "mobi", "doc", "docx",
+    "xls", "xlsx", "ppt", "pptx", "csv", "jpg", "jpeg", "png", "gif", "webp", "svg", "torrent",
 ];
 
 /// Metadata discovered for a single link.
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Deserialize, PartialEq, Eq)]
 pub struct LinkInfo {
     pub url: String,
     pub filename: Option<String>,
@@ -48,25 +48,78 @@ impl LinkInfo {
         }
     }
 
+    /// Multipart archive base and volume number (zero for the primary archive).
+    pub fn multipart(&self) -> Option<(String, u32)> {
+        let name = self.filename.clone().or_else(|| {
+            Url::parse(&self.url)
+                .ok()
+                .and_then(|u| filename_from_url_path(&u))
+        })?;
+        multipart_name(&name)
+    }
+
+    pub fn is_multipart(&self) -> bool {
+        self.multipart().is_some_and(|(_, n)| n > 0)
+    }
+    pub fn part_number(&self) -> Option<u32> {
+        self.multipart().map(|(_, part)| part)
+    }
+
     /// The file extension (lowercase) implied by the filename or URL.
     pub fn extension(&self) -> Option<String> {
-        let name = self
-            .filename
-            .clone()
-            .or_else(|| {
-                Url::parse(&self.url)
-                    .ok()
-                    .and_then(|u| filename_from_url_path(&u))
-            })?;
+        let name = self.filename.clone().or_else(|| {
+            Url::parse(&self.url)
+                .ok()
+                .and_then(|u| filename_from_url_path(&u))
+        })?;
         name.rsplit_once('.').map(|(_, ext)| ext.to_lowercase())
     }
 }
 
+impl Serialize for LinkInfo {
+    fn serialize<S: serde::Serializer>(
+        &self,
+        serializer: S,
+    ) -> std::result::Result<S::Ok, S::Error> {
+        use serde::ser::SerializeStruct;
+        let mut fields = serializer.serialize_struct("LinkInfo", 7)?;
+        fields.serialize_field("url", &self.url)?;
+        fields.serialize_field("filename", &self.filename)?;
+        fields.serialize_field("size", &self.size)?;
+        fields.serialize_field("mime", &self.mime)?;
+        fields.serialize_field("resumable", &self.resumable)?;
+        fields.serialize_field("is_multipart", &self.is_multipart())?;
+        fields.serialize_field("part_number", &self.part_number())?;
+        fields.end()
+    }
+}
+
 /// A group of related links (by host, page or base name).
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Deserialize)]
 pub struct Package {
     pub name: String,
     pub links: Vec<LinkInfo>,
+}
+
+impl Package {
+    /// Whether this package contains numbered archive volumes.
+    pub fn is_multipart(&self) -> bool {
+        self.links.iter().any(LinkInfo::is_multipart)
+    }
+}
+
+impl Serialize for Package {
+    fn serialize<S: serde::Serializer>(
+        &self,
+        serializer: S,
+    ) -> std::result::Result<S::Ok, S::Error> {
+        use serde::ser::SerializeStruct;
+        let mut fields = serializer.serialize_struct("Package", 3)?;
+        fields.serialize_field("name", &self.name)?;
+        fields.serialize_field("links", &self.links)?;
+        fields.serialize_field("is_multipart", &self.is_multipart())?;
+        fields.end()
+    }
 }
 
 /// Options controlling extraction, filtering and probing.
@@ -119,13 +172,7 @@ fn og_re() -> &'static Regex {
 
 fn bare_re() -> &'static Regex {
     static RE: OnceLock<Regex> = OnceLock::new();
-    RE.get_or_init(|| {
-        let exts = COMMON_EXTENSIONS.join("|");
-        Regex::new(&format!(
-            r#"(?i)https?://[^\s"'<>\)\]]+\.(?:{exts})(?:\?[^\s"'<>\)\]]*)?"#
-        ))
-        .unwrap()
-    })
+    RE.get_or_init(|| Regex::new(r#"(?i)https?://[^\s"'<>\)\]]+"#).expect("static regex"))
 }
 
 /// Extract absolute links from text (optionally HTML), resolving relative URLs
@@ -168,7 +215,15 @@ pub fn extract_links(base: Option<&Url>, text: &str) -> Vec<String> {
         }
     }
     for m in bare_re().find_iter(text) {
-        push(m.as_str(), &mut out, &mut seen);
+        let raw = m.as_str();
+        let candidate = if raw.contains('?') {
+            raw
+        } else {
+            raw.trim_end_matches(['.', ',', ';', ':', '!'])
+        };
+        if looks_like_file(candidate) {
+            push(candidate, &mut out, &mut seen);
+        }
     }
 
     out
@@ -179,9 +234,12 @@ pub fn looks_like_file(url: &str) -> bool {
     Url::parse(url)
         .ok()
         .and_then(|u| filename_from_url_path(&u))
-        .and_then(|n| n.rsplit_once('.').map(|(_, e)| e.to_lowercase()))
-        .map(|ext| COMMON_EXTENSIONS.contains(&ext.as_str()))
-        .unwrap_or(false)
+        .is_some_and(|name| {
+            multipart_name(&name).is_some()
+                || name.rsplit_once('.').is_some_and(|(_, ext)| {
+                    COMMON_EXTENSIONS.contains(&ext.to_ascii_lowercase().as_str())
+                })
+        })
 }
 
 /// The LinkGrabber engine.
@@ -201,6 +259,27 @@ impl LinkGrabber {
     /// Grab from an input that is either a URL (fetched and parsed) or raw text.
     pub async fn grab(&self, input: &str, opts: &GrabOptions) -> Result<Vec<Package>> {
         let input = input.trim();
+        if is_url(input) && !opts.no_probe {
+            let resolved =
+                crate::resolver::resolve_links(&self.client, input, self.timeout).await?;
+            let mut infos = Vec::new();
+            for link in resolved {
+                if !self.passes_cheap_filters(link.url.as_str(), opts) {
+                    continue;
+                }
+                let info = LinkInfo {
+                    url: link.url.to_string(),
+                    filename: link.filename,
+                    size: link.size,
+                    mime: link.mime,
+                    resumable: link.resumable,
+                };
+                if self.passes_size_filters(&info, opts) {
+                    infos.push(info);
+                }
+            }
+            return Ok(group_packages(infos));
+        }
         let (base, text, is_page) = if is_url(input) {
             let base = Url::parse(input).ok();
             match self.fetch_text(input).await {
@@ -212,7 +291,14 @@ impl LinkGrabber {
             (None, input.to_string(), false)
         };
 
-        let mut links = extract_links(base.as_ref(), &text);
+        let mut links = if let Some(page_url) = base.as_ref().filter(|_| is_page) {
+            crate::resolver::candidates(page_url, &text)
+                .into_iter()
+                .map(|link| link.url.to_string())
+                .collect()
+        } else {
+            extract_links(base.as_ref(), &text)
+        };
 
         // If the input was a direct file URL (not an HTML page), include it.
         if is_page && looks_like_file(input) && !links.contains(&input.to_string()) {
@@ -252,7 +338,7 @@ impl LinkGrabber {
             links.into_iter().map(LinkInfo::bare).collect()
         } else {
             let conc = opts.concurrency_or_default();
-            stream::iter(links.into_iter())
+            stream::iter(links)
                 .map(|l| async move { self.probe_link(&l).await })
                 .buffer_unordered(conc)
                 .collect::<Vec<_>>()
@@ -314,6 +400,18 @@ impl LinkGrabber {
     /// Probe a single link: HEAD first, then a ranged GET fallback, for
     /// filename / size / mime / resumability.
     pub async fn probe_link(&self, url: &str) -> LinkInfo {
+        let resolved = crate::resolver::resolve_link(&self.client, url, self.timeout)
+            .await
+            .ok();
+        if let Some(link) = resolved {
+            return LinkInfo {
+                url: link.url.to_string(),
+                filename: link.filename,
+                size: link.size,
+                mime: link.mime,
+                resumable: link.resumable,
+            };
+        }
         match probe_url(&self.client, url, self.timeout).await {
             Ok(p) => LinkInfo {
                 url: p.final_url,
@@ -358,16 +456,30 @@ fn is_html_page(url: &str) -> bool {
 pub fn group_packages(infos: Vec<LinkInfo>) -> Vec<Package> {
     use std::collections::BTreeMap;
     let mut groups: BTreeMap<String, Vec<LinkInfo>> = BTreeMap::new();
+    let bases: HashSet<String> = infos
+        .iter()
+        .filter_map(|i| i.multipart())
+        .filter(|(_, n)| *n > 0)
+        .map(|(b, _)| b)
+        .collect();
     for info in infos {
         let host = Url::parse(&info.url)
             .ok()
             .and_then(|u| u.host_str().map(|s| s.to_string()))
             .unwrap_or_else(|| "unknown".to_string());
-        groups.entry(host).or_default().push(info);
+        let key = info
+            .multipart()
+            .map(|(base, _)| base)
+            .filter(|b| bases.contains(b))
+            .unwrap_or(host);
+        groups.entry(key).or_default().push(info);
     }
     groups
         .into_iter()
-        .map(|(name, links)| Package { name, links })
+        .map(|(name, mut links)| {
+            links.sort_by_key(|l| l.part_number().unwrap_or(0));
+            Package { name, links }
+        })
         .collect()
 }
 
@@ -448,5 +560,82 @@ mod tests {
         assert_eq!(li.extension().as_deref(), Some("mkv"));
         li.filename = Some("renamed.mp4".into());
         assert_eq!(li.extension().as_deref(), Some("mp4"));
+    }
+}
+
+pub(crate) fn multipart_name(name: &str) -> Option<(String, u32)> {
+    static RE: OnceLock<Regex> = OnceLock::new();
+    let re = RE.get_or_init(|| {
+        Regex::new(r"(?i)^(.+?)(?:\.part(\d+)\.rar|\.7z\.(\d+)|\.z(\d{2})|\.r(\d{2}))$")
+            .expect("static regex")
+    });
+    if let Some(c) = re.captures(name) {
+        for i in 2..=5 {
+            if let Some(part) = c.get(i) {
+                let n: u32 = part.as_str().parse().ok()?;
+                return Some((c[1].to_string(), if i == 5 { n + 1 } else { n }));
+            }
+        }
+    }
+    let lower = name.to_ascii_lowercase();
+    if lower.ends_with(".zip") || lower.ends_with(".rar") {
+        return Some((name[..name.len() - 4].to_string(), 0));
+    }
+    None
+}
+
+#[cfg(test)]
+mod multipart_tests {
+    use super::*;
+    #[test]
+    fn pasted_volume_urls_are_not_truncated() {
+        let text =
+            "https://files.test/set.7z.001 https://files.test/set.z01 https://files.test/set.r00";
+        let links = extract_links(None, text);
+        assert_eq!(links, text.split_whitespace().collect::<Vec<_>>());
+        assert_eq!(
+            extract_links(
+                None,
+                "https://files.test/set.7z.001, https://files.test/set.zip."
+            ),
+            vec![
+                "https://files.test/set.7z.001",
+                "https://files.test/set.zip"
+            ]
+        );
+    }
+
+    #[test]
+    fn archive_families_are_grouped_and_ordered() {
+        for names in [
+            vec!["set.part02.rar", "set.part01.rar"],
+            vec!["set.7z.002", "set.7z.001"],
+            vec!["set.z02", "set.zip", "set.z01"],
+            vec!["set.r01", "set.rar", "set.r00"],
+        ] {
+            let links = names
+                .iter()
+                .map(|name| LinkInfo::bare(format!("https://files.test/{name}")))
+                .collect();
+            let packages = group_packages(links);
+            assert_eq!(packages.len(), 1);
+            assert_eq!(packages[0].name, "set");
+            assert!(packages[0].is_multipart());
+            assert_eq!(
+                serde_json::to_value(&packages[0]).unwrap()["is_multipart"],
+                true
+            );
+            let serialized = serde_json::to_value(packages[0].links.last().unwrap()).unwrap();
+            assert_eq!(serialized["is_multipart"], true);
+            assert!(serialized["part_number"].is_number());
+            let numbers: Vec<_> = packages[0]
+                .links
+                .iter()
+                .map(|l| l.part_number().unwrap())
+                .collect();
+            assert!(numbers.windows(2).all(|pair| pair[0] < pair[1]));
+            assert!(packages[0].links.last().unwrap().is_multipart());
+        }
+        assert!(!LinkInfo::bare("https://files.test/plain.zip".into()).is_multipart());
     }
 }
