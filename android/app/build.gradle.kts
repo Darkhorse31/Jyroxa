@@ -147,7 +147,7 @@ tasks.register<Exec>("buildCargoNdk") {
         "-t", "arm64-v8a",
         "-t", "x86_64",
         "-o", jniOutDir.absolutePath,
-        "build", "--release"
+        "build", "--release", "-j", "3"
     )
 
     doFirst {
