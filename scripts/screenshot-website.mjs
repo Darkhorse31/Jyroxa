@@ -48,17 +48,34 @@ const viewports = [
   { name: "1440", width: 1440, height: 900 },
 ];
 
-const browser = await chromium.launch({ headless: true });
-const context = await browser.newContext();
-const page = await context.newPage();
+const themes = ["dark", "light"];
 
-for (const vp of viewports) {
-  await page.setViewportSize({ width: vp.width, height: vp.height });
-  await page.goto(base, { waitUntil: "networkidle" });
-  await page.screenshot({
-    path: path.join(outDir, `home-${vp.name}.png`),
-    fullPage: true,
-  });
+const browser = await chromium.launch({ headless: true });
+
+for (const theme of themes) {
+  const context = await browser.newContext();
+  await context.addInitScript((t) => {
+    localStorage.setItem("jyroxa-site-theme", t);
+    document.documentElement.setAttribute("data-theme", t);
+  }, theme);
+  const page = await context.newPage();
+
+  for (const vp of viewports) {
+    await page.setViewportSize({ width: vp.width, height: vp.height });
+    await page.goto(base, { waitUntil: "networkidle" });
+    await page.screenshot({
+      path: path.join(outDir, `home-${vp.name}-${theme}.png`),
+      fullPage: true,
+    });
+    if (theme === "dark") {
+      fs.copyFileSync(
+        path.join(outDir, `home-${vp.name}-dark.png`),
+        path.join(outDir, `home-${vp.name}.png`)
+      );
+    }
+  }
+
+  await context.close();
 }
 
 await browser.close();
