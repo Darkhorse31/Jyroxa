@@ -9,12 +9,12 @@ fs.mkdirSync(brand, { recursive: true });
 // A continuous square path forms a J, with its open top becoming a download arrow.
 const shape = '<path d="M11 2h3v6h3l-4.5 5L8 8h3V2ZM2 4h6v3H5v7h9v-2h3v5H2V4Z"/>';
 const svg = color => `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 19 19" fill="${color}">${shape}</svg>`;
-const light = svg("#0f766e");
-const dark = svg("#2dd4bf");
+const light = svg("#7a5c2e");
+const dark = svg("#c9a46a");
 fs.writeFileSync(path.join(brand, "jyroxa.svg"), light);
 fs.writeFileSync(path.join(brand, "jyroxa-dark.svg"), dark);
 fs.writeFileSync(path.join(brand, "jyroxa-mono.svg"), svg("currentColor"));
-const tray = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 19 19"><path fill="#f3f3f3" d="M0 0h19v19H0z"/><g fill="#0f766e">${shape}</g></svg>`;
+const tray = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 19 19"><path fill="#f4f0eb" d="M0 0h19v19H0z"/><g fill="#7a5c2e">${shape}</g></svg>`;
 fs.writeFileSync(path.join(brand, "jyroxa-tray.svg"), tray);
 fs.writeFileSync(path.join(brand, "jyroxa-app.svg"), tray);
 const png = (source, size) => new Resvg(source, { fitTo: { mode: "width", value: size }, font: { loadSystemFonts: false } }).render().asPng();
