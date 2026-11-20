@@ -8,7 +8,7 @@
 //! smooths over slow mirrors or unlucky segments.
 
 use std::collections::VecDeque;
-use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 
 use crate::state::SegmentState;
@@ -53,6 +53,8 @@ pub struct Segment {
     pub(crate) committed: AtomicU64,
     /// Serializes a split with accepting a network chunk. Never held across I/O.
     pub(crate) bounds: Mutex<()>,
+    /// Consecutive failures follow the range across worker handoffs.
+    pub(crate) failures: AtomicUsize,
     /// Set when the segment is fully downloaded.
     pub done: AtomicBool,
     /// Inclusive byte cap for the primary worker (probe splits); 0 = none.
@@ -70,6 +72,7 @@ impl Segment {
             current: AtomicU64::new(current),
             committed: AtomicU64::new(current),
             bounds: Mutex::new(()),
+            failures: AtomicUsize::new(0),
             done: AtomicBool::new(current > end),
             cap_end: AtomicU64::new(0),
             in_use: AtomicBool::new(false),
