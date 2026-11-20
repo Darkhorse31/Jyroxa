@@ -30,9 +30,11 @@ pub struct YtInfo {
 fn sidecar_exe(name: &str) -> PathBuf {
     if let Ok(exe) = std::env::current_exe() {
         if let Some(dir) = exe.parent() {
-            let p = dir.join(name);
-            if p.is_file() {
-                return p;
+            for sub in ["", "sidecars"] {
+                let p = dir.join(sub).join(name);
+                if p.is_file() {
+                    return p;
+                }
             }
         }
     }
