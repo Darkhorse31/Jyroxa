@@ -6,13 +6,13 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use bytes::Bytes;
+use librqbit::limits::LimitsConfig;
+use librqbit::ManagedTorrentHandle;
 use librqbit::{
     AddTorrent, AddTorrentOptions, AddTorrentResponse, DhtSessionConfig, ListenerMode,
     ListenerOptions, PeerConnectionOptions, Session, SessionOptions, SessionPersistenceConfig,
     TorrentStats,
 };
-use librqbit::limits::LimitsConfig;
-use librqbit::ManagedTorrentHandle;
 use tokio::sync::watch;
 
 use crate::error::{Error, Result};
@@ -44,7 +44,12 @@ impl From<&TorrentStats> for TorrentSnapshot {
         let (live_peers, live_seeders) = s
             .live
             .as_ref()
-            .map(|l| (l.snapshot.peer_stats.live, l.snapshot.peer_stats.live_seeders))
+            .map(|l| {
+                (
+                    l.snapshot.peer_stats.live,
+                    l.snapshot.peer_stats.live_seeders,
+                )
+            })
             .unwrap_or((0, 0));
         Self {
             downloaded: s.progress_bytes,

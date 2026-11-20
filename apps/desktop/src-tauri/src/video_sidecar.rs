@@ -27,26 +27,12 @@ pub struct YtInfo {
     pub formats: Option<Vec<YtFormat>>,
 }
 
-fn sidecar_exe(name: &str) -> PathBuf {
-    if let Ok(exe) = std::env::current_exe() {
-        if let Some(dir) = exe.parent() {
-            for sub in ["", "sidecars"] {
-                let p = dir.join(sub).join(name);
-                if p.is_file() {
-                    return p;
-                }
-            }
-        }
-    }
-    PathBuf::from(name)
-}
-
 pub fn yt_dlp_path() -> PathBuf {
-    sidecar_exe("yt-dlp.exe")
+    crate::sidecar_paths::sidecar_exe("yt-dlp.exe")
 }
 
 pub fn ffmpeg_path() -> PathBuf {
-    sidecar_exe("ffmpeg.exe")
+    crate::sidecar_paths::sidecar_exe("ffmpeg.exe")
 }
 
 pub fn yt_dlp_available() -> bool {
@@ -89,12 +75,18 @@ pub fn pick_format<'a>(formats: &'a [YtFormat], format_id: Option<&str>) -> Opti
         .or_else(|| formats.iter().find(|f| f.url.is_some()))
 }
 
-pub async fn resolve_page_to_url(page_url: &str, format_id: Option<&str>) -> Result<(String, String), String> {
+pub async fn resolve_page_to_url(
+    page_url: &str,
+    format_id: Option<&str>,
+) -> Result<(String, String), String> {
     let info = probe_page_formats(page_url).await?;
     let title = info.title.clone().unwrap_or_else(|| "video".into());
     let formats = info.formats.unwrap_or_default();
     let fmt = pick_format(&formats, format_id).ok_or_else(|| "no matching format".to_string())?;
-    let url = fmt.url.clone().ok_or_else(|| "format has no direct url".to_string())?;
+    let url = fmt
+        .url
+        .clone()
+        .ok_or_else(|| "format has no direct url".to_string())?;
     let ext = fmt.ext.clone().unwrap_or_else(|| "mp4".into());
     let filename = sanitize_filename(&format!("{title}.{ext}"));
     Ok((url, filename))
@@ -137,6 +129,8 @@ pub async fn download_via_ytdlp(
     if !out.status.success() {
         return Err(String::from_utf8_lossy(&out.stderr).trim().to_string());
     }
-    let meta = tokio::fs::metadata(output).await.map_err(|e| e.to_string())?;
+    let meta = tokio::fs::metadata(output)
+        .await
+        .map_err(|e| e.to_string())?;
     Ok(meta.len())
 }

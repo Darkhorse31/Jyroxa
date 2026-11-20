@@ -4,7 +4,9 @@ use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
 
-use crate::ext_id::{extension_display_name, packaged_chrome_extension_id, PACKAGED_CHROME_EXTENSION_ID};
+use crate::ext_id::{
+    extension_display_name, packaged_chrome_extension_id, PACKAGED_CHROME_EXTENSION_ID,
+};
 use crate::NATIVE_HOST_NAME;
 
 /// User-configured Chromium extension IDs (settings UI).
@@ -237,15 +239,15 @@ pub fn install_native_host(
     let _token = ensure_browser_token().map_err(|e| e.to_string())?;
     let data = jyroxa_data_dir();
     std::fs::create_dir_all(&data).map_err(|e| e.to_string())?;
-    std::fs::write(desktop_exe_marker(), desktop_exe.to_string_lossy().as_bytes())
-        .map_err(|e| e.to_string())?;
+    std::fs::write(
+        desktop_exe_marker(),
+        desktop_exe.to_string_lossy().as_bytes(),
+    )
+    .map_err(|e| e.to_string())?;
 
     let host_exe = native_host_exe_path(desktop_exe);
     if !host_exe.is_file() {
-        return Err(format!(
-            "native host not found at {}",
-            host_exe.display()
-        ));
+        return Err(format!("native host not found at {}", host_exe.display()));
     }
 
     let manifest_dir = data.join("native-host");
@@ -311,9 +313,7 @@ pub fn integration_status(desktop_exe: &Path) -> BrowserIntegrationStatus {
     fn reg_ok(key: &str) -> bool {
         use winreg::enums::*;
         use winreg::RegKey;
-        RegKey::predef(HKEY_CURRENT_USER)
-            .open_subkey(key)
-            .is_ok()
+        RegKey::predef(HKEY_CURRENT_USER).open_subkey(key).is_ok()
     }
 
     #[cfg(windows)]
@@ -407,7 +407,9 @@ mod tests {
         std::fs::create_dir_all(data.join("native-host")).expect("dir");
         // SAFETY: isolated data dir for this test.
         unsafe { std::env::set_var("JYROXA_DATA_DIR", &data) };
-        let manifest = data.join("native-host").join(format!("{NATIVE_HOST_NAME}.json"));
+        let manifest = data
+            .join("native-host")
+            .join(format!("{NATIVE_HOST_NAME}.json"));
         let prior = "hehgieooaeknhlodfpkommnhinaahkjf";
         let json = serde_json::json!({
             "name": NATIVE_HOST_NAME,
@@ -524,7 +526,10 @@ mod windows_live {
                     .join("../../target/debug/jyroxa-native-host.exe")
             });
         if !host_src.is_file() {
-            eprintln!("skip install_and_framed_ping: missing {}", host_src.display());
+            eprintln!(
+                "skip install_and_framed_ping: missing {}",
+                host_src.display()
+            );
             return;
         }
         let host_dst = stage.join("jyroxa-native-host.exe");

@@ -82,10 +82,13 @@ pub fn parse_mpd(xml: &str, base_url: &str) -> Result<MpdInfo, String> {
     let mut variants = Vec::new();
 
     for adapt_open in find_open_tags(period_xml, "AdaptationSet") {
-        let mime = attr_value(&adapt_open, "mimeType").or_else(|| attr_value(&adapt_open, "contentType"));
+        let mime =
+            attr_value(&adapt_open, "mimeType").or_else(|| attr_value(&adapt_open, "contentType"));
         let adapt_start = period_xml.find(&adapt_open).unwrap_or(0);
         let adapt_xml = &period_xml[adapt_start + adapt_open.len()..];
-        let adapt_end = adapt_xml.find("</AdaptationSet>").unwrap_or(adapt_xml.len());
+        let adapt_end = adapt_xml
+            .find("</AdaptationSet>")
+            .unwrap_or(adapt_xml.len());
         let adapt_xml = &adapt_xml[..adapt_end];
 
         for rep_open in find_open_tags(adapt_xml, "Representation") {
@@ -108,27 +111,37 @@ pub fn parse_mpd(xml: &str, base_url: &str) -> Result<MpdInfo, String> {
             let seg_open = find_open_tags(rep_xml, "SegmentTemplate")
                 .first()
                 .cloned()
-                .or_else(|| find_open_tags(adapt_xml, "SegmentTemplate").first().cloned());
+                .or_else(|| {
+                    find_open_tags(adapt_xml, "SegmentTemplate")
+                        .first()
+                        .cloned()
+                });
 
-            let (init_url, media_template, start_number, timescale, segment_duration, segment_count) =
-                if let Some(ref so) = seg_open {
-                    let init = attr_value(so, "initialization").map(|t| {
-                        let media = attr_value(so, "media").unwrap_or("$Number$.m4s".into());
-                        media_template_url(&base, &media, &t, start_number_from(so))
-                    });
-                    let media = attr_value(so, "media");
-                    let sn = start_number_from(so);
-                    let timescale = attr_value(so, "timescale")
-                        .and_then(|s| s.parse().ok())
-                        .unwrap_or(1);
-                    let dur = attr_value(so, "duration")
-                        .and_then(|s| s.parse::<u64>().ok())
-                        .unwrap_or(0);
-                    let count = segment_count_from_period(period_xml, timescale, dur);
-                    (init, media, sn, timescale, dur, count)
-                } else {
-                    (None, None, 1, 1, 0, 0)
-                };
+            let (
+                init_url,
+                media_template,
+                start_number,
+                timescale,
+                segment_duration,
+                segment_count,
+            ) = if let Some(ref so) = seg_open {
+                let init = attr_value(so, "initialization").map(|t| {
+                    let media = attr_value(so, "media").unwrap_or("$Number$.m4s".into());
+                    media_template_url(&base, &media, &t, start_number_from(so))
+                });
+                let media = attr_value(so, "media");
+                let sn = start_number_from(so);
+                let timescale = attr_value(so, "timescale")
+                    .and_then(|s| s.parse().ok())
+                    .unwrap_or(1);
+                let dur = attr_value(so, "duration")
+                    .and_then(|s| s.parse::<u64>().ok())
+                    .unwrap_or(0);
+                let count = segment_count_from_period(period_xml, timescale, dur);
+                (init, media, sn, timescale, dur, count)
+            } else {
+                (None, None, 1, 1, 0, 0)
+            };
 
             if media_template.is_none() && init_url.is_none() {
                 continue;
@@ -192,7 +205,11 @@ fn media_template_url(base: &str, media: &str, init: &str, start_number: u64) ->
     let combined = if init.contains('/') || media.contains('/') {
         path
     } else {
-        format!("{}/{}", path.trim_end_matches('/'), media_path.trim_start_matches('/'))
+        format!(
+            "{}/{}",
+            path.trim_end_matches('/'),
+            media_path.trim_start_matches('/')
+        )
     };
     resolve_uri(base, &combined)
 }

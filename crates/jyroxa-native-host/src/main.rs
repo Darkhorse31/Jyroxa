@@ -52,7 +52,10 @@ fn handle_message(
     let parsed = match parse_extension_message(&raw) {
         Ok(m) => m,
         Err(e) => {
-            respond(stdout, serde_json::json!({ "ok": false, "error": e.to_string() }));
+            respond(
+                stdout,
+                serde_json::json!({ "ok": false, "error": e.to_string() }),
+            );
             return Ok(());
         }
     };
@@ -76,7 +79,10 @@ fn handle_message(
 
     match result {
         Ok(v) => respond(stdout, v),
-        Err(e) => respond(stdout, serde_json::json!({ "ok": false, "error": e.to_string() })),
+        Err(e) => respond(
+            stdout,
+            serde_json::json!({ "ok": false, "error": e.to_string() }),
+        ),
     }
     Ok(())
 }
@@ -95,7 +101,8 @@ fn main() {
                 }
             }
             Err(FramingError::Io(e))
-                if e.kind() == io::ErrorKind::UnexpectedEof || e.kind() == io::ErrorKind::BrokenPipe =>
+                if e.kind() == io::ErrorKind::UnexpectedEof
+                    || e.kind() == io::ErrorKind::BrokenPipe =>
             {
                 break;
             }

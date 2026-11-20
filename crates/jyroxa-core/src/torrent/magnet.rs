@@ -14,10 +14,43 @@ pub fn is_magnet_uri(s: &str) -> bool {
     parse_info_hash_hex(s).is_ok()
 }
 
+/// Strip `file://` URLs and surrounding whitespace from a torrent hand-off string.
+pub fn normalize_torrent_input(s: &str) -> String {
+    let t = s.trim().trim_matches('"');
+    let lower = t.to_ascii_lowercase();
+    if lower.starts_with("file:///") {
+        let rest = &t[8..];
+        let rest = rest.trim_start_matches('/');
+        return percent_decode_path(rest);
+    }
+    if lower.starts_with("file://") {
+        return percent_decode_path(&t[7..]);
+    }
+    t.to_string()
+}
+
+fn percent_decode_path(s: &str) -> String {
+    let decoded: String = url::form_urlencoded::parse(s.as_bytes())
+        .map(|(k, v)| {
+            if v.is_empty() {
+                k.into_owned()
+            } else {
+                format!("{k}{v}")
+            }
+        })
+        .collect();
+    let slash = if decoded.contains(":/") || decoded.starts_with("\\\\") {
+        decoded.replace('/', "\\")
+    } else {
+        decoded.replace('/', "\\")
+    };
+    slash
+}
+
 /// True for magnets, local `.torrent` paths, or HTTP(S) URLs ending in `.torrent`.
 pub fn is_torrent_source(s: &str) -> bool {
-    let t = s.trim();
-    if is_magnet_uri(t) {
+    let t = normalize_torrent_input(s);
+    if is_magnet_uri(&t) {
         return true;
     }
     if t.len() == 40 && t.bytes().all(|b| b.is_ascii_hexdigit()) {
@@ -26,8 +59,12 @@ pub fn is_torrent_source(s: &str) -> bool {
     if t.starts_with("http://") || t.starts_with("https://") {
         return t.to_ascii_lowercase().ends_with(".torrent");
     }
-    let path = std::path::Path::new(t);
-    if path.extension().and_then(|e| e.to_str()) == Some("torrent") {
+    let path = std::path::Path::new(&t);
+    if path
+        .extension()
+        .and_then(|e| e.to_str())
+        .is_some_and(|e| e.eq_ignore_ascii_case("torrent"))
+    {
         return path.is_file();
     }
     false
@@ -127,8 +164,7 @@ fn urlencoding_pair(s: &str) -> String {
 mod tests {
     use super::*;
 
-    const SAMPLE: &str =
-        "magnet:?xt=urn:btih:0123456789abcdef0123456789abcdef01234567&dn=ubuntu";
+    const SAMPLE: &str = "magnet:?xt=urn:btih:0123456789abcdef0123456789abcdef01234567&dn=ubuntu";
 
     #[test]
     fn parse_hex_btih() {
@@ -146,8 +182,23 @@ mod tests {
     fn is_torrent_source_cases() {
         assert!(is_magnet_uri(SAMPLE));
         assert!(is_torrent_source(SAMPLE));
-        assert!(is_torrent_source("https://releases.ubuntu.com/22.04/ubuntu-22.04.3-desktop-amd64.iso.torrent"));
+        assert!(is_torrent_source(
+            "https://releases.ubuntu.com/22.04/ubuntu-22.04.3-desktop-amd64.iso.torrent"
+        ));
         assert!(!is_torrent_source("https://example.com/file.zip"));
+    }
+
+    #[test]
+    fn normalizes_file_uri() {
+        let n = normalize_torrent_input("file:///C:/Users/me/game.torrent");
+        assert_eq!(n, r"C:\Users\me\game.torrent");
+    }
+
+    #[test]
+    fn file_uri_is_torrent_when_path_exists() {
+        let exe = std::env::current_exe().unwrap();
+        let s = format!("file:///{}", exe.to_string_lossy().replace('\\', "/"));
+        assert!(!is_torrent_source(&s));
     }
 
     #[test]

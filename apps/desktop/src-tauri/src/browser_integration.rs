@@ -5,8 +5,10 @@ use std::path::Path;
 
 use jyroxa_core::torrent::is_torrent_source;
 use jyroxa_native_host::handoff::{handoff_to_headers, BrowserHandoff, PipeEnvelope, PipeMessage};
-use jyroxa_native_host::integration::{self, install_native_host, uninstall_native_host, BrowserOriginsConfig};
 pub use jyroxa_native_host::integration::BrowserIntegrationStatus;
+use jyroxa_native_host::integration::{
+    self, install_native_host, uninstall_native_host, BrowserOriginsConfig,
+};
 use jyroxa_native_host::HANDOFF_PIPE_NAME;
 use tauri::{AppHandle, Emitter, Manager};
 
@@ -47,13 +49,13 @@ pub fn integration_status(desktop_exe: &Path) -> BrowserIntegrationStatus {
 }
 
 fn headers_map(h: &BrowserHandoff) -> HashMap<String, String> {
-    handoff_to_headers(h)
-        .into_iter()
-        .collect::<HashMap<_, _>>()
+    handoff_to_headers(h).into_iter().collect::<HashMap<_, _>>()
 }
 
 async fn handle_pipe_message(app: &AppHandle, env: PipeEnvelope) -> serde_json::Value {
-    let Ok(expected) = std::fs::read_to_string(integration::jyroxa_data_dir().join("browser-integration.token")) else {
+    let Ok(expected) =
+        std::fs::read_to_string(integration::jyroxa_data_dir().join("browser-integration.token"))
+    else {
         return serde_json::json!({ "ok": false, "error": "token missing" });
     };
     if env.token.trim() != expected.trim() {
@@ -87,11 +89,7 @@ async fn handle_pipe_message(app: &AppHandle, env: PipeEnvelope) -> serde_json::
             settings.browser_integration.silent_add = silent_add;
             let name = app.package_info().name.clone();
             let exe = std::env::current_exe().ok();
-            match state
-                .0
-                .set_settings(settings, &name, exe.as_deref())
-                .await
-            {
+            match state.0.set_settings(settings, &name, exe.as_deref()).await {
                 Ok(()) => serde_json::json!({ "ok": true, "silent_add": silent_add }),
                 Err(e) => serde_json::json!({ "ok": false, "error": e.to_string() }),
             }
@@ -156,15 +154,12 @@ async fn handle_pipe_message(app: &AppHandle, env: PipeEnvelope) -> serde_json::
                     md5: None,
                     http_headers: Some(headers),
                     torrent_only_files: None,
+                    torrent_info_hash: None,
                 };
                 match state.0.add_download(app.clone(), args).await {
                     Ok(id) => {
                         crate::bring_main_window_to_front(app);
-                        crate::engine::show_native_notification(
-                            app,
-                            "Added to Jyroxa",
-                            &filename,
-                        );
+                        crate::engine::show_native_notification(app, "Added to Jyroxa", &filename);
                         serde_json::json!({ "ok": true, "download_id": id, "silent": true })
                     }
                     Err(e) => serde_json::json!({ "ok": false, "error": e.to_string() }),

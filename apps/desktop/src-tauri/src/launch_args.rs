@@ -8,12 +8,10 @@ pub fn launch_target_from_args<I>(args: I) -> Option<String>
 where
     I: IntoIterator<Item = String>,
 {
-    args.into_iter()
-        .skip(1)
-        .find_map(|a| {
-            let t = strip_launch_arg(&a);
-            is_launch_target(t).then(|| t.to_string())
-        })
+    args.into_iter().skip(1).find_map(|a| {
+        let t = strip_launch_arg(&a);
+        is_launch_target(t).then(|| t.to_string())
+    })
 }
 
 fn strip_launch_arg(s: &str) -> &str {
@@ -41,10 +39,7 @@ fn is_launch_target(s: &str) -> bool {
 /// Whether a single-instance pipe payload should become `external-url`.
 pub fn should_emit_external_url(msg: &str) -> bool {
     let t = strip_launch_arg(msg);
-    !t.is_empty()
-        && (t.starts_with("http://")
-            || t.starts_with("https://")
-            || is_torrent_source(t))
+    !t.is_empty() && (t.starts_with("http://") || t.starts_with("https://") || is_torrent_source(t))
 }
 
 #[cfg(test)]

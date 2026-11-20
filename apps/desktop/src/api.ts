@@ -115,6 +115,7 @@ export interface TorrentProbeInfo {
   name: string;
   total_bytes: number;
   files: TorrentFileProbe[];
+  info_hash?: string;
 }
 
 export interface AddDownloadArgs {
@@ -127,6 +128,7 @@ export interface AddDownloadArgs {
   md5?: string;
   http_headers?: Record<string, string>;
   torrent_only_files?: number[];
+  torrent_info_hash?: string;
 }
 
 export interface GrabOptionsDto {

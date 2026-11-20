@@ -5,12 +5,12 @@ use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Weak};
 
-use serde::{Deserialize, Serialize};
 use jyroxa_core::download::{Control, DownloadConfig, DownloadRequest, Downloader};
 use jyroxa_core::events::ProgressEvent;
 use jyroxa_core::linkgrabber::{GrabOptions, LinkGrabber, LinkInfo, Package};
 use jyroxa_core::state::SegmentState;
 use jyroxa_core::{build_client, HostStats, Result as CoreResult};
+use serde::{Deserialize, Serialize};
 use tauri::{AppHandle, Emitter, Manager};
 use tauri_plugin_clipboard_manager::ClipboardExt;
 use tokio::sync::{Mutex, RwLock};
@@ -192,6 +192,8 @@ pub struct DownloadView {
     pub torrent_ratio: Option<f64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub status_note: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub torrent_info_hash: Option<String>,
 }
 
 fn default_http_kind() -> String {
@@ -210,6 +212,8 @@ pub struct AddDownloadArgs {
     pub http_headers: Option<std::collections::HashMap<String, String>>,
     #[serde(default)]
     pub torrent_only_files: Option<Vec<usize>>,
+    #[serde(default)]
+    pub torrent_info_hash: Option<String>,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -246,12 +250,20 @@ pub struct PersistedQueue {
 pub struct PersistedItem {
     pub urls: Vec<String>,
     pub output: String,
+    #[serde(default)]
+    pub filename: String,
     pub connections: usize,
     pub connections_auto: bool,
     pub sha256: Option<String>,
     pub md5: Option<String>,
     #[serde(default)]
     pub status: TaskStatus,
+    #[serde(default)]
+    pub kind: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub torrent_only_files: Option<Vec<usize>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub torrent_info_hash: Option<String>,
 }
 
 struct InnerItem {
@@ -294,9 +306,8 @@ impl DesktopEngine {
                 .with_host_stats(host_stats),
         ));
         let telegram = Arc::new(jyroxa_core::TelegramClientPool::new(&data_dir));
-        let linkgrabber = Arc::new(
-            LinkGrabber::new(client.clone()).with_telegram_pool(Arc::clone(&telegram)),
-        );
+        let linkgrabber =
+            Arc::new(LinkGrabber::new(client.clone()).with_telegram_pool(Arc::clone(&telegram)));
 
         let mut settings = AppSettings::default();
         let settings_path = data_dir.join("settings.json");
@@ -434,7 +445,10 @@ impl DesktopEngine {
         jyroxa_core::probe_url(&client, &normalized, std::time::Duration::from_secs(10)).await
     }
 
-    pub async fn probe_torrent(&self, source: &str) -> CoreResult<jyroxa_core::torrent::TorrentProbeInfo> {
+    pub async fn probe_torrent(
+        &self,
+        source: &str,
+    ) -> CoreResult<jyroxa_core::torrent::TorrentProbeInfo> {
         crate::torrent_host::probe_torrent_via_sidecar(source).await
     }
 
@@ -550,6 +564,7 @@ impl DesktopEngine {
                 md5: inner.view.md5.clone(),
                 http_headers: inner.view.http_headers.clone(),
                 torrent_only_files: inner.torrent_only_files.clone(),
+                torrent_info_hash: inner.view.torrent_info_hash.clone(),
             }
         };
         let settings = self.settings.lock().await.clone();
@@ -658,16 +673,23 @@ impl DesktopEngine {
             let v = &inner.view;
             if matches!(
                 v.status,
-                TaskStatus::Queued | TaskStatus::Paused | TaskStatus::Running | TaskStatus::Starting
+                TaskStatus::Queued
+                    | TaskStatus::Paused
+                    | TaskStatus::Running
+                    | TaskStatus::Starting
             ) {
                 persisted.push(PersistedItem {
                     urls: v.urls.clone(),
                     output: v.output.clone(),
+                    filename: v.filename.clone(),
                     connections: v.connections,
                     connections_auto: v.connections_auto,
                     sha256: v.sha256.clone(),
                     md5: v.md5.clone(),
                     status: v.status.clone(),
+                    kind: v.kind.clone(),
+                    torrent_only_files: inner.torrent_only_files.clone(),
+                    torrent_info_hash: v.torrent_info_hash.clone(),
                 });
             }
         }
@@ -687,19 +709,28 @@ impl DesktopEngine {
         };
         let q: PersistedQueue = serde_json::from_str(&text)?;
         let settings = self.settings.lock().await.clone();
-        let mut restored_paused = false;
         for item in q.items {
+            let urls: Vec<String> = item
+                .urls
+                .iter()
+                .map(|u| jyroxa_core::torrent::normalize_torrent_input(u))
+                .collect();
             let output = PathBuf::from(&item.output);
-            let filename = output
-                .file_name()
-                .and_then(|s| s.to_str())
-                .unwrap_or("download.bin")
-                .to_string();
+            let filename = if item.filename.is_empty() {
+                output
+                    .file_name()
+                    .and_then(|s| s.to_str())
+                    .unwrap_or("download.bin")
+                    .to_string()
+            } else {
+                item.filename.clone()
+            };
             let status = match item.status {
                 TaskStatus::Running | TaskStatus::Starting => TaskStatus::Queued,
                 other => other,
             };
-            let is_torrent = crate::torrent_host::primary_is_torrent(&item.urls);
+            let is_torrent =
+                item.kind == "torrent" || crate::torrent_host::primary_is_torrent(&urls);
             let (downloaded, total, segments) = if status == TaskStatus::Paused {
                 Self::progress_from_state(&output)
             } else if is_torrent {
@@ -721,7 +752,7 @@ impl DesktopEngine {
             };
             let view = DownloadView {
                 id,
-                urls: item.urls.clone(),
+                urls: urls.clone(),
                 filename: filename.clone(),
                 output: item.output.clone(),
                 connections,
@@ -744,6 +775,7 @@ impl DesktopEngine {
                 torrent_seeds: None,
                 torrent_ratio: None,
                 status_note: None,
+                torrent_info_hash: item.torrent_info_hash.clone(),
                 telegram_chat_id: None,
                 telegram_message_id: None,
             };
@@ -755,22 +787,18 @@ impl DesktopEngine {
                         view: view.clone(),
                         control: None,
                         torrent_cancel: None,
-                        torrent_only_files: None,
+                        torrent_only_files: item.torrent_only_files.clone(),
                     },
                 );
             }
             match status {
-                TaskStatus::Paused => restored_paused = true,
                 TaskStatus::Queued => self.enqueue(id).await,
                 _ => {}
             }
         }
         let _ = app.emit("downloads-changed", ());
         self.pump_queue(app.clone(), settings.max_concurrent).await;
-        if restored_paused {
-            let _ = self.save_queue_snapshot().await;
-        }
-        let _ = std::fs::remove_file(self.queue_path());
+        let _ = self.save_queue_snapshot().await;
         Ok(())
     }
 
@@ -820,6 +848,7 @@ impl DesktopEngine {
             torrent_seeds: None,
             torrent_ratio: None,
             status_note: None,
+            torrent_info_hash: None,
             telegram_chat_id,
             telegram_message_id,
         };
@@ -842,17 +871,51 @@ impl DesktopEngine {
         Ok(id)
     }
 
+    async fn find_existing_download(
+        &self,
+        urls: &[String],
+        info_hash: Option<&str>,
+        is_torrent: bool,
+    ) -> Option<u64> {
+        let items = self.items.lock().await;
+        let first = urls.first().map(String::as_str);
+        for inner in items.values() {
+            let v = &inner.view;
+            if is_torrent && v.kind != "torrent" {
+                continue;
+            }
+            if !is_torrent && v.kind == "torrent" {
+                continue;
+            }
+            if let Some(h) = info_hash {
+                if v.torrent_info_hash.as_deref() == Some(h) {
+                    return Some(v.id);
+                }
+            }
+            if first.is_some() && v.urls.first().map(String::as_str) == first {
+                return Some(v.id);
+            }
+        }
+        None
+    }
+
     pub async fn add_download(&self, app: AppHandle, mut args: AddDownloadArgs) -> CoreResult<u64> {
         if args.urls.is_empty() {
             return Err(jyroxa_core::Error::other("at least one URL required"));
         }
+        args.urls = args
+            .urls
+            .iter()
+            .map(|u| jyroxa_core::torrent::normalize_torrent_input(u))
+            .collect();
         let first = normalize_user_url(&args.urls[0]);
         let mut telegram_mtproto: Option<(i64, u32)> = None;
         if jyroxa_core::is_telegram_post_url(&first) {
             let client = build_client()?;
-            let items = jyroxa_core::resolve_post_with_pool(&client, Some(self.telegram.as_ref()), &first)
-                .await
-                .map_err(|e| jyroxa_core::Error::other(e.to_string()))?;
+            let items =
+                jyroxa_core::resolve_post_with_pool(&client, Some(self.telegram.as_ref()), &first)
+                    .await
+                    .map_err(|e| jyroxa_core::Error::other(e.to_string()))?;
             if items.len() > 1 {
                 let settings = self.settings.lock().await.clone();
                 let mut first_id = None;
@@ -899,6 +962,30 @@ impl DesktopEngine {
         }
         let settings = self.settings.lock().await.clone();
         let is_torrent = crate::torrent_host::primary_is_torrent(&args.urls);
+        let torrent_info_hash = args.torrent_info_hash.clone().or_else(|| {
+            args.urls
+                .first()
+                .and_then(|u| jyroxa_core::parse_info_hash_hex(u).ok())
+        });
+        if is_torrent {
+            if let Some(existing) = self
+                .find_existing_download(&args.urls, torrent_info_hash.as_deref(), true)
+                .await
+            {
+                let _ = app.emit("focus-download", existing);
+                return Ok(existing);
+            }
+            let cli = crate::sidecar_paths::jyroxa_cli_exe();
+            if !cli.is_file() {
+                return Err(jyroxa_core::Error::other(format!(
+                    "jyroxa CLI not found at {} (reinstall or set JYROXA_CLI)",
+                    cli.display()
+                )));
+            }
+        } else if let Some(existing) = self.find_existing_download(&args.urls, None, false).await {
+            let _ = app.emit("focus-download", existing);
+            return Ok(existing);
+        }
         let mut filename = args.filename.clone();
         if is_torrent && (filename.is_empty() || filename == "download") {
             filename = crate::torrent_host::torrent_filename_hint(&args.urls);
@@ -935,11 +1022,16 @@ impl DesktopEngine {
             speed_bps: 0.0,
             segments: Vec::new(),
             error: None,
-            kind: if is_torrent { "torrent".into() } else { default_http_kind() },
+            kind: if is_torrent {
+                "torrent".into()
+            } else {
+                default_http_kind()
+            },
             torrent_peers: None,
             torrent_seeds: None,
             torrent_ratio: None,
             status_note: None,
+            torrent_info_hash: torrent_info_hash.clone(),
             telegram_chat_id,
             telegram_message_id,
         };
@@ -966,6 +1058,9 @@ impl DesktopEngine {
 
     async fn enqueue(&self, id: u64) {
         let mut pending = self.pending.lock().await;
+        if pending.contains(&id) {
+            return;
+        }
         pending.push_back(id);
     }
 
@@ -991,12 +1086,7 @@ impl DesktopEngine {
                 let items = engine.items.lock().await;
                 items
                     .get(&id)
-                    .map(|i| {
-                        matches!(
-                            i.view.status,
-                            TaskStatus::Running | TaskStatus::Starting
-                        )
-                    })
+                    .map(|i| matches!(i.view.status, TaskStatus::Running | TaskStatus::Starting))
                     .unwrap_or(false)
             };
             if already_running {
@@ -1004,12 +1094,21 @@ impl DesktopEngine {
             }
 
             let is_torrent = {
-                let items = engine.items.lock().await;
-                items
-                    .get(&id)
-                    .map(|i| i.view.kind == "torrent")
-                    .unwrap_or(false)
+                let mut items = engine.items.lock().await;
+                let Some(inner) = items.get_mut(&id) else {
+                    continue;
+                };
+                let torrent = inner.view.kind == "torrent"
+                    || crate::torrent_host::primary_is_torrent(&inner.view.urls);
+                if torrent && inner.view.kind != "torrent" {
+                    inner.view.kind = "torrent".into();
+                }
+                if inner.view.status == TaskStatus::Queued {
+                    inner.view.status = TaskStatus::Starting;
+                }
+                torrent
             };
+            let _ = app.emit("downloads-changed", ());
             if is_torrent {
                 engine.spawn_torrent_download(app.clone(), id);
             } else {
@@ -1021,6 +1120,20 @@ impl DesktopEngine {
     fn spawn_torrent_download(self: &Arc<Self>, app: AppHandle, id: u64) {
         let engine = Arc::clone(self);
         tauri::async_runtime::spawn(async move {
+            let cli = crate::sidecar_paths::jyroxa_cli_exe();
+            if !cli.is_file() {
+                let mut items = engine.items.lock().await;
+                if let Some(inner) = items.get_mut(&id) {
+                    inner.view.status = TaskStatus::Failed;
+                    inner.view.error = Some(format!(
+                        "jyroxa CLI not found at {} (set JYROXA_CLI or reinstall)",
+                        cli.display()
+                    ));
+                }
+                let _ = app.emit("downloads-changed", ());
+                let _ = engine.save_queue_snapshot().await;
+                return;
+            }
             let settings = engine.settings.lock().await.clone();
             let (urls, output_dir, only_files) = {
                 let mut items = engine.items.lock().await;
@@ -1067,10 +1180,7 @@ impl DesktopEngine {
                     tauri::async_runtime::spawn(async move {
                         let mut items = items_ref.lock().await;
                         if let Some(inner) = items.get_mut(&id) {
-                            crate::torrent_host::apply_torrent_progress(
-                                &mut inner.view,
-                                &progress,
-                            );
+                            crate::torrent_host::apply_torrent_progress(&mut inner.view, &progress);
                         }
                         let _ = app_poll.emit("downloads-changed", ());
                     });
@@ -1176,14 +1286,16 @@ impl DesktopEngine {
             }
             .or_else(|| {
                 request.urls.first().and_then(|u| {
-                    jyroxa_core::parse_telegram_link(u).ok().and_then(|p| match p {
-                        jyroxa_core::TelegramPostRef::Private {
-                            chat_id,
-                            message_id,
-                            ..
-                        } => Some((chat_id, message_id)),
-                        _ => None,
-                    })
+                    jyroxa_core::parse_telegram_link(u)
+                        .ok()
+                        .and_then(|p| match p {
+                            jyroxa_core::TelegramPostRef::Private {
+                                chat_id,
+                                message_id,
+                                ..
+                            } => Some((chat_id, message_id)),
+                            _ => None,
+                        })
                 })
             });
 
@@ -1225,8 +1337,7 @@ impl DesktopEngine {
                 })
             } else {
                 let dl = downloader.read().await.clone();
-                dl.download(request, Some(tx), control.clone(), None)
-                    .await
+                dl.download(request, Some(tx), control.clone(), None).await
             };
 
             let _ = consumer.await;
@@ -1250,10 +1361,8 @@ impl DesktopEngine {
                             };
                             let _ = app.emit("download-finished", finished);
                             if notifications_on {
-                                native_toast = Some((
-                                    "Download complete".into(),
-                                    inner.view.filename.clone(),
-                                ));
+                                native_toast =
+                                    Some(("Download complete".into(), inner.view.filename.clone()));
                             }
                         }
                         Err(jyroxa_core::Error::Cancelled) => {
@@ -1469,11 +1578,7 @@ impl DesktopEngine {
         }
     }
 
-    pub async fn grab_links(
-        &self,
-        input: &str,
-        opts: &GrabOptionsDto,
-    ) -> CoreResult<Vec<Package>> {
+    pub async fn grab_links(&self, input: &str, opts: &GrabOptionsDto) -> CoreResult<Vec<Package>> {
         self.linkgrabber.grab(input, &opts.into()).await
     }
 
@@ -1548,12 +1653,7 @@ pub(crate) fn request_autotune(connections_auto: bool, global_autotune: bool) ->
 
 pub(crate) fn show_native_notification(app: &AppHandle, title: &str, body: &str) {
     use tauri_plugin_notification::NotificationExt;
-    let _ = app
-        .notification()
-        .builder()
-        .title(title)
-        .body(body)
-        .show();
+    let _ = app.notification().builder().title(title).body(body).show();
 }
 
 #[derive(Clone, Serialize)]
@@ -1728,15 +1828,53 @@ mod tests {
         let item = PersistedItem {
             urls: vec!["http://x".into()],
             output: r"C:\f.bin".into(),
+            filename: "f.bin".into(),
             connections: 4,
             connections_auto: false,
             sha256: None,
             md5: None,
             status: TaskStatus::Paused,
+            kind: "http".into(),
+            torrent_only_files: None,
+            torrent_info_hash: None,
         };
         let json = serde_json::to_string(&item).unwrap();
         let back: PersistedItem = serde_json::from_str(&json).unwrap();
         assert_eq!(back.status, TaskStatus::Paused);
+    }
+}
+
+pub async fn run_queue_watchdog(app: AppHandle) {
+    loop {
+        tokio::time::sleep(std::time::Duration::from_secs(3)).await;
+        let Some(state) = app.try_state::<EngineState>() else {
+            continue;
+        };
+        let engine = state.0.clone();
+        let settings = engine.get_settings().await;
+        let stuck: Vec<u64> = {
+            let items = engine.items.lock().await;
+            items
+                .values()
+                .filter(|inner| {
+                    inner.view.kind == "torrent"
+                        && inner.view.status == TaskStatus::Queued
+                        && inner.torrent_cancel.is_none()
+                        && inner.view.error.is_none()
+                })
+                .map(|inner| inner.view.id)
+                .collect()
+        };
+        if stuck.is_empty() {
+            continue;
+        }
+        for id in stuck {
+            engine.enqueue(id).await;
+        }
+        engine
+            .pump_queue(app.clone(), settings.max_concurrent)
+            .await;
+        let _ = engine.save_queue_snapshot().await;
     }
 }
 

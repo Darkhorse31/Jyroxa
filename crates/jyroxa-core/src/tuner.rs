@@ -207,10 +207,7 @@ impl Tuner {
         }
 
         let next = self.target.saturating_mul(2).min(self.host_cap);
-        if next > self.target
-            && !self.rejected.contains(&next)
-            && self.probing_viable(input)
-        {
+        if next > self.target && !self.rejected.contains(&next) && self.probing_viable(input) {
             self.trial_anchor = Some(self.target);
             self.target = next;
             self.warmup = WARMUP_TICKS;
