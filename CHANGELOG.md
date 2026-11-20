@@ -2,6 +2,12 @@
 
 ## 0.1.11 — 2026-11-19
 
+### BitTorrent reliability
+
+- Metadata phase emits progress (`phase=metadata`, peer counts) instead of a silent 0 B/s stall; DHT/trackers use the built-in list and a 300s metadata timeout with a clear UI message.
+- Download stall detection (120s without progress) with firewall/peer hints; sidecar stderr errors and missing `jyroxa.exe` are surfaced in the task card.
+- Sidecar stdout is drained so pipes cannot block; desktop passes peer limit / tracker / seeding settings to `jyroxa torrent get`; queue restore picks up partial torrent bytes on disk.
+
 ### Browser video grab (IDM-style)
 
 - Floating teal download control on `<video>` / `<audio>` elements (MutationObserver, all frames).

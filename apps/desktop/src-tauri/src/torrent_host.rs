@@ -2,9 +2,11 @@
 
 use std::path::{Path, PathBuf};
 use std::process::Stdio;
-use jyroxa_core::torrent::{is_torrent_source, magnet_display_name, TorrentProbeInfo};
+use jyroxa_core::torrent::{
+    is_torrent_source, magnet_display_name, parse_error_line, parse_progress_line,
+    TorrentProgressPhase, TorrentProbeInfo,
+};
 use jyroxa_core::Error;
-use regex::Regex;
 use tokio::io::{AsyncBufReadExt, BufReader};
 use tokio::process::Command;
 use tokio::sync::watch;
@@ -72,32 +74,67 @@ pub async fn probe_torrent_via_sidecar(input: &str) -> Result<TorrentProbeInfo, 
     let cli = jyroxa_cli_exe();
     if !cli.is_file() {
         return Err(Error::other(format!(
-            "jyroxa CLI not found at {} (set JYROXA_CLI)",
+            "jyroxa CLI not found at {} (set JYROXA_CLI or reinstall; torrent sidecar should sit next to jyroxa-desktop.exe)",
             cli.display()
         )));
     }
     let out = Command::new(&cli)
         .args(["torrent", "meta", input])
         .stdout(Stdio::piped())
-        .stderr(Stdio::null())
+        .stderr(Stdio::piped())
         .output()
         .await
         .map_err(|e| Error::other(e.to_string()))?;
     if !out.status.success() {
-        return Err(Error::other(format!(
-            "torrent meta probe failed ({})",
-            out.status
-        )));
+        let stderr = String::from_utf8_lossy(&out.stderr).trim().to_string();
+        let reason = if stderr.is_empty() {
+            format!("torrent meta probe failed ({})", out.status)
+        } else {
+            stderr
+        };
+        return Err(Error::other(reason));
     }
     let text = String::from_utf8_lossy(&out.stdout).trim().to_string();
     serde_json::from_str(&text).map_err(|e| Error::other(format!("torrent meta json: {e}")))
+}
+
+fn torrent_cli_args(
+    input: &str,
+    output_dir: &Path,
+    only_files: Option<&[usize]>,
+    settings: &AppSettings,
+) -> Vec<String> {
+    let mut args = vec![
+        "torrent".into(),
+        "get".into(),
+        input.to_string(),
+        "-o".into(),
+        output_dir.to_string_lossy().into_owned(),
+    ];
+    if let Some(indices) = only_files {
+        for idx in indices {
+            args.push("-f".into());
+            args.push(idx.to_string());
+        }
+    }
+    args.push("--peer-limit".into());
+    args.push(settings.torrent_peer_limit.to_string());
+    if !settings.torrent_merge_trackers {
+        args.push("--no-merge-trackers".into());
+    }
+    if settings.torrent_seeding {
+        args.push("--seed".into());
+    }
+    args.push("--ratio-limit".into());
+    args.push(settings.torrent_ratio_limit.to_string());
+    args
 }
 
 pub async fn spawn_torrent_sidecar(
     urls: &[String],
     output_dir: PathBuf,
     only_files: Option<Vec<usize>>,
-    _settings: &AppSettings,
+    settings: &AppSettings,
     cancel: watch::Receiver<bool>,
     on_progress: impl Fn(TorrentProgressLine) + Send + Sync + 'static,
 ) -> Result<(), Error> {
@@ -108,41 +145,35 @@ pub async fn spawn_torrent_sidecar(
     let cli = jyroxa_cli_exe();
     if !cli.is_file() {
         return Err(Error::other(format!(
-            "jyroxa CLI not found at {} (set JYROXA_CLI)",
+            "jyroxa CLI not found at {} (set JYROXA_CLI or reinstall; torrent sidecar should sit next to jyroxa-desktop.exe)",
             cli.display()
         )));
     }
     std::fs::create_dir_all(&output_dir).map_err(|e| Error::other(e.to_string()))?;
 
+    let args = torrent_cli_args(input, &output_dir, only_files.as_deref(), settings);
     let mut cmd = Command::new(&cli);
-    cmd.arg("torrent")
-        .arg("get")
-        .arg(input)
-        .arg("-o")
-        .arg(&output_dir);
-    if let Some(indices) = &only_files {
-        for idx in indices {
-            cmd.arg("-f").arg(idx.to_string());
-        }
-    }
-    let mut child = cmd
-        .stdout(Stdio::null())
+    cmd.args(args)
+        .stdout(Stdio::piped())
         .stderr(Stdio::piped())
-        .kill_on_drop(true)
-        .spawn()
-        .map_err(|e| Error::other(e.to_string()))?;
+        .kill_on_drop(true);
+    let mut child = cmd.spawn().map_err(|e| Error::other(e.to_string()))?;
+
+    if let Some(stdout) = child.stdout.take() {
+        tokio::spawn(async move {
+            let mut reader = BufReader::new(stdout).lines();
+            while let Ok(Some(_)) = reader.next_line().await {}
+        });
+    }
 
     let stderr = child
         .stderr
         .take()
         .ok_or_else(|| Error::other("torrent sidecar: no stderr"))?;
-    let progress_re = Regex::new(
-        r"^jyroxa-torrent-progress downloaded=(\d+) total=(\d+) peers=(\d+) seeds=(\d+) speed_bps=(\d+)$",
-    )
-    .map_err(|e| Error::other(e.to_string()))?;
 
     let mut reader = BufReader::new(stderr).lines();
     let mut kill = cancel.clone();
+    let mut last_error_line: Option<String> = None;
 
     loop {
         if *kill.borrow() {
@@ -159,15 +190,10 @@ pub async fn spawn_torrent_sidecar(
             line = reader.next_line() => {
                 match line {
                     Ok(Some(l)) => {
-                        if let Some(caps) = progress_re.captures(&l) {
-                            let progress = TorrentProgressLine {
-                                downloaded: caps[1].parse().unwrap_or(0),
-                                total: caps[2].parse().unwrap_or(0),
-                                peers: caps[3].parse().unwrap_or(0),
-                                seeds: caps[4].parse().unwrap_or(0),
-                                speed_bps: caps[5].parse().unwrap_or(0.0),
-                            };
-                            on_progress(progress);
+                        if let Some(p) = parse_progress_line(&l) {
+                            on_progress(TorrentProgressLine::from_core(p));
+                        } else if let Some(err) = parse_error_line(&l) {
+                            last_error_line = Some(err);
                         }
                     }
                     Ok(None) => break,
@@ -184,38 +210,73 @@ pub async fn spawn_torrent_sidecar(
     if status.success() {
         Ok(())
     } else {
-        Err(Error::other(format!(
-            "torrent sidecar exited with {}",
-            status
-        )))
+        let msg = last_error_line.unwrap_or_else(|| {
+            format!("torrent sidecar exited with {}", status)
+        });
+        Err(Error::other(msg))
     }
 }
 
 #[derive(Clone, Debug)]
 pub struct TorrentProgressLine {
+    pub phase: TorrentProgressPhase,
     pub downloaded: u64,
     pub total: u64,
     pub peers: u32,
     pub seeds: u32,
     pub speed_bps: f64,
+    pub state: String,
+}
+
+impl TorrentProgressLine {
+    fn from_core(p: jyroxa_core::torrent::TorrentProgressLine) -> Self {
+        Self {
+            phase: p.phase,
+            downloaded: p.downloaded,
+            total: p.total,
+            peers: p.peers,
+            seeds: p.seeds,
+            speed_bps: p.speed_bps,
+            state: p.state,
+        }
+    }
 }
 
 pub fn apply_torrent_progress(view: &mut DownloadView, p: &TorrentProgressLine) {
     view.downloaded = p.downloaded;
-    view.total = Some(p.total);
+    if p.total > 0 {
+        view.total = Some(p.total);
+    }
     view.speed_bps = p.speed_bps;
     view.torrent_peers = Some(p.peers);
     view.torrent_seeds = Some(p.seeds);
     if p.downloaded > 0 {
         view.torrent_ratio = Some(0.0);
     }
+    view.status_note = match p.phase {
+        TorrentProgressPhase::Metadata => Some(format!(
+            "Fetching metadata… ({} peers, {} seeds)",
+            p.peers, p.seeds
+        )),
+        TorrentProgressPhase::Download if p.speed_bps <= 0.0 && p.downloaded == 0 => Some(format!(
+            "Connecting to peers… ({} peers, {} seeds)",
+            p.peers, p.seeds
+        )),
+        TorrentProgressPhase::Download if p.speed_bps > 512.0 => None,
+        TorrentProgressPhase::Download => view.status_note.clone(),
+    };
     if view.status != TaskStatus::Paused {
-        view.status = TaskStatus::Running;
+        view.status = if matches!(p.phase, TorrentProgressPhase::Metadata) {
+            TaskStatus::Starting
+        } else {
+            TaskStatus::Running
+        };
     }
 }
 
 pub fn mark_torrent_completed(view: &mut DownloadView) {
     view.status = TaskStatus::Completed;
+    view.status_note = None;
     if view.total.is_none() && view.downloaded > 0 {
         view.total = Some(view.downloaded);
     }
@@ -223,4 +284,55 @@ pub fn mark_torrent_completed(view: &mut DownloadView) {
 
 pub fn sidecar_output_dir(data_dir: &Path, id: u64) -> PathBuf {
     data_dir.join("torrents").join(id.to_string())
+}
+
+/// Sum on-disk bytes in a torrent job folder (for queue restore).
+pub fn torrent_bytes_on_disk(dir: &Path) -> u64 {
+    if !dir.is_dir() {
+        return 0;
+    }
+    let mut sum = 0u64;
+    let mut stack = vec![dir.to_path_buf()];
+    while let Some(d) = stack.pop() {
+        let Ok(read) = std::fs::read_dir(d) else {
+            continue;
+        };
+        for ent in read.flatten() {
+            let path = ent.path();
+            if path.is_dir() {
+                if path
+                    .file_name()
+                    .and_then(|s| s.to_str())
+                    .is_some_and(|n| n == ".jyroxa-torrent-session")
+                {
+                    continue;
+                }
+                stack.push(path);
+            } else if let Ok(meta) = ent.metadata() {
+                sum += meta.len();
+            }
+        }
+    }
+    sum
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use jyroxa_core::torrent::TorrentProgressLine as CoreLine;
+
+    #[test]
+    fn parses_stderr_progress() {
+        let raw = CoreLine {
+            phase: TorrentProgressPhase::Metadata,
+            state: "initializing".into(),
+            downloaded: 0,
+            total: 0,
+            peers: 4,
+            seeds: 1,
+            speed_bps: 0.0,
+        };
+        let parsed = parse_progress_line(&raw.format()).unwrap();
+        assert_eq!(parsed.peers, 4);
+    }
 }

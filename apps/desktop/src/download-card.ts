@@ -620,6 +620,8 @@ export class DownloadCard {
       this.speedText.textContent = `${fmtSpeed(this.smoothedSpeed)}${avgPart}`;
     } else if (d.status === "completed" || d.status === "done") {
       this.speedText.textContent = this.avgSpeedBps ? `Avg ${fmtSpeed(this.avgSpeedBps)}` : "Finished";
+    } else if (d.status_note && isRunning) {
+      this.speedText.textContent = d.status_note;
     } else {
       this.speedText.textContent = "0 B/s";
     }
