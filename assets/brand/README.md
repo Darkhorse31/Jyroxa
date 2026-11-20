@@ -1,43 +1,48 @@
-﻿# Jyroxa brand
+﻿# Jyroxa brand (warm v3)
 
-Jyroxa (pronounced *jy-ROK-suh*, from "gyro") uses a flat, two-color planet-and-orbit mark: a teal ring with a solid core, crossed by a tilted coral orbit that passes behind the ring at the top and in front of it at the bottom. It suggests spin, momentum and many parallel streams moving around one core. The mark uses **no gradients**.
+The v3 mark is a continuous square path forming a **J** whose open top reads as a download arrow. It uses flat fills only (no gradients).
 
 ## Colors
 
 | Role | Hex |
 |------|-----|
-| Teal (primary, on light) | `#0F766E` |
-| Teal light (primary, on dark) | `#2DD4BF` |
-| Coral (orbit / accent) | `#FF5A3C` |
-| Navy (dark surfaces, wordmark text) | `#0B1020` |
-| White | `#FFFFFF` |
+| Mark on light surfaces | `#7A5C2E` |
+| Mark on dark surfaces | `#C9A46A` |
+| App tile (light) | `#F4F0EB` |
+| App tile (dark) | `#14100D` |
+| Wordmark on light | `#3D2F1A` |
+| Wordmark on dark | `#F3EADF` |
 
 ## Type
 
-The wordmark "Jyroxa" is set in **Outfit Bold** (SIL Open Font License 1.1) and converted to outlines, so no font is needed to render it. Text color is solid `#0B1020` on light and `#FFFFFF` on dark.
+The wordmark in `jyroxa-wordmark*.svg` uses **Segoe UI / system-ui** at generation time for PNG exports.
 
 ## Files
 
 | File | Use |
 |------|-----|
-| `jyroxa-icon-light.svg` | Primary app icon: white rounded tile (Windows .ico, installer, Android legacy icons) |
-| `jyroxa-icon-dark.svg` | Navy tile with light teal, for dark contexts |
-| `jyroxa-mark.svg` | Transparent mark for light surfaces (the gaps are real cut-outs) |
-| `jyroxa-mark-on-dark.svg` | Transparent mark for dark surfaces |
-| `jyroxa-mark-mono.svg` | Single-color white mark |
-| `jyroxa-tray.svg` | Heavier-stroke tile for 16 to 24 px (tray, small .ico frames) |
-| `jyroxa-android-foreground.svg` / `jyroxa-android-monochrome.svg` | 108 dp adaptive-icon layers, mark inside the 66 dp safe zone |
-| `jyroxa-wordmark*.svg` | Mark plus wordmark (`-dark` = for dark backgrounds) |
-| `png/` | Rendered PNGs (16 to 1024 px), `jyroxa.ico` (16/24/32/48/64/128/256) and `jyroxa-tray.ico` |
+| `jyroxa-icon-light.svg` | Primary app tile for README and light contexts |
+| `jyroxa-icon-dark.svg` | Navy-warm tile for dark contexts |
+| `jyroxa-mark.svg` / `jyroxa-mark-on-dark.svg` | Transparent marks |
+| `jyroxa-tray.svg` | Taskbar and small sizes |
+| `jyroxa-android-foreground.svg` / `jyroxa-android-monochrome.svg` | Adaptive icon layers |
+| `jyroxa-wordmark*.svg` | Mark plus wordmark |
+| `png/` | Rendered PNGs, `jyroxa.ico`, `jyroxa-tray.ico` |
 | `preview.png` | Overview sheet |
+| `v3/` | Generator output and archived previous bitmaps |
 
 ## Regenerating
 
-Run `node generate-brand.js <output dir>` after installing `@resvg/resvg-js` and `opentype.js` in a scratch folder, with the Outfit Bold TTF available (the font path is set near the top of the script).
+From `apps/desktop`:
+
+```bash
+npm run brand:design
+```
+
+This runs `scripts/generate-design-brand.mjs`, which writes `assets/brand/v3/`, refreshes `assets/brand/png/`, `preview.png`, desktop/Tauri/browser icons, and Android mipmaps.
 
 ## Usage rules
 
-- Keep the two colors flat. Don't add gradients, shadows or glows to the mark.
+- Keep fills flat; do not add gradients or glows to the mark.
+- Below 24 px, prefer the tray tile (`jyroxa-tray.svg`).
 - Keep clear space of at least 1/4 of the mark width around it.
-- Below 24 px, use the tray variant.
-- Don't recolor the orbit and ring to the same color, except in the mono variant.
