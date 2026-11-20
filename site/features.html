@@ -1,0 +1,157 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Features — Jyroxa</title>
+  <meta name="description" content="Multi-connection HTTP, BitTorrent, browser extension, Telegram downloads, scheduler, settings, shortcuts, and Android builds in Jyroxa.">
+  <link rel="icon" href="assets/logo.svg" type="image/svg+xml">
+  <script>
+    (function () {
+      var k = "jyroxa-site-theme";
+      try {
+        var s = localStorage.getItem(k);
+        var t = s === "light" || s === "dark" ? s : "dark";
+        document.documentElement.setAttribute("data-theme", t);
+      } catch (e) {
+        document.documentElement.setAttribute("data-theme", "dark");
+      }
+    })();
+  </script>
+  <link rel="stylesheet" href="css/style.css">
+</head>
+<body>
+  <a class="skip-link" href="#main">Skip to content</a>
+  <header class="site-header">
+    <div class="header-inner">
+      <a class="brand" href="index.html"><img src="assets/logo.svg" width="36" height="36" alt=""><span>Jyroxa</span></a>
+      <nav class="site-nav" id="site-nav" data-site-nav aria-label="Primary">
+        <ul>
+          <li><a href="index.html">Home</a></li>
+          <li><a href="features.html" aria-current="page">Features</a></li>
+          <li><a href="screenshots.html">Screenshots</a></li>
+          <li><a href="install.html">Install</a></li>
+          <li><a href="faq.html">FAQ</a></li>
+          <li><a href="index.html#sponsor">Sponsor</a></li>
+        </ul>
+      </nav>
+      <div class="header-actions">
+        <button type="button" class="theme-toggle" data-theme-toggle aria-pressed="false">Light</button>
+        <button type="button" class="nav-toggle" data-nav-toggle aria-expanded="false" aria-controls="site-nav">Menu</button>
+      </div>
+    </div>
+  </header>
+
+  <main id="main">
+    <h1 class="page-title">Features</h1>
+    <p class="page-intro">Each item below maps to code under <code>crates/</code>, <code>apps/desktop</code>, <code>android/</code>, or <code>extensions/browser</code>. Optional builds are marked.</p>
+
+    <section class="feature-block" id="engine">
+      <h2>Rust engine (<code>jyroxa-core</code>)</h2>
+      <p>Shared by the Windows shell, Android JNI bridge, and CLI.</p>
+      <ul class="feature-inline-list">
+        <li>Adaptive multi-connection HTTP with an auto-tuner that retries wider counts and rolls back failed trials</li>
+        <li>Per-segment HTTP/1.1 with work-stealing when the server advertises ranges</li>
+        <li>429/503 handling, <code>Retry-After</code> backoff, stall detection</li>
+        <li>Resume via <code>.jxstate</code> sidecars (reads legacy <code>.sgstate</code>)</li>
+        <li>Multi-mirror racing, MD5/SHA-256 verification, global and per-download speed limits</li>
+        <li>LinkGrabber: extract, probe, filter, and package links from pages or pasted text</li>
+      </ul>
+    </section>
+
+    <section class="feature-block" id="torrent">
+      <h2>BitTorrent and magnets</h2>
+      <p>Add torrent files or magnet URIs from the main window or CLI. Peers, DHT, LPD, and PEX go through embedded librqbit. BEP-19 web seeds via the HTTP multi-connection path are not in v0.1.8.</p>
+      <p class="stat-line">Measured on Debian 13.7.0 amd64 netinst (~756&nbsp;MiB): Jyroxa median ~16.4&nbsp;s / ~50&nbsp;MiB/s; aria2c 1.37.0 with tuned flags ~50&nbsp;s / ~15&nbsp;MiB/s (three runs each, same Windows host). Source: <code>reports/torrent-bench-0.1.8.tsv</code>.</p>
+    </section>
+
+    <section class="feature-block" id="desktop">
+      <h2>Windows desktop (Tauri)</h2>
+      <ul class="feature-inline-list">
+        <li>Sidebar categories, search, sort, bulk actions, drag-and-drop, context menu</li>
+        <li>LinkGrabber panel, Quick <strong>Video</strong> category on add-download, tray icon, start with Windows</li>
+        <li>Prevent sleep while downloading, auto-resume on launch, single-instance mutex</li>
+        <li>Native notifications, light/dark UI themes (warm dark matches this site’s default)</li>
+        <li>NSIS installer and portable ZIP with <code>WebView2Loader.dll</code> and <code>jyroxa-native-host.exe</code></li>
+      </ul>
+    </section>
+
+    <section class="feature-block" id="settings">
+      <h2>Settings tabs</h2>
+      <p>Settings → opens an in-app panel with persisted engine options.</p>
+      <table class="spec-table">
+        <tbody>
+          <tr><th>General</th><td>Download and temp directories, hide tray when minimized, start with Windows, language</td></tr>
+          <tr><th>Connections</th><td>Default segment count, connection timeout, user agent</td></tr>
+          <tr><th>Speed</th><td>Global speed limit, per-download caps</td></tr>
+          <tr><th>Scheduler</th><td>Start/stop times and days of week (<code>scheduler_start</code>, <code>scheduler_stop</code>, <code>scheduler_days</code>)</td></tr>
+          <tr><th>Clipboard</th><td>Monitor clipboard for URLs, auto-open add dialog</td></tr>
+          <tr><th>Browser</th><td>Allowed extension IDs for native messaging</td></tr>
+          <tr><th>Theme</th><td>Light, dark, or follow system — stored locally</td></tr>
+          <tr><th>Telegram</th><td>API credentials and session (only when built with <code>telegram</code> feature)</td></tr>
+        </tbody>
+      </table>
+    </section>
+
+    <section class="feature-block" id="shortcuts">
+      <h2>Keyboard shortcuts (desktop)</h2>
+      <p>Press <kbd>?</kbd> in the app for the same list.</p>
+      <table class="spec-table">
+        <tbody>
+          <tr><th>New download</th><td><kbd>Ctrl</kbd> + <kbd>N</kbd></td></tr>
+          <tr><th>Paste URL and open dialog</th><td><kbd>Ctrl</kbd> + <kbd>V</kbd></td></tr>
+          <tr><th>Search downloads</th><td><kbd>Ctrl</kbd> + <kbd>F</kbd></td></tr>
+          <tr><th>Settings</th><td><kbd>Ctrl</kbd> + <kbd>,</kbd></td></tr>
+          <tr><th>Select all</th><td><kbd>Ctrl</kbd> + <kbd>A</kbd></td></tr>
+          <tr><th>Pause / resume selection</th><td><kbd>Space</kbd></td></tr>
+          <tr><th>Remove selection</th><td><kbd>Delete</kbd></td></tr>
+          <tr><th>Close dialog / panel</th><td><kbd>Esc</kbd></td></tr>
+        </tbody>
+      </table>
+    </section>
+
+    <section class="feature-block" id="extension">
+      <h2>Browser extension</h2>
+      <ul class="feature-inline-list">
+        <li>Chrome, Edge, Brave (Chromium WebExtension), and Firefox packages in releases</li>
+        <li>Intercepts downloads and sends them to <code>com.jyroxa.browser</code> via native messaging</li>
+        <li>Official Chromium extension ID <code>njgbdpacpmohafoefmcmnmhdjpjmjipe</code></li>
+        <li>Optional video grab and file-type filters (<code>videoGrabEnabled</code>)</li>
+        <li>Hold <kbd>Alt</kbd> when clicking a link to skip interception for about 30 seconds</li>
+      </ul>
+    </section>
+
+    <section class="feature-block" id="telegram">
+      <h2>Telegram (optional build)</h2>
+      <p>Cargo feature <code>telegram</code> — resolve public and signed-in posts via grammers. Configure under Settings → Telegram; see <code>docs/TELEGRAM.md</code>.</p>
+    </section>
+
+    <section class="feature-block" id="android">
+      <h2>Android</h2>
+      <ul class="feature-inline-list">
+        <li>Material 3 UI with dynamic color</li>
+        <li>Foreground download service with pause/cancel actions in the notification</li>
+        <li>WorkManager resume after reboot; Wi‑Fi-only option in settings</li>
+        <li>Universal APK from GitHub Releases</li>
+      </ul>
+    </section>
+
+    <section class="feature-block" id="opensource">
+      <h2>Open source and releases</h2>
+      <p>MIT License. Build from source with the GNU toolchain flow in <code>docs/BUILD_WINDOWS_GNU.md</code> or Gradle for Android. Tagged releases ship installers, portable ZIP, extension archive, APK, and <code>SHA256SUMS.txt</code>.</p>
+      <p><a href="https://github.com/Darkhorse31/Jyroxa/releases">Changelog and assets</a> · <a href="https://github.com/Darkhorse31/Jyroxa/blob/main/CONTRIBUTING.md">Contributing guide</a></p>
+    </section>
+  </main>
+
+  <footer class="site-footer">
+    <nav class="footer-links" aria-label="Project">
+      <a href="https://github.com/Darkhorse31/Jyroxa/releases">Releases</a>
+      <a href="https://github.com/Darkhorse31/Jyroxa/blob/main/CONTRIBUTING.md">Contributing</a>
+      <a href="https://github.com/Darkhorse31/Jyroxa/issues">Issues</a>
+      <a href="https://github.com/Darkhorse31/Jyroxa/blob/main/LICENSE">License</a>
+    </nav>
+    <p>© 2026 Prateek Kumar · <a href="https://github.com/Darkhorse31/Jyroxa/blob/main/LICENSE">MIT License</a></p>
+  </footer>
+  <script src="js/main.js" defer></script>
+</body>
+</html>
