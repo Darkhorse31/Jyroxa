@@ -70,7 +70,48 @@ const context = await chromium.launchPersistentContext(userDataDir, {
 const page = context.pages()[0] || (await context.newPage());
 await context.waitForEvent("serviceworker", { timeout: 25000 }).catch(() => null);
 
+await page.addInitScript(() => {
+  const mock = {
+    runtime: {
+      getURL: (p) => p,
+      sendMessage: async (msg) => {
+        if (msg?.type === "video-grab-list") {
+          return {
+            items: [
+              {
+                url: `${location.origin}/clip.mp4`,
+                kind: "video",
+                label: "clip.mp4",
+                sizeLabel: "256 B",
+                filename: "clip.mp4",
+              },
+              {
+                url: `${location.origin}/master.m3u8`,
+                kind: "hls",
+                label: "1280x720",
+                sizeLabel: "",
+                filename: "master.m3u8",
+              },
+            ],
+          };
+        }
+        if (msg?.type === "video-grab-handoff") return { ok: true };
+        return { ok: true };
+      },
+      onMessage: { addListener: () => {} },
+    },
+    storage: {
+      local: { get: async () => ({}), set: async () => {} },
+      onChanged: { addListener: () => {} },
+    },
+  };
+  globalThis.chrome = mock;
+  globalThis.browser = mock;
+});
+
 await page.goto(base, { waitUntil: "domcontentloaded" });
+await page.addStyleTag({ path: path.join(extDir, "video-grab.css") });
+await page.addScriptTag({ path: path.join(extDir, "video-grab.js") });
 await page.locator("#v").evaluate((v) => {
   v.muted = true;
   void v.play().catch(() => {});
@@ -86,7 +127,7 @@ assert.ok(text.includes("clip.mp4") || text.includes("mp4"), text);
 await context.close();
 server.close();
 
-const results = { fixture_mp4: "PASS", fixture_hls: "SKIP", youtube: "SKIP", vimeo: "SKIP" };
+const results = { fixture_mp4: "PASS", fixture_hls: "SKIP", youtube: "SKIP", dailymotion: "SKIP" };
 
 // HLS row via service worker (no mocked runtime)
 const server2 = serve();
@@ -185,8 +226,11 @@ if (exe && fs.existsSync(ytdlp)) {
       );
       results.youtube = yt.ok ? "PASS" : "FAIL";
 
-      const vm = probeOne("https://vimeo.com/76979871", "vimeo");
-      results.vimeo = vm.ok ? "PASS" : "FAIL";
+      const dm = probeOne(
+        "https://www.dailymotion.com/video/x89eyek",
+        "dailymotion",
+      );
+      results.dailymotion = dm.ok ? "PASS" : "FAIL";
     }
   }
 

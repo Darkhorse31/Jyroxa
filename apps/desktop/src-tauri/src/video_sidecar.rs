@@ -222,10 +222,7 @@ pub async fn download_via_ytdlp(
         return Err("yt-dlp.exe not bundled".into());
     }
     let ffmpeg = ffmpeg_path();
-    let mut args = vec![
-        "--no-warnings".to_string(),
-        "--no-playlist".to_string(),
-    ];
+    let mut args = vec!["--no-warnings".to_string(), "--no-playlist".to_string()];
     if ffmpeg.is_file() {
         args.push("--ffmpeg-location".into());
         args.push(ffmpeg.to_string_lossy().into_owned());
@@ -269,7 +266,8 @@ pub async fn download_via_ytdlp(
         .await
         .map_err(|e| e.to_string())?;
     while let Some(ent) = rd.next_entry().await.map_err(|e| e.to_string())? {
-        let name = ent.file_name().to_string_lossy();
+        let fname = ent.file_name();
+        let name = fname.to_string_lossy();
         if name.starts_with(stem) && name.len() > stem.len() {
             let m = ent.metadata().await.map_err(|e| e.to_string())?;
             return Ok(m.len());

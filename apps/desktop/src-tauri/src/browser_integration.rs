@@ -140,16 +140,15 @@ async fn handle_pipe_message(app: &AppHandle, env: PipeEnvelope) -> serde_json::
                     }
                 }
                 if !resolved {
-                    handoff.url = page;
+                    handoff.url = page.clone();
                     ytdlp_page = true;
                     if handoff.filename.as_deref().unwrap_or("").is_empty() {
                         if let Ok(info) = crate::video_sidecar::probe_page_formats(&page).await {
-                            let title = info
-                                .title
-                                .unwrap_or_else(|| "video".to_string());
-                            handoff.filename = Some(crate::video_sidecar::sanitize_filename_public(
-                                &format!("{title}.mp4"),
-                            ));
+                            let title = info.title.unwrap_or_else(|| "video".to_string());
+                            handoff.filename =
+                                Some(crate::video_sidecar::sanitize_filename_public(&format!(
+                                    "{title}.mp4"
+                                )));
                         }
                     }
                 }

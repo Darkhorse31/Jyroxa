@@ -159,7 +159,8 @@ pub async fn stream_download(
     let started = Instant::now();
     let sem = Arc::new(Semaphore::new(connections));
     let mut handles = Vec::with_capacity(segments.len());
-    let results: Arc<tokio::sync::Mutex<Vec<(usize, Vec<u8>)>>> =
+    type SegmentBuf = (usize, Vec<u8>);
+    let results: Arc<tokio::sync::Mutex<Vec<SegmentBuf>>> =
         Arc::new(tokio::sync::Mutex::new(Vec::new()));
 
     for (idx, url) in segments.into_iter().enumerate() {

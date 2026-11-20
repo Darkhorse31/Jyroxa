@@ -39,12 +39,7 @@ fn percent_decode_path(s: &str) -> String {
             }
         })
         .collect();
-    let slash = if decoded.contains(":/") || decoded.starts_with("\\\\") {
-        decoded.replace('/', "\\")
-    } else {
-        decoded.replace('/', "\\")
-    };
-    slash
+    decoded.replace('/', "\\")
 }
 
 /// True for magnets, local `.torrent` paths, or HTTP(S) URLs ending in `.torrent`.
@@ -76,7 +71,7 @@ pub fn magnet_trackers(magnet: &str) -> Vec<String> {
         return Vec::new();
     };
     url.query_pairs()
-        .filter(|(k, _)| k == "tr" || k == "tr")
+        .filter(|(k, _)| k == "tr")
         .map(|(_, v)| v.into_owned())
         .collect()
 }

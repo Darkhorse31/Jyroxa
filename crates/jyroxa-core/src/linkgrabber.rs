@@ -462,7 +462,7 @@ impl LinkGrabber {
             links.into_iter().map(LinkInfo::bare).collect()
         } else {
             let conc = opts.concurrency_or_default();
-            stream::iter(links.into_iter())
+            stream::iter(links)
                 .map(|l| async move { self.probe_link(&l).await })
                 .buffer_unordered(conc)
                 .collect::<Vec<_>>()

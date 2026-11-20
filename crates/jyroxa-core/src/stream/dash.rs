@@ -186,7 +186,7 @@ fn segment_count_from_period(period_xml: &str, timescale: u64, seg_dur: u64) -> 
             if let Ok(ms) = d.parse::<u64>() {
                 let ticks = ms * timescale / 1000;
                 if ticks > 0 {
-                    return ((ticks + seg_dur - 1) / seg_dur) as usize;
+                    return ticks.div_ceil(seg_dur) as usize;
                 }
             }
         }

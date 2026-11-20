@@ -1266,12 +1266,9 @@ impl DesktopEngine {
                     let mut active = engine.active_count.lock().await;
                     *active += 1;
                 }
-                let dl_result = crate::video_sidecar::download_via_ytdlp(
-                    &page_url,
-                    &request.output,
-                    format_id,
-                )
-                .await;
+                let dl_result =
+                    crate::video_sidecar::download_via_ytdlp(&page_url, &request.output, format_id)
+                        .await;
                 let notifications_on = engine.settings.lock().await.notifications;
                 let mut native_toast: Option<(String, String)> = None;
                 {

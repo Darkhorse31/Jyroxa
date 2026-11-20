@@ -105,6 +105,7 @@ pub struct TorrentSession {
 }
 
 impl TorrentSession {
+    #[allow(clippy::field_reassign_with_default)]
     pub async fn open(output_root: PathBuf, tuning: TorrentTuning) -> Result<Self> {
         let mut opts = SessionOptions::default();
         opts.fastresume = tuning.fastresume;
@@ -168,6 +169,7 @@ impl TorrentSession {
         &self.inner
     }
 
+    #[allow(clippy::field_reassign_with_default)]
     pub async fn add(
         &self,
         source: TorrentSource<'_>,
