@@ -329,7 +329,11 @@ async fn valid_head_does_not_repeat_metadata_probe() {
         .download(req, None, Control::new(), None)
         .await
         .unwrap();
-    assert_eq!(hits.load(Ordering::Relaxed), 2, "one HEAD and one data GET");
+    assert_eq!(
+        hits.load(Ordering::Relaxed),
+        1,
+        "zero-wait lead range should stream on the first GET"
+    );
     assert_eq!(std::fs::read(out).unwrap(), data);
     server.abort();
 }

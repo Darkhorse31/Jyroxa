@@ -55,13 +55,13 @@ impl Control {
         Control { tx }
     }
     pub fn pause(&self) {
-        let _ = self.tx.send(Cmd::Paused);
+        self.tx.send_replace(Cmd::Paused);
     }
     pub fn resume(&self) {
-        let _ = self.tx.send(Cmd::Run);
+        self.tx.send_replace(Cmd::Run);
     }
     pub fn cancel(&self) {
-        let _ = self.tx.send(Cmd::Cancelled);
+        self.tx.send_replace(Cmd::Cancelled);
     }
     pub fn is_cancelled(&self) -> bool {
         *self.tx.borrow() == Cmd::Cancelled
@@ -157,7 +157,7 @@ pub struct DownloadConfig {
     pub min_segment_size: u64,
     /// Max retries per segment before it is considered failed.
     pub max_retries: usize,
-    /// Segment exhaustion events allowed across all workers before the download fails.
+    /// Worker failure limit across the download; never extends a range's retry budget.
     pub max_global_failures: usize,
     /// Enable per-host connection auto-tuning.
     pub autotune: bool,
@@ -269,7 +269,6 @@ struct Meta {
     supports_ranges: bool,
     etag: Option<String>,
     last_modified: Option<String>,
-    filename: Option<String>,
     final_url: String,
 }
 
@@ -306,6 +305,111 @@ async fn probe(
     }
 }
 
+enum MirrorPick {
+    Lead {
+        index: usize,
+        meta: Meta,
+        response: reqwest::Response,
+    },
+    Meta {
+        index: usize,
+        meta: Meta,
+    },
+}
+
+fn meta_from_lead_response(resp: &reqwest::Response) -> Result<Meta> {
+    use reqwest::header as h;
+    let status = resp.status();
+    if !status.is_success() {
+        return Err(Error::Status(status.as_u16()));
+    }
+    let headers = resp.headers();
+    let supports_ranges = status == reqwest::StatusCode::PARTIAL_CONTENT;
+    let size = if supports_ranges {
+        let (first, _last, total) = header_str(headers, h::CONTENT_RANGE)
+            .as_deref()
+            .and_then(parse_content_range)
+            .ok_or_else(|| Error::other("invalid metadata Content-Range"))?;
+        if first != 0 {
+            return Err(Error::other("lead range does not start at byte 0"));
+        }
+        Some(total)
+    } else {
+        resp.content_length().filter(|&n| n > 0)
+    };
+    Ok(Meta {
+        size,
+        supports_ranges,
+        etag: header_str(headers, h::ETAG),
+        last_modified: header_str(headers, h::LAST_MODIFIED),
+        final_url: resp.url().to_string(),
+    })
+}
+
+async fn start_lead_get(
+    client: &reqwest::Client,
+    url: &str,
+    timeout: Duration,
+    extra_headers: &Option<ExtraHeaders>,
+) -> Result<(Meta, reqwest::Response)> {
+    use reqwest::header as h;
+    let resp = apply_extra_headers(client.get(url), extra_headers)
+        .header(h::RANGE, "bytes=0-")
+        .header(h::ACCEPT_ENCODING, "identity")
+        .timeout(timeout)
+        .send()
+        .await?;
+    let meta = meta_from_lead_response(&resp)?;
+    Ok((meta, resp))
+}
+
+async fn probe_mirror(
+    index: usize,
+    client: &reqwest::Client,
+    url: &str,
+    config: &DownloadConfig,
+    extra_headers: &Option<ExtraHeaders>,
+    mut control: watch::Receiver<Cmd>,
+) -> Result<MirrorPick> {
+    for attempt in 0..=config.max_retries {
+        wait_runnable(&mut control).await?;
+        if attempt > 0 {
+            interruptible_sleep(&mut control, backoff_delay(attempt)).await?;
+        }
+        if let Ok((meta, resp)) =
+            start_lead_get(client, url, config.request_timeout, extra_headers).await
+        {
+            if meta.supports_ranges && meta.size.map(|s| s > 0).unwrap_or(false) {
+                return Ok(MirrorPick::Lead {
+                    index,
+                    meta,
+                    response: resp,
+                });
+            }
+            drop(resp);
+        }
+        if let Ok(meta) = probe(client, url, config.request_timeout, extra_headers).await {
+            return Ok(MirrorPick::Meta { index, meta });
+        }
+    }
+    Err(Error::AllMirrorsFailed)
+}
+
+/// Inclusive byte bounds and the complete representation size.
+fn parse_content_range(value: &str) -> Option<(u64, u64, u64)> {
+    let (unit, spec) = value.trim().split_once(' ')?;
+    if !unit.eq_ignore_ascii_case("bytes") {
+        return None;
+    }
+    let (span, total) = spec.split_once('/')?;
+    let (first, last) = span.split_once('-')?;
+    let (first, last, total) = (first.parse().ok()?, last.parse().ok()?, total.parse().ok()?);
+    if first > last || last >= total || total == u64::MAX {
+        return None;
+    }
+    Some((first, last, total))
+}
+
 async fn probe_metadata(
     client: &reqwest::Client,
     url: &str,
@@ -313,92 +417,43 @@ async fn probe_metadata(
     extra_headers: &Option<ExtraHeaders>,
 ) -> Result<Meta> {
     use reqwest::header as h;
-    let mut meta = Meta {
-        final_url: url.to_string(),
-        ..Default::default()
-    };
-
-    // 1. HEAD for size / validators / filename.
-    // Some servers never answer HEAD (the request just hangs); cap it so the
-    // ranged GET below gets a turn instead of the task sitting at Starting.
-    if let Ok(resp) = apply_extra_headers(
-        client.head(url).timeout(timeout.min(HEAD_TIMEOUT)),
-        extra_headers,
-    )
-    .send()
-    .await
-    {
-        if resp.status().is_success() {
-            let headers = resp.headers().clone();
-            meta.final_url = resp.url().to_string();
-            // A HEAD often reports Content-Length: 0 (e.g. servers that strip the
-            // body length, or frameworks that recompute it from an empty body).
-            // Treat a zero length as "unknown" so the ranged GET below confirms
-            // the real size instead of us wrongly concluding the file is empty.
-            // HEAD has no response body: reqwest's content_length() reports
-            // the body size (zero), not the advertised file size. Reading the
-            // header avoids an unnecessary second metadata request.
-            meta.size = header_str(&headers, h::CONTENT_LENGTH)
-                .and_then(|value| value.parse::<u64>().ok())
-                .filter(|&n| n > 0);
-            meta.etag = header_str(&headers, h::ETAG);
-            meta.last_modified = header_str(&headers, h::LAST_MODIFIED);
-            meta.supports_ranges = header_str(&headers, h::ACCEPT_RANGES)
-                .map(|v| v.to_ascii_lowercase().contains("bytes"))
-                .unwrap_or(false);
-            if let Some(cd) = header_str(&headers, h::CONTENT_DISPOSITION) {
-                meta.filename = filename_from_disposition(&cd);
-            }
-        }
-    }
-
-    // 2. Confirm range support / size with a tiny ranged GET when needed.
-    if !meta.supports_ranges || meta.size.is_none() {
-        let resp = apply_extra_headers(
-            client
-                .get(&meta.final_url)
-                .header(h::RANGE, "bytes=0-0")
-                .timeout(timeout),
-            extra_headers,
-        )
+    // One small GET discovers size and actual range support in a single round
+    // trip. HEAD is frequently slow or advertises ranges that GET ignores.
+    let resp = apply_extra_headers(client.get(url), extra_headers)
+        .header(h::RANGE, "bytes=0-0")
+        .header(h::ACCEPT_ENCODING, "identity")
+        .timeout(timeout)
         .send()
         .await?;
-        let status = resp.status();
-        let headers = resp.headers().clone();
-        meta.final_url = resp.url().to_string();
-        if meta.etag.is_none() {
-            meta.etag = header_str(&headers, h::ETAG);
-        }
-        if meta.last_modified.is_none() {
-            meta.last_modified = header_str(&headers, h::LAST_MODIFIED);
-        }
-        if meta.filename.is_none() {
-            if let Some(cd) = header_str(&headers, h::CONTENT_DISPOSITION) {
-                meta.filename = filename_from_disposition(&cd);
-            }
-        }
-        if status == reqwest::StatusCode::PARTIAL_CONTENT {
-            meta.supports_ranges = true;
-            // Content-Range: bytes 0-0/12345
-            if let Some(cr) = header_str(&headers, h::CONTENT_RANGE) {
-                if let Some(total) = cr
-                    .rsplit('/')
-                    .next()
-                    .and_then(|s| s.trim().parse::<u64>().ok())
-                {
-                    meta.size = Some(total);
-                }
-            }
-        } else if status.is_success() {
-            meta.supports_ranges = false;
-            if let Some(len) = resp.content_length() {
-                meta.size = Some(len);
-            }
-        } else {
-            return Err(Error::Status(status.as_u16()));
-        }
+    let status = resp.status();
+    if !status.is_success() {
+        return Err(Error::Status(status.as_u16()));
     }
-
+    let headers = resp.headers();
+    let supports_ranges = status == reqwest::StatusCode::PARTIAL_CONTENT;
+    let size = if supports_ranges {
+        let (first, last, total) = header_str(headers, h::CONTENT_RANGE)
+            .as_deref()
+            .and_then(parse_content_range)
+            .ok_or_else(|| Error::other("invalid metadata Content-Range"))?;
+        if first != 0 || last != 0 {
+            return Err(Error::other("metadata range does not match bytes=0-0"));
+        }
+        Some(total)
+    } else {
+        resp.content_length()
+    };
+    let meta = Meta {
+        size,
+        supports_ranges,
+        etag: header_str(headers, h::ETAG),
+        last_modified: header_str(headers, h::LAST_MODIFIED),
+        final_url: resp.url().to_string(),
+    };
+    // Drain the single byte so the first data worker can reuse this connection.
+    if supports_ranges && resp.content_length() == Some(1) {
+        resp.bytes().await?;
+    }
     Ok(meta)
 }
 
@@ -423,8 +478,6 @@ async fn probe_streaming_fallback(
         size: resp.content_length().filter(|&n| n > 0),
         etag: header_str(&headers, h::ETAG),
         last_modified: header_str(&headers, h::LAST_MODIFIED),
-        filename: header_str(&headers, h::CONTENT_DISPOSITION)
-            .and_then(|cd| filename_from_disposition(&cd)),
     };
     if meta.size.is_none() {
         if let Some(accept) = header_str(&headers, h::ACCEPT_RANGES) {
@@ -584,6 +637,8 @@ struct WriteChunk {
 struct Ctx {
     client: reqwest::Client,
     writer: Mutex<Option<mpsc::Sender<WriteChunk>>>,
+    buffers: Arc<Mutex<Vec<Vec<u8>>>>,
+    workers: Mutex<Vec<tokio::task::JoinHandle<()>>>,
     pool: MirrorPool,
     path: PathBuf,
     total: u64,
@@ -622,11 +677,12 @@ fn spawn_disk_writer(
     path: PathBuf,
     fatal: Arc<Mutex<Option<Error>>>,
     pending: Arc<AtomicUsize>,
-) -> mpsc::Sender<WriteChunk> {
+    buffers: Arc<Mutex<Vec<Vec<u8>>>>,
+) -> (mpsc::Sender<WriteChunk>, tokio::task::JoinHandle<()>) {
     let (tx, mut rx) = mpsc::channel::<WriteChunk>(64);
     // Keep one blocking writer alive instead of cloning the file and scheduling
     // a new blocking task for every buffer. Network workers never do disk I/O.
-    tokio::task::spawn_blocking(move || {
+    let handle = tokio::task::spawn_blocking(move || {
         let file = match std::fs::OpenOptions::new().write(true).open(&path) {
             Ok(f) => f,
             Err(e) => {
@@ -637,7 +693,7 @@ fn spawn_disk_writer(
                 return;
             }
         };
-        while let Some(chunk) = rx.blocking_recv() {
+        while let Some(mut chunk) = rx.blocking_recv() {
             if let Err(e) = pwrite_all(&file, chunk.offset, &chunk.data) {
                 let mut slot = fatal.lock().unwrap();
                 if slot.is_none() {
@@ -653,9 +709,14 @@ fn spawn_disk_writer(
                 .committed
                 .fetch_max(chunk.offset + chunk.data.len() as u64, Ordering::Release);
             pending.fetch_sub(1, Ordering::AcqRel);
+            chunk.data.clear();
+            let mut recycled = buffers.lock().unwrap();
+            if recycled.len() < crate::MAX_CONNECTIONS {
+                recycled.push(chunk.data);
+            }
         }
     });
-    tx
+    (tx, handle)
 }
 
 async fn drain_disk_writes(ctx: &Ctx) -> Result<()> {
@@ -698,6 +759,7 @@ impl Ctx {
 #[derive(Clone)]
 pub struct Downloader {
     client: reqwest::Client,
+    probe_client: reqwest::Client,
     segment_client: reqwest::Client,
     global_limiter: Arc<RateLimiter>,
     host_stats: Arc<HostStats>,
@@ -707,16 +769,19 @@ pub struct Downloader {
 impl Downloader {
     /// Build an engine with a fresh client and the given config.
     pub fn new(config: DownloadConfig) -> Result<Self> {
+        let segment_client = crate::build_segment_client_with(config.read_timeout)?;
         Ok(Downloader {
             client: crate::build_client_with(config.read_timeout)?,
-            segment_client: crate::build_segment_client_with(config.read_timeout)?,
+            probe_client: segment_client.clone(),
+            segment_client,
             global_limiter: Arc::new(RateLimiter::unlimited()),
-            host_stats: Arc::new(HostStats::in_memory()),
+            host_stats: Arc::new(HostStats::with_default_file()),
             config,
         })
     }
 
     pub fn with_client(mut self, client: reqwest::Client) -> Self {
+        self.probe_client = client.clone();
         self.client = client;
         self
     }
@@ -756,27 +821,60 @@ impl Downloader {
             return Err(Error::NoUrl);
         }
 
-        // Probe mirrors; the first that answers provides the reference metadata.
-        let mut meta: Option<Meta> = None;
-        'mirrors: for u in &req.urls {
-            for attempt in 0..=self.config.max_retries {
-                if attempt > 0 {
-                    tokio::time::sleep(backoff_delay(attempt)).await;
-                }
-                if let Ok(m) = probe(
-                    &self.client,
-                    u,
-                    self.config.request_timeout,
+        // Race a bounded number of mirrors. A silent primary must not delay
+        // healthy alternatives, and all losing probes are dropped on selection.
+        let mut ctrl_rx = control.subscribe();
+        let probe_parallelism = req
+            .urls
+            .len()
+            .min(req.connections.max(1))
+            .min(self.config.max_connections.clamp(1, crate::MAX_CONNECTIONS))
+            .min(4);
+        let (reference_index, meta, lead_response) = {
+            let mut probes = futures::stream::FuturesUnordered::new();
+            let mut mirrors = req.urls.iter().enumerate();
+            for (index, url) in mirrors.by_ref().take(probe_parallelism) {
+                probes.push(probe_mirror(
+                    index,
+                    &self.probe_client,
+                    url,
+                    &self.config,
                     &req.extra_headers,
-                )
-                .await
-                {
-                    meta = Some(m);
-                    break 'mirrors;
+                    control.subscribe(),
+                ));
+            }
+            loop {
+                wait_runnable(&mut ctrl_rx).await?;
+                tokio::select! {
+                    result = probes.next() => match result {
+                        Some(Ok(MirrorPick::Lead { index, meta, response })) => {
+                            break (index, meta, Some(response));
+                        }
+                        Some(Ok(MirrorPick::Meta { index, meta })) => {
+                            break (index, meta, None);
+                        }
+                        Some(Err(_)) => {
+                            if let Some((index, url)) = mirrors.next() {
+                                probes.push(probe_mirror(index, &self.probe_client, url, &self.config,
+                                    &req.extra_headers, control.subscribe()));
+                            }
+                        }
+                        None => return Err(Error::AllMirrorsFailed),
+                    },
+                    _ = ctrl_rx.changed() => wait_runnable(&mut ctrl_rx).await?,
                 }
             }
+        };
+        let mut transfer_urls = req.urls.clone();
+        // Avoid repeating redirects for every segment. Requests carrying custom
+        // headers keep their original URL and reqwest's redirect header policy.
+        if req
+            .extra_headers
+            .as_ref()
+            .map_or(true, |headers| headers.is_empty())
+        {
+            transfer_urls[reference_index] = meta.final_url.clone();
         }
-        let meta = meta.ok_or(Error::AllMirrorsFailed)?;
         let host = url::Url::parse(&meta.final_url)
             .ok()
             .and_then(|u| u.host_str().map(|s| s.to_string()))
@@ -791,7 +889,10 @@ impl Downloader {
         }
         let state_path = DownloadState::state_path(&output);
 
-        let max_conn = req.connections.clamp(1, crate::MAX_CONNECTIONS);
+        let max_conn = req.connections.clamp(
+            1,
+            self.config.max_connections.clamp(1, crate::MAX_CONNECTIONS),
+        );
         let supports = meta.supports_ranges && meta.size.map(|s| s > 0).unwrap_or(false);
 
         if !supports {
@@ -802,10 +903,10 @@ impl Downloader {
 
         let total = meta.size.unwrap();
 
-        // Always open eight immediately; history only supplies a real error cap.
         let host_cap = self.host_stats.host_cap(&host);
+        let remembered = self.host_stats.best_connections(&host);
         let initial_conn = if req.autotune {
-            let wide = crate::tuner::initial_connections(total, max_conn);
+            let wide = crate::tuner::initial_connections(total, max_conn, remembered);
             wide.clamp(1, host_cap.unwrap_or(max_conn).clamp(1, max_conn))
         } else {
             max_conn
@@ -818,6 +919,9 @@ impl Downloader {
         let table = match DownloadState::load_for_output(&output)? {
             Some(st)
                 if !st.segments.is_empty()
+                    && std::fs::metadata(&output)
+                        .map(|m| m.len() == total)
+                        .unwrap_or(false)
                     && st.validators_match(
                         Some(total),
                         meta.etag.as_deref(),
@@ -853,12 +957,20 @@ impl Downloader {
 
         let fatal_slot: Arc<Mutex<Option<Error>>> = Arc::new(Mutex::new(None));
         let write_pending = Arc::new(AtomicUsize::new(0));
-        let writer = spawn_disk_writer(output.clone(), fatal_slot.clone(), write_pending.clone());
+        let buffers = Arc::new(Mutex::new(Vec::new()));
+        let (writer, disk_writer) = spawn_disk_writer(
+            output.clone(),
+            fatal_slot.clone(),
+            write_pending.clone(),
+            buffers.clone(),
+        );
 
         let ctx = Arc::new(Ctx {
             client: self.segment_client.clone(),
             writer: Mutex::new(Some(writer)),
-            pool: MirrorPool::new(&req.urls, events.clone()),
+            buffers,
+            workers: Mutex::new(Vec::new()),
+            pool: MirrorPool::new(&transfer_urls, events.clone()),
             path: output.clone(),
             total,
             table,
@@ -901,9 +1013,22 @@ impl Downloader {
         // Persist initial state so a crash before the first checkpoint resumes.
         persist_state(&ctx, &req, &meta, &state_path, initial_conn);
 
-        // Spawn the initial workers.
-        for _ in 0..initial_conn {
-            spawn_worker(ctx.clone());
+        let lead = lead_response.and_then(|resp| {
+            ctx.table
+                .segments()
+                .into_iter()
+                .find(|s| s.start == 0 && !s.done.load(Ordering::Acquire))
+                .map(|seg| (resp, seg))
+        });
+        if let Some((resp, seg)) = lead {
+            spawn_lead_worker(ctx.clone(), resp, seg);
+            for _ in 1..initial_conn {
+                spawn_worker(ctx.clone());
+            }
+        } else {
+            for _ in 0..initial_conn {
+                spawn_worker(ctx.clone());
+            }
         }
 
         // Supervisor: samples throughput, auto-tunes, and checkpoints state.
@@ -939,29 +1064,21 @@ impl Downloader {
         supervisor.abort();
         let _ = supervisor.await;
 
-        if control.is_cancelled() {
-            *ctx.writer.lock().unwrap() = None;
-            ctx.notify.notify_waiters();
-            for _ in 0..200 {
-                if ctx.active_workers.load(Ordering::Acquire) == 0 {
-                    break;
-                }
-                ctx.notify.notify_waiters();
-                tokio::time::sleep(Duration::from_millis(25)).await;
-            }
+        // No worker may keep writing after fallback replaces the file or after
+        // cancellation removes it. Join the writer so Windows releases its handle
+        // and checkpoints contain only completed positional writes.
+        let workers = std::mem::take(&mut *ctx.workers.lock().unwrap());
+        for worker in &workers {
+            worker.abort();
         }
+        for worker in workers {
+            let _ = worker.await;
+        }
+        *ctx.writer.lock().unwrap() = None;
+        disk_writer.await.map_err(Error::other)?;
 
         if ctx.range_fallback.load(Ordering::Acquire) && !control.is_cancelled() {
-            ctx.target.store(0, Ordering::Release);
-            ctx.notify.notify_waiters();
-            for _ in 0..500 {
-                if ctx.active_workers.load(Ordering::Acquire) == 0 {
-                    break;
-                }
-                tokio::time::sleep(Duration::from_millis(10)).await;
-            }
-            let _ = std::fs::remove_file(&output);
-            let _ = DownloadState::remove(&state_path);
+            DownloadState::remove(&state_path)?;
             return self
                 .download_single(&req, &output, &state_path, events, control)
                 .await;
@@ -1135,7 +1252,7 @@ impl Downloader {
         events: &Option<EventSender>,
         extra_headers: &Option<ExtraHeaders>,
     ) -> Result<u64> {
-        use std::io::Write;
+        use tokio::io::AsyncWriteExt;
         let resp = loop {
             let send_fut = apply_extra_headers(self.client.get(url), extra_headers).send();
             break tokio::select! {
@@ -1153,9 +1270,13 @@ impl Downloader {
             return Err(Error::Status(resp.status().as_u16()));
         }
         let total_hint = resp.content_length();
-        let mut file = std::fs::File::create(output)?;
+        let mut file = tokio::io::BufWriter::with_capacity(
+            SEGMENT_WRITE_BUF,
+            tokio::fs::File::create(output).await?,
+        );
         let mut stream = resp.bytes_stream();
         let mut written: u64 = 0;
+        let mut last_progress = Instant::now();
         while let Some(chunk) = loop {
             break tokio::select! {
                 item = stream.next() => item,
@@ -1174,9 +1295,13 @@ impl Downloader {
             }
             let chunk = chunk?;
             acquire_rate(limiter, global, chunk.len() as u64, ctrl_rx).await?;
-            file.write_all(&chunk)?;
+            file.write_all(&chunk).await?;
             written += chunk.len() as u64;
-            if let Some(tx) = events {
+            if let Some(tx) = events
+                .as_ref()
+                .filter(|_| last_progress.elapsed() >= PROGRESS_EMIT_INTERVAL)
+            {
+                last_progress = Instant::now();
                 let _ = tx.send(progress_tick(
                     written,
                     total_hint,
@@ -1194,7 +1319,7 @@ impl Downloader {
                 ));
             }
         }
-        file.flush()?;
+        file.flush().await?;
         Ok(written)
     }
 }
@@ -1203,9 +1328,57 @@ impl Downloader {
 // Worker
 // ---------------------------------------------------------------------------
 
+fn spawn_lead_worker(ctx: Arc<Ctx>, resp: reqwest::Response, seg: Arc<Segment>) {
+    ctx.active_workers.fetch_add(1, Ordering::AcqRel);
+    let task_ctx = ctx.clone();
+    let handle = tokio::spawn(async move {
+        let ctx = task_ctx;
+        let client = ctx.client.clone();
+        let mut ctrl_rx = ctx.control.subscribe();
+        ctx.busy_workers.fetch_add(1, Ordering::AcqRel);
+        seg.set_in_use(true);
+        let seg_result = run_segment(&ctx, &client, &seg, &mut ctrl_rx, Some(resp)).await;
+        seg.set_in_use(false);
+        ctx.busy_workers.fetch_sub(1, Ordering::AcqRel);
+        match seg_result {
+            Ok(()) => {
+                ctx.global_fail_streak.store(0, Ordering::Release);
+            }
+            Err(Error::Cancelled) => {}
+            Err(e @ Error::LinkExpired { .. }) => ctx.set_fatal(e),
+            Err(Error::RangeIgnored) => {
+                ctx.range_fallback.store(true, Ordering::Release);
+                ctx.notify.notify_waiters();
+            }
+            Err(e) => {
+                if seg.remaining() > 0 {
+                    ctx.table.requeue(seg.clone());
+                    let streak = ctx.global_fail_streak.fetch_add(1, Ordering::AcqRel) + 1;
+                    emit_retry(&ctx, streak, &e.to_string());
+                    if streak < ctx.global_fail_bound
+                        && seg.failures.load(Ordering::Relaxed) <= ctx.config.max_retries
+                    {
+                        spawn_worker(ctx.clone());
+                    } else {
+                        ctx.set_fatal(e);
+                    }
+                    ctx.notify.notify_waiters();
+                }
+            }
+        }
+        ctx.active_workers.fetch_sub(1, Ordering::AcqRel);
+        ctx.notify.notify_waiters();
+    });
+    let mut workers = ctx.workers.lock().unwrap();
+    workers.retain(|worker| !worker.is_finished());
+    workers.push(handle);
+}
+
 fn spawn_worker(ctx: Arc<Ctx>) {
     ctx.active_workers.fetch_add(1, Ordering::AcqRel);
-    tokio::spawn(async move {
+    let task_ctx = ctx.clone();
+    let handle = tokio::spawn(async move {
+        let ctx = task_ctx;
         let client = ctx.client.clone();
         let mut ctrl_rx = ctx.control.subscribe();
         // Keep claiming work (queue, then stealing) until nothing remains.
@@ -1234,9 +1407,10 @@ fn spawn_worker(ctx: Arc<Ctx>) {
                     tokio::time::timeout(Duration::from_millis(50), ctx.notify.notified()).await;
                 continue;
             };
+            ctx.notify.notify_waiters();
             ctx.busy_workers.fetch_add(1, Ordering::AcqRel);
             seg.set_in_use(true);
-            let seg_result = run_segment(&ctx, &client, &seg, &mut ctrl_rx).await;
+            let seg_result = run_segment(&ctx, &client, &seg, &mut ctrl_rx, None).await;
             seg.set_in_use(false);
             ctx.busy_workers.fetch_sub(1, Ordering::AcqRel);
             match seg_result {
@@ -1257,10 +1431,12 @@ fn spawn_worker(ctx: Arc<Ctx>) {
                     if seg.remaining() == 0 {
                         continue;
                     }
-                    ctx.table.requeue(seg);
+                    ctx.table.requeue(seg.clone());
                     let streak = ctx.global_fail_streak.fetch_add(1, Ordering::AcqRel) + 1;
                     emit_retry(&ctx, streak, &e.to_string());
-                    if streak >= ctx.global_fail_bound {
+                    if streak >= ctx.global_fail_bound
+                        || seg.failures.load(Ordering::Relaxed) > ctx.config.max_retries
+                    {
                         ctx.set_fatal(e);
                         break;
                     }
@@ -1277,6 +1453,9 @@ fn spawn_worker(ctx: Arc<Ctx>) {
         ctx.active_workers.fetch_sub(1, Ordering::AcqRel);
         ctx.notify.notify_waiters();
     });
+    let mut workers = ctx.workers.lock().unwrap();
+    workers.retain(|worker| !worker.is_finished());
+    workers.push(handle);
 }
 
 /// Ensure enough workers exist for the current target while work remains.
@@ -1295,7 +1474,7 @@ fn reconcile_workers(ctx: &Arc<Ctx>) {
         let remaining = ctx
             .total
             .saturating_sub(ctx.downloaded.load(Ordering::Relaxed));
-        let want_queued = target.saturating_sub(1).max(ctx.table.queued());
+        let want_queued = need.max(ctx.table.queued());
         while ctx.table.queued() < want_queued {
             if !ctx.table.try_queue_probe_split(remaining) {
                 break;
@@ -1321,7 +1500,13 @@ async fn flush_segment_buf(
     let len = buf.len();
     acquire_rate(&ctx.limiter, &ctx.global, len as u64, ctrl_rx).await?;
     let offset = *at;
-    let data = std::mem::take(buf);
+    let replacement = ctx
+        .buffers
+        .lock()
+        .unwrap()
+        .pop()
+        .unwrap_or_else(|| Vec::with_capacity(SEGMENT_WRITE_BUF));
+    let data = std::mem::replace(buf, replacement);
     *at += len as u64;
     ctx.write_pending.fetch_add(1, Ordering::AcqRel);
     let tx = ctx.writer.lock().unwrap().clone();
@@ -1365,7 +1550,6 @@ async fn handle_read_stall(
         }
     }
     emit_retry(ctx, attempt + 1, "read stall");
-    let _ = interruptible_sleep(ctrl_rx, Duration::from_millis(50)).await;
     Ok(())
 }
 
@@ -1375,11 +1559,14 @@ async fn run_segment(
     client: &reqwest::Client,
     seg: &Arc<Segment>,
     ctrl_rx: &mut watch::Receiver<Cmd>,
+    prefetched: Option<reqwest::Response>,
 ) -> Result<()> {
-    let mut attempt = 0usize;
-
+    let mut prefetched = prefetched;
     loop {
         wait_runnable(ctrl_rx).await?;
+        if ctx.range_fallback.load(Ordering::Acquire) {
+            return Ok(());
+        }
 
         let begin = seg.current();
         let end = seg.download_end();
@@ -1391,36 +1578,43 @@ async fn run_segment(
 
         let mirror = ctx.pool.pick();
         let url = ctx.pool.url_of(&mirror);
-        let range = format!("bytes={}-{}", begin, end);
+        let resp = if let Some(resp) = prefetched.take() {
+            resp
+        } else {
+            let range = format!("bytes={}-{}", begin, end);
 
-        let req_builder = apply_extra_headers(
-            client.get(&url).header(reqwest::header::RANGE, range),
-            &ctx.extra_headers,
-        );
+            let req_builder = apply_extra_headers(client.get(&url), &ctx.extra_headers)
+                .header(reqwest::header::RANGE, range)
+                .header(reqwest::header::ACCEPT_ENCODING, "identity");
 
-        let resp = tokio::select! {
-            res = req_builder.send() => res,
-            changed = ctrl_rx.changed() => {
-                if changed.is_err() {
-                    return Err(Error::Cancelled);
+            let resp = tokio::select! {
+                res = async {
+                    tokio::time::timeout(SEGMENT_STALL_TIMEOUT.min(ctx.config.read_timeout), req_builder.send())
+                        .await.map_err(|_| Error::other("timed out waiting for response headers"))?
+                        .map_err(Error::from)
+                } => res,
+                changed = ctrl_rx.changed() => {
+                    if changed.is_err() {
+                        return Err(Error::Cancelled);
+                    }
+                    wait_runnable(ctrl_rx).await?;
+                    continue;
                 }
-                wait_runnable(ctrl_rx).await?;
-                continue;
-            }
-        };
+            };
 
-        let resp = match resp {
-            Ok(r) => r,
-            Err(e) => {
-                ctx.pool.demote(&mirror);
-                ctx.recent_errors.fetch_add(1, Ordering::Relaxed);
-                attempt += 1;
-                if attempt > ctx.config.max_retries {
-                    return Err(e.into());
+            match resp {
+                Ok(r) => r,
+                Err(e) => {
+                    ctx.pool.demote(&mirror);
+                    ctx.recent_errors.fetch_add(1, Ordering::Relaxed);
+                    let attempt = seg.failures.fetch_add(1, Ordering::Relaxed) + 1;
+                    if attempt > ctx.config.max_retries {
+                        return Err(e);
+                    }
+                    emit_retry(ctx, attempt, &e.to_string());
+                    interruptible_sleep(ctrl_rx, backoff_delay(attempt)).await?;
+                    continue;
                 }
-                emit_retry(ctx, attempt, &e.to_string());
-                interruptible_sleep(ctrl_rx, backoff_delay(attempt)).await?;
-                continue;
             }
         };
 
@@ -1429,11 +1623,19 @@ async fn run_segment(
             return Err(Error::RangeIgnored);
         }
         if status == reqwest::StatusCode::FORBIDDEN || status == reqwest::StatusCode::GONE {
+            drop(resp);
             // Expired link: try to refresh via the hook.
             if let Some(refresher) = &ctx.refresher {
-                if let Some(fresh) = refresher(url.clone()).await {
-                    ctx.pool.refresh(&mirror, fresh);
-                    continue;
+                let attempt = seg.failures.fetch_add(1, Ordering::Relaxed) + 1;
+                if attempt <= ctx.config.max_retries {
+                    if let Ok(Some(fresh)) =
+                        tokio::time::timeout(ctx.config.request_timeout, refresher(url.clone()))
+                            .await
+                    {
+                        ctx.pool.refresh(&mirror, fresh);
+                        interruptible_sleep(ctrl_rx, backoff_delay(attempt)).await?;
+                        continue;
+                    }
                 }
             }
             return Err(Error::LinkExpired {
@@ -1445,17 +1647,22 @@ async fn run_segment(
         {
             ctx.pool.demote(&mirror);
             ctx.recent_throttles.fetch_add(1, Ordering::Relaxed);
+            let throttles = seg.failures.fetch_add(1, Ordering::Relaxed) + 1;
+            if throttles > ctx.config.max_retries {
+                return Err(Error::Status(status.as_u16()));
+            }
             let delay = resp
                 .headers()
                 .get(reqwest::header::RETRY_AFTER)
                 .and_then(|v| v.to_str().ok())
                 .and_then(|v| parse_retry_after(v, RETRY_AFTER_CAP))
-                .unwrap_or_else(|| backoff_delay(attempt + 1));
+                .unwrap_or_else(|| backoff_delay(throttles));
             emit_retry(
                 ctx,
-                attempt + 1,
+                throttles,
                 &format!("HTTP {} (throttled)", status.as_u16()),
             );
+            drop(resp);
             // Hand the range back right away so a connection the server *did*
             // accept can carry on with it, instead of this segment sitting idle
             // for the whole back-off (hosts that cap concurrent requests answer
@@ -1469,23 +1676,47 @@ async fn run_segment(
         if status.is_server_error() {
             ctx.pool.demote(&mirror);
             ctx.recent_errors.fetch_add(1, Ordering::Relaxed);
-            attempt += 1;
+            let attempt = seg.failures.fetch_add(1, Ordering::Relaxed) + 1;
             if attempt > ctx.config.max_retries {
                 return Err(Error::Status(status.as_u16()));
             }
             emit_retry(ctx, attempt, &format!("HTTP {}", status.as_u16()));
+            drop(resp);
             interruptible_sleep(ctrl_rx, backoff_delay(attempt)).await?;
             continue;
         }
         if !(status == reqwest::StatusCode::PARTIAL_CONTENT || status.is_success()) {
             ctx.pool.demote(&mirror);
-            attempt += 1;
+            let attempt = seg.failures.fetch_add(1, Ordering::Relaxed) + 1;
             if attempt > ctx.config.max_retries {
                 return Err(Error::Status(status.as_u16()));
             }
             emit_retry(ctx, attempt, &format!("HTTP {}", status.as_u16()));
+            drop(resp);
             interruptible_sleep(ctrl_rx, backoff_delay(attempt)).await?;
             continue;
+        }
+
+        if status == reqwest::StatusCode::PARTIAL_CONTENT {
+            let actual = resp
+                .headers()
+                .get(reqwest::header::CONTENT_RANGE)
+                .and_then(|v| v.to_str().ok())
+                .and_then(parse_content_range);
+            if !matches!(actual, Some((first, _last, total)) if first == begin && total == ctx.total)
+            {
+                ctx.recent_errors.fetch_add(1, Ordering::Relaxed);
+                let attempt = seg.failures.fetch_add(1, Ordering::Relaxed) + 1;
+                if attempt > ctx.config.max_retries {
+                    return Err(Error::other(
+                        "response Content-Range does not match requested range",
+                    ));
+                }
+                emit_retry(ctx, attempt, "invalid Content-Range");
+                drop(resp);
+                interruptible_sleep(ctrl_rx, backoff_delay(attempt)).await?;
+                continue;
+            }
         }
 
         // Stream the body, batched into positioned writes.
@@ -1494,23 +1725,34 @@ async fn run_segment(
         let mut stream_err: Option<Error> = None;
         let mut write_buf = Vec::with_capacity(SEGMENT_WRITE_BUF);
         let mut write_at = pos;
-        let mut stall_deadline = tokio::time::Instant::now() + SEGMENT_STALL_TIMEOUT;
+        let idle_timeout = SEGMENT_STALL_TIMEOUT.min(ctx.config.read_timeout);
+        let mut stall_deadline = tokio::time::Instant::now() + idle_timeout;
         let mut stalled = false;
 
         loop {
+            // A steal can finish our range while we are waiting for a slow
+            // response. Local disk/rate-limit/paused time is not a network stall.
+            if pos > seg.download_end() {
+                flush_segment_buf(ctx, &mut write_buf, &mut write_at, seg, ctrl_rx).await?;
+                break;
+            }
+            if ctx.control.is_paused() {
+                wait_runnable(ctrl_rx).await?;
+                stall_deadline = tokio::time::Instant::now() + idle_timeout;
+            }
             let chunk_res = tokio::select! {
                 _ = tokio::time::sleep_until(stall_deadline) => {
-                    handle_read_stall(ctx, seg, ctrl_rx, &mut write_buf, &mut write_at, attempt)
-                    .await?;
                     stalled = true;
                     break;
                 }
                 item = stream.next() => item,
+                _ = ctx.notify.notified() => continue,
                 changed = ctrl_rx.changed() => {
                     if changed.is_err() {
                         return Err(Error::Cancelled);
                     }
                     wait_runnable(ctrl_rx).await?;
+                    stall_deadline = tokio::time::Instant::now() + idle_timeout;
                     continue;
                 }
             };
@@ -1522,7 +1764,6 @@ async fn run_segment(
                     if chunk.is_empty() {
                         continue;
                     }
-                    stall_deadline = tokio::time::Instant::now() + SEGMENT_STALL_TIMEOUT;
                     // A stealer may shorten this range while the response is
                     // open. Publish the network cursor under the same lock as
                     // splitting, including bytes still in the write buffer.
@@ -1540,6 +1781,7 @@ async fn run_segment(
                             ctx.received
                                 .fetch_add(bytes.len() as u64, Ordering::Relaxed);
                             seg.current.store(pos, Ordering::Release);
+                            seg.failures.store(0, Ordering::Relaxed);
                         }
                         pos > cur_end
                     };
@@ -1551,6 +1793,7 @@ async fn run_segment(
                         flush_segment_buf(ctx, &mut write_buf, &mut write_at, seg, ctrl_rx).await?;
                         break;
                     }
+                    stall_deadline = tokio::time::Instant::now() + idle_timeout;
                 }
                 Some(Err(e)) => {
                     flush_segment_buf(ctx, &mut write_buf, &mut write_at, seg, ctrl_rx).await?;
@@ -1565,18 +1808,29 @@ async fn run_segment(
             }
         }
 
+        drop(stream);
         if stalled {
-            attempt += 1;
+            let attempt = seg.failures.fetch_add(1, Ordering::Relaxed) + 1;
+            handle_read_stall(
+                ctx,
+                seg,
+                ctrl_rx,
+                &mut write_buf,
+                &mut write_at,
+                attempt - 1,
+            )
+            .await?;
             if attempt > ctx.config.max_retries {
                 return Err(Error::other("segment repeatedly stalled"));
             }
+            interruptible_sleep(ctrl_rx, backoff_delay(attempt)).await?;
             continue;
         }
 
         if let Some(e) = stream_err {
             // Connection dropped mid-segment: retry, resuming from `pos`.
             ctx.pool.demote(&mirror);
-            attempt += 1;
+            let attempt = seg.failures.fetch_add(1, Ordering::Relaxed) + 1;
             if attempt > ctx.config.max_retries {
                 return Err(e);
             }
@@ -1590,8 +1844,19 @@ async fn run_segment(
             ctx.pool.reward(&mirror);
             return Ok(());
         }
-        // Otherwise loop to continue the remaining bytes (e.g. short response).
-        attempt = 0;
+        // A clean HTTP EOF can still be short for the requested range. In
+        // particular, an empty 206 must consume the budget instead of looping.
+        if pos == begin {
+            ctx.recent_errors.fetch_add(1, Ordering::Relaxed);
+            let attempt = seg.failures.fetch_add(1, Ordering::Relaxed) + 1;
+            if attempt > ctx.config.max_retries {
+                return Err(Error::other("partial response made no progress"));
+            }
+            emit_retry(ctx, attempt, "partial response made no progress");
+            interruptible_sleep(ctrl_rx, backoff_delay(attempt)).await?;
+        } else {
+            seg.failures.store(0, Ordering::Relaxed);
+        }
     }
 }
 
@@ -1807,6 +2072,7 @@ fn persist_state(
 pub fn preallocate(path: &std::path::Path, size: u64) -> Result<()> {
     let file = std::fs::OpenOptions::new()
         .create(true)
+        .truncate(false)
         .write(true)
         .read(true)
         .open(path)?;

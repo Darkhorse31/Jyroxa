@@ -3,10 +3,10 @@
 use std::time::Duration;
 
 use crate::error::{Error, Result};
-use crate::torrent::probe_types::{TorrentFileProbe, TorrentProbeInfo};
 use crate::torrent::config::TorrentTuning;
 use crate::torrent::engine::{TorrentJobOptions, TorrentSession, TorrentSource};
 use crate::torrent::magnet::{is_magnet_uri, magnet_display_name};
+use crate::torrent::probe_types::{TorrentFileProbe, TorrentProbeInfo};
 
 /// Fetch torrent metadata from a magnet, `.torrent` URL/path, or raw HTTP(S) torrent URL.
 pub async fn probe_torrent_source(input: &str) -> Result<TorrentProbeInfo> {
@@ -31,18 +31,16 @@ pub async fn probe_torrent_source(input: &str) -> Result<TorrentProbeInfo> {
         .await
         .map_err(|e| Error::other(e.to_string()))?;
 
-    let source = if is_magnet_uri(input)
-        || input.starts_with("http://")
-        || input.starts_with("https://")
-    {
-        TorrentSource::Url(input)
-    } else if std::path::Path::new(input).is_file() {
-        let bytes = std::fs::read(input).map_err(|e| Error::other(e.to_string()))?;
-        TorrentSource::FileBytes(bytes.into())
-    } else {
-        let _ = std::fs::remove_dir_all(&probe_dir);
-        return Err(Error::other(format!("torrent source not found: {input}")));
-    };
+    let source =
+        if is_magnet_uri(input) || input.starts_with("http://") || input.starts_with("https://") {
+            TorrentSource::Url(input)
+        } else if std::path::Path::new(input).is_file() {
+            let bytes = std::fs::read(input).map_err(|e| Error::other(e.to_string()))?;
+            TorrentSource::FileBytes(bytes.into())
+        } else {
+            let _ = std::fs::remove_dir_all(&probe_dir);
+            return Err(Error::other(format!("torrent source not found: {input}")));
+        };
 
     let handle = session
         .add(

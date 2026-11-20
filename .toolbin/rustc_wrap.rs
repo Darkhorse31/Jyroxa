@@ -34,18 +34,14 @@ fn workspace_toolbin() -> Option<PathBuf> {
 
 fn main() {
     let mut args: Vec<String> = std::env::args().collect();
-    let rustc = args
-        .get(1)
-        .cloned()
-        .unwrap_or_else(|| "rustc".to_string());
+    let rustc = args.get(1).cloned().unwrap_or_else(|| "rustc".to_string());
 
     let mut rustc_args: Vec<String> = args.drain(2..).collect();
     if let Some(wrap) = workspace_toolbin() {
         if !rustc_args.iter().any(|a| a.starts_with("-Cdlltool=")) {
-            rustc_args.insert(
-                0,
-                format!("-Cdlltool={}", wrap.display()),
-            );
+            // Cargo may nest a workspace wrapper before the compiler path.
+            // Preserve that leading argument and append compiler options.
+            rustc_args.push(format!("-Cdlltool={}", wrap.display()));
             let winlibs = std::env::var_os("SWIFTGET_WINLIBS")
                 .map(PathBuf::from)
                 .filter(|p| p.is_dir())
@@ -54,7 +50,7 @@ fn main() {
                     p.is_dir().then_some(p)
                 });
             if let Some(winlibs) = winlibs {
-                rustc_args.insert(0, format!("-Lnative={}", winlibs.display()));
+                rustc_args.push(format!("-Lnative={}", winlibs.display()));
             }
         }
     }
@@ -62,6 +58,6 @@ fn main() {
     let status = Command::new(&rustc)
         .args(&rustc_args)
         .status()
-        .unwrap_or_else(|err| panic!("failed to run rustc {rustc}: {err:?}"));
+        .unwrap_or_else(|err| panic!("failed to run rustc {}: {:?}", rustc, err));
     std::process::exit(status.code().unwrap_or(1));
 }

@@ -127,8 +127,7 @@ fn urlencoding_pair(s: &str) -> String {
 mod tests {
     use super::*;
 
-    const SAMPLE: &str =
-        "magnet:?xt=urn:btih:0123456789abcdef0123456789abcdef01234567&dn=ubuntu";
+    const SAMPLE: &str = "magnet:?xt=urn:btih:0123456789abcdef0123456789abcdef01234567&dn=ubuntu";
 
     #[test]
     fn parse_hex_btih() {
@@ -146,7 +145,9 @@ mod tests {
     fn is_torrent_source_cases() {
         assert!(is_magnet_uri(SAMPLE));
         assert!(is_torrent_source(SAMPLE));
-        assert!(is_torrent_source("https://releases.ubuntu.com/22.04/ubuntu-22.04.3-desktop-amd64.iso.torrent"));
+        assert!(is_torrent_source(
+            "https://releases.ubuntu.com/22.04/ubuntu-22.04.3-desktop-amd64.iso.torrent"
+        ));
         assert!(!is_torrent_source("https://example.com/file.zip"));
     }
 
