@@ -14,7 +14,7 @@ import type { SpeedGraph } from "./speed-graph";
 import { promptRemoveDownloads } from "./remove-dialog";
 import { showToast } from "./toast";
 
-export type StatusFilter = "all" | "downloading" | "completed" | "queued" | "failed";
+export type StatusFilter = "all" | "downloading" | "completed" | "queued" | "failed" | "torrents";
 export type CategoryFilter = "all" | FileCategory;
 export type SortField = "date" | "name" | "size" | "progress" | "speed";
 export type SortOrder = "asc" | "desc";
@@ -75,6 +75,29 @@ export class DownloadManager {
   }
 
   private wireGlobalListeners() {
+    this.contextMenuEl?.querySelectorAll<HTMLElement>("li[data-action]").forEach(item => {
+      item.tabIndex = -1;
+      item.setAttribute("role", "menuitem");
+    });
+    this.contextMenuEl?.addEventListener("keydown", event => {
+      const menu = this.contextMenuEl!;
+      const items = Array.from(menu.querySelectorAll<HTMLElement>('li[data-action]:not(.hidden)'));
+      const index = items.indexOf(document.activeElement as HTMLElement);
+      if (event.key === "Escape") {
+        event.preventDefault();
+        const target = this.contextTargetView?.id;
+        this.closeContextMenu();
+        if (target !== undefined) this.cards.get(target)?.root.focus();
+      } else if (["ArrowDown", "ArrowUp", "Home", "End"].includes(event.key)) {
+        event.preventDefault();
+        const next = event.key === "Home" ? 0 : event.key === "End" ? items.length - 1
+          : (index + (event.key === "ArrowDown" ? 1 : -1) + items.length) % items.length;
+        items[next]?.focus();
+      } else if (event.key === "Enter" || event.key === " ") {
+        event.preventDefault();
+        (document.activeElement as HTMLElement)?.click();
+      }
+    });
     // Click outside to close context menu
     window.addEventListener("click", () => {
       this.closeContextMenu();
@@ -269,6 +292,7 @@ export class DownloadManager {
     let doneCount = 0;
     let queuedCount = 0;
     let failedCount = 0;
+    let torrentCount = 0;
 
     // Counts by category
     const catCounts: Record<FileCategory, number> = {
@@ -281,6 +305,7 @@ export class DownloadManager {
     };
 
     for (const card of this.cards.values()) {
+      if (card.isTorrent()) torrentCount++;
       const status = card.getStatus();
       const isRunning =
         status === "running" ||
@@ -319,6 +344,7 @@ export class DownloadManager {
       completed: doneCount,
       queued: queuedCount,
       failed: failedCount,
+      torrents: torrentCount,
       categories: catCounts,
     });
 
@@ -457,6 +483,7 @@ export class DownloadManager {
 
     menu.style.left = `${Math.max(10, x)}px`;
     menu.style.top = `${Math.max(10, y)}px`;
+    menu.querySelector<HTMLElement>('li[data-action]:not(.hidden)')?.focus();
   }
 
   public closeContextMenu(): void {
@@ -547,6 +574,8 @@ export class DownloadManager {
         matchesStatus = status === "queued";
       } else if (this.currentStatusFilter === "failed") {
         matchesStatus = status === "failed";
+      } else if (this.currentStatusFilter === "torrents") {
+        matchesStatus = card.isTorrent();
       }
 
       // Category check
@@ -618,7 +647,7 @@ export class DownloadManager {
       this.emptyStateEl.innerHTML = `
         <div class="empty-graphic">${icons.download(48)}</div>
         <h3 class="empty-title">No downloads yet</h3>
-        <p class="empty-desc">Add a direct URL, import links via LinkGrabber, or drag and drop links anywhere.</p>
+        <p class="empty-desc">Paste a link or magnet above, choose a torrent file, or drop one here. You can review where to save it before downloading.</p>
         <div class="empty-actions">
           <button type="button" class="btn primary" id="empty-add-btn">
             ${icons.plus(15)} Add download
@@ -658,9 +687,10 @@ export class DownloadManager {
 
     document.querySelectorAll(".sidebar-item").forEach((item) => {
       item.classList.remove("active");
+      item.setAttribute("aria-selected", "false");
     });
     document.querySelector('.sidebar-item[data-status="all"]')?.classList.add("active");
-    document.querySelector('.sidebar-item[data-category="all"]')?.classList.add("active");
+    document.querySelector('.sidebar-item[data-status="all"]')?.setAttribute("aria-selected", "true");
 
     this.applyVisibilityAndSorting();
   }
@@ -671,6 +701,7 @@ export class DownloadManager {
     completed: number;
     queued: number;
     failed: number;
+    torrents: number;
     categories: Record<FileCategory, number>;
   }): void {
     // Status badges
@@ -684,6 +715,7 @@ export class DownloadManager {
     setBadge("badge-status-completed", counts.completed);
     setBadge("badge-status-queued", counts.queued);
     setBadge("badge-status-failed", counts.failed);
+    setBadge("badge-status-torrents", counts.torrents);
 
     // Category badges
     setBadge("badge-cat-all", counts.all);
@@ -697,6 +729,34 @@ export class DownloadManager {
 
   public getSelectedIds(): number[] {
     return Array.from(this.selectedIds);
+  }
+
+  public async setAllPaused(paused: boolean): Promise<void> {
+    const eligible = Array.from(this.cards.values()).filter(card => paused
+      ? ["running", "downloading", "starting", "connecting", "retrying"].includes(card.getStatus())
+      : ["paused", "queued"].includes(card.getStatus()));
+    if (!eligible.length) return;
+    try {
+      const ids = eligible.map(card => card.id);
+      if (paused) await api.pauseMany(ids);
+      else await api.resumeMany(ids);
+      await this.reload();
+    } catch (err) {
+      showToast({ title: paused ? "Could not pause downloads" : "Could not resume downloads", message: String(err), type: "error" });
+    }
+  }
+
+  public async toggleSelectedPaused(): Promise<void> {
+    const cards = this.getSelectedIds().map(id => this.cards.get(id)).filter((card): card is DownloadCard => Boolean(card));
+    const running = cards.filter(card => ["running", "downloading", "starting", "connecting", "retrying"].includes(card.getStatus()));
+    const paused = cards.filter(card => card.getStatus() === "paused");
+    try {
+      if (running.length) await api.pauseMany(running.map(card => card.id));
+      else if (paused.length) await api.resumeMany(paused.map(card => card.id));
+      await this.reload();
+    } catch (err) {
+      showToast({ title: "Could not update downloads", message: String(err), type: "error" });
+    }
   }
 
   public pauseSelected(): void {

@@ -4,14 +4,14 @@ mod engine;
 mod launch_args;
 mod launch_dedupe;
 mod platform;
+mod shell_paths;
 mod torrent_host;
 mod video_sidecar;
-mod shell_paths;
 mod window_state;
 
 use engine::{init_engine, run_clipboard_monitor, EngineState};
 use std::path::PathBuf;
-use tauri::menu::{Menu, MenuItem};
+use tauri::menu::{Menu, MenuItem, PredefinedMenuItem};
 use tauri::tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent};
 use tauri::{Emitter, Manager, PhysicalPosition, PhysicalSize, WindowEvent};
 use window_state::{MonitorRect, WindowState};
@@ -58,13 +58,15 @@ fn snapshot_window(app: &tauri::AppHandle) -> Option<WindowState> {
     }
     if w.is_maximized().unwrap_or(false) {
         // Keep the last normal size so un-maximizing next time still looks right.
-        let mut prev = load_window_state(app).filter(|s| s.is_worth_saving()).unwrap_or(WindowState {
-            width: window_state::DEFAULT_WIDTH,
-            height: window_state::DEFAULT_HEIGHT,
-            x: None,
-            y: None,
-            maximized: false,
-        });
+        let mut prev = load_window_state(app)
+            .filter(|s| s.is_worth_saving())
+            .unwrap_or(WindowState {
+                width: window_state::DEFAULT_WIDTH,
+                height: window_state::DEFAULT_HEIGHT,
+                x: None,
+                y: None,
+                maximized: false,
+            });
         prev.maximized = true;
         return Some(prev);
     }
@@ -114,7 +116,10 @@ fn restore_window_geometry(w: &tauri::WebviewWindow, saved: Option<WindowState>)
             let _ = w.set_position(PhysicalPosition::new(x, y));
         }
     } else {
-        tracing::warn!(?ws, "ignoring saved window geometry that is off-screen or too small");
+        tracing::warn!(
+            ?ws,
+            "ignoring saved window geometry that is off-screen or too small"
+        );
         reset_window_geometry(w);
     }
     if ws.maximized {
@@ -264,11 +269,7 @@ pub fn run() {
             if let Ok(exe) = std::env::current_exe() {
                 let reg_handle = handle.clone();
                 tauri::async_runtime::spawn(async move {
-                    let settings = reg_handle
-                        .state::<EngineState>()
-                        .0
-                        .get_settings()
-                        .await;
+                    let settings = reg_handle.state::<EngineState>().0.get_settings().await;
                     browser_integration::ensure_browser_integration_on_start(
                         &exe,
                         &settings.browser_integration,
@@ -279,14 +280,25 @@ pub fn run() {
             tauri::async_runtime::spawn(run_tray_updater(handle.clone()));
 
             let product = app.package_info().name.clone();
-            let show_i = MenuItem::with_id(app, "show", "Show", true, None::<&str>)?;
+            let show_i = MenuItem::with_id(app, "show", "Open Jyroxa", true, None::<&str>)?;
             let pause_i = MenuItem::with_id(app, "pause_all", "Pause all", true, None::<&str>)?;
             let resume_i = MenuItem::with_id(app, "resume_all", "Resume all", true, None::<&str>)?;
-            let quit_i = MenuItem::with_id(app, "quit", "Quit", true, None::<&str>)?;
-            let menu = Menu::with_items(app, &[&show_i, &pause_i, &resume_i, &quit_i])?;
+            let settings_i = MenuItem::with_id(app, "settings", "Settings", true, None::<&str>)?;
+            let separator = PredefinedMenuItem::separator(app)?;
+            let quit_i = MenuItem::with_id(app, "quit", "Exit Jyroxa", true, None::<&str>)?;
+            let menu = Menu::with_items(
+                app,
+                &[
+                    &show_i,
+                    &resume_i,
+                    &pause_i,
+                    &settings_i,
+                    &separator,
+                    &quit_i,
+                ],
+            )?;
 
-            let tray_icon = tauri::image::Image::from_bytes(include_bytes!("../icons/tray.png"))
-                .unwrap_or_else(|_| app.default_window_icon().unwrap().clone());
+            let tray_icon = tauri::image::Image::from_bytes(include_bytes!("../icons/tray.png"))?;
 
             let _tray = TrayIconBuilder::with_id("main-tray")
                 .icon(tray_icon)
@@ -295,6 +307,10 @@ pub fn run() {
                 .on_menu_event(|app, event| match event.id.as_ref() {
                     "show" => {
                         bring_main_window_to_front(app);
+                    }
+                    "settings" => {
+                        bring_main_window_to_front(app);
+                        let _ = app.emit("open-settings", ());
                     }
                     "pause_all" => {
                         let app = app.clone();

@@ -1,12 +1,12 @@
 //! BitTorrent on desktop: CLI sidecar (keeps librqbit out of the Tauri cdylib).
 
-use std::path::{Path, PathBuf};
-use std::process::Stdio;
 use jyroxa_core::torrent::{
     is_torrent_source, magnet_display_name, parse_error_line, parse_progress_line,
-    TorrentProgressPhase, TorrentProbeInfo,
+    TorrentProbeInfo, TorrentProgressPhase,
 };
 use jyroxa_core::Error;
+use std::path::{Path, PathBuf};
+use std::process::Stdio;
 use tokio::io::{AsyncBufReadExt, BufReader};
 use tokio::process::Command;
 use tokio::sync::watch;
@@ -14,9 +14,7 @@ use tokio::sync::watch;
 use crate::engine::{AppSettings, DownloadView, TaskStatus};
 
 pub fn primary_is_torrent(urls: &[String]) -> bool {
-    urls.first()
-        .map(|u| is_torrent_source(u))
-        .unwrap_or(false)
+    urls.first().map(|u| is_torrent_source(u)).unwrap_or(false)
 }
 
 pub fn torrent_filename_hint(urls: &[String]) -> String {
@@ -63,8 +61,7 @@ fn jyroxa_cli_exe() -> PathBuf {
             }
         }
     }
-    PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-        .join("../../../target/release/jyroxa.exe")
+    PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../../target/release/jyroxa.exe")
 }
 
 /// Spawn `jyroxa torrent get` and stream stderr progress lines back to the UI.
@@ -212,9 +209,8 @@ pub async fn spawn_torrent_sidecar(
     if status.success() {
         Ok(())
     } else {
-        let msg = last_error_line.unwrap_or_else(|| {
-            format!("torrent sidecar exited with {}", status)
-        });
+        let msg =
+            last_error_line.unwrap_or_else(|| format!("torrent sidecar exited with {}", status));
         Err(Error::other(msg))
     }
 }

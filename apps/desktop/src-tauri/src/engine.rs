@@ -5,12 +5,12 @@ use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Weak};
 
-use serde::{Deserialize, Serialize};
 use jyroxa_core::download::{Control, DownloadConfig, DownloadRequest, Downloader};
 use jyroxa_core::events::ProgressEvent;
 use jyroxa_core::linkgrabber::{GrabOptions, LinkGrabber, LinkInfo, Package};
 use jyroxa_core::state::SegmentState;
 use jyroxa_core::{build_client, HostStats, Result as CoreResult};
+use serde::{Deserialize, Serialize};
 use tauri::{AppHandle, Emitter, Manager};
 use tauri_plugin_clipboard_manager::ClipboardExt;
 use tokio::sync::{Mutex, RwLock};
@@ -128,7 +128,7 @@ impl Default for AppSettings {
             start_with_windows: false,
             prevent_sleep: true,
             auto_resume: true,
-            theme: "system".into(),
+            theme: "light".into(),
             scheduler_start: None,
             scheduler_stop: None,
             scheduler_days: vec![0, 1, 2, 3, 4, 5, 6],
@@ -294,9 +294,8 @@ impl DesktopEngine {
                 .with_host_stats(host_stats),
         ));
         let telegram = Arc::new(jyroxa_core::TelegramClientPool::new(&data_dir));
-        let linkgrabber = Arc::new(
-            LinkGrabber::new(client.clone()).with_telegram_pool(Arc::clone(&telegram)),
-        );
+        let linkgrabber =
+            Arc::new(LinkGrabber::new(client.clone()).with_telegram_pool(Arc::clone(&telegram)));
 
         let mut settings = AppSettings::default();
         let settings_path = data_dir.join("settings.json");
@@ -434,7 +433,10 @@ impl DesktopEngine {
         jyroxa_core::probe_url(&client, &normalized, std::time::Duration::from_secs(10)).await
     }
 
-    pub async fn probe_torrent(&self, source: &str) -> CoreResult<jyroxa_core::torrent::TorrentProbeInfo> {
+    pub async fn probe_torrent(
+        &self,
+        source: &str,
+    ) -> CoreResult<jyroxa_core::torrent::TorrentProbeInfo> {
         crate::torrent_host::probe_torrent_via_sidecar(source).await
     }
 
@@ -658,7 +660,10 @@ impl DesktopEngine {
             let v = &inner.view;
             if matches!(
                 v.status,
-                TaskStatus::Queued | TaskStatus::Paused | TaskStatus::Running | TaskStatus::Starting
+                TaskStatus::Queued
+                    | TaskStatus::Paused
+                    | TaskStatus::Running
+                    | TaskStatus::Starting
             ) {
                 persisted.push(PersistedItem {
                     urls: v.urls.clone(),
@@ -850,9 +855,10 @@ impl DesktopEngine {
         let mut telegram_mtproto: Option<(i64, u32)> = None;
         if jyroxa_core::is_telegram_post_url(&first) {
             let client = build_client()?;
-            let items = jyroxa_core::resolve_post_with_pool(&client, Some(self.telegram.as_ref()), &first)
-                .await
-                .map_err(|e| jyroxa_core::Error::other(e.to_string()))?;
+            let items =
+                jyroxa_core::resolve_post_with_pool(&client, Some(self.telegram.as_ref()), &first)
+                    .await
+                    .map_err(|e| jyroxa_core::Error::other(e.to_string()))?;
             if items.len() > 1 {
                 let settings = self.settings.lock().await.clone();
                 let mut first_id = None;
@@ -935,7 +941,11 @@ impl DesktopEngine {
             speed_bps: 0.0,
             segments: Vec::new(),
             error: None,
-            kind: if is_torrent { "torrent".into() } else { default_http_kind() },
+            kind: if is_torrent {
+                "torrent".into()
+            } else {
+                default_http_kind()
+            },
             torrent_peers: None,
             torrent_seeds: None,
             torrent_ratio: None,
@@ -991,12 +1001,7 @@ impl DesktopEngine {
                 let items = engine.items.lock().await;
                 items
                     .get(&id)
-                    .map(|i| {
-                        matches!(
-                            i.view.status,
-                            TaskStatus::Running | TaskStatus::Starting
-                        )
-                    })
+                    .map(|i| matches!(i.view.status, TaskStatus::Running | TaskStatus::Starting))
                     .unwrap_or(false)
             };
             if already_running {
@@ -1067,10 +1072,7 @@ impl DesktopEngine {
                     tauri::async_runtime::spawn(async move {
                         let mut items = items_ref.lock().await;
                         if let Some(inner) = items.get_mut(&id) {
-                            crate::torrent_host::apply_torrent_progress(
-                                &mut inner.view,
-                                &progress,
-                            );
+                            crate::torrent_host::apply_torrent_progress(&mut inner.view, &progress);
                         }
                         let _ = app_poll.emit("downloads-changed", ());
                     });
@@ -1176,14 +1178,16 @@ impl DesktopEngine {
             }
             .or_else(|| {
                 request.urls.first().and_then(|u| {
-                    jyroxa_core::parse_telegram_link(u).ok().and_then(|p| match p {
-                        jyroxa_core::TelegramPostRef::Private {
-                            chat_id,
-                            message_id,
-                            ..
-                        } => Some((chat_id, message_id)),
-                        _ => None,
-                    })
+                    jyroxa_core::parse_telegram_link(u)
+                        .ok()
+                        .and_then(|p| match p {
+                            jyroxa_core::TelegramPostRef::Private {
+                                chat_id,
+                                message_id,
+                                ..
+                            } => Some((chat_id, message_id)),
+                            _ => None,
+                        })
                 })
             });
 
@@ -1225,8 +1229,7 @@ impl DesktopEngine {
                 })
             } else {
                 let dl = downloader.read().await.clone();
-                dl.download(request, Some(tx), control.clone(), None)
-                    .await
+                dl.download(request, Some(tx), control.clone(), None).await
             };
 
             let _ = consumer.await;
@@ -1250,10 +1253,8 @@ impl DesktopEngine {
                             };
                             let _ = app.emit("download-finished", finished);
                             if notifications_on {
-                                native_toast = Some((
-                                    "Download complete".into(),
-                                    inner.view.filename.clone(),
-                                ));
+                                native_toast =
+                                    Some(("Download complete".into(), inner.view.filename.clone()));
                             }
                         }
                         Err(jyroxa_core::Error::Cancelled) => {
@@ -1469,11 +1470,7 @@ impl DesktopEngine {
         }
     }
 
-    pub async fn grab_links(
-        &self,
-        input: &str,
-        opts: &GrabOptionsDto,
-    ) -> CoreResult<Vec<Package>> {
+    pub async fn grab_links(&self, input: &str, opts: &GrabOptionsDto) -> CoreResult<Vec<Package>> {
         self.linkgrabber.grab(input, &opts.into()).await
     }
 
@@ -1548,12 +1545,7 @@ pub(crate) fn request_autotune(connections_auto: bool, global_autotune: bool) ->
 
 pub(crate) fn show_native_notification(app: &AppHandle, title: &str, body: &str) {
     use tauri_plugin_notification::NotificationExt;
-    let _ = app
-        .notification()
-        .builder()
-        .title(title)
-        .body(body)
-        .show();
+    let _ = app.notification().builder().title(title).body(body).show();
 }
 
 #[derive(Clone, Serialize)]
@@ -1706,6 +1698,11 @@ pub fn clipboard_url_re() -> &'static regex::Regex {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn new_installations_use_light_theme() {
+        assert_eq!(super::AppSettings::default().theme, "light");
+    }
+
     #[test]
     fn manual_connections_disable_autotune() {
         assert!(!super::request_autotune(false, true));
