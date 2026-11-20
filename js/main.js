@@ -1,10 +1,6 @@
 (function () {
   var STORAGE = "jyroxa-site-theme";
 
-  function systemTheme() {
-    return window.matchMedia("(prefers-color-scheme: light)").matches ? "light" : "dark";
-  }
-
   function storedTheme() {
     try {
       var v = localStorage.getItem(STORAGE);
@@ -16,7 +12,7 @@
   function currentTheme() {
     var t = document.documentElement.getAttribute("data-theme");
     if (t === "light" || t === "dark") return t;
-    return storedTheme() || systemTheme();
+    return storedTheme() || "dark";
   }
 
   function syncToggleButton() {
@@ -48,11 +44,6 @@
   }
 
   syncToggleButton();
-
-  var mq = window.matchMedia("(prefers-color-scheme: light)");
-  mq.addEventListener("change", function () {
-    if (!storedTheme()) applyTheme(systemTheme(), false);
-  });
 
   var navToggle = document.querySelector("[data-nav-toggle]");
   var nav = document.querySelector("[data-site-nav]");
