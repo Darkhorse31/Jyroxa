@@ -10,7 +10,8 @@ New-Item -ItemType Directory -Path $benchRoot | Out-Null
 
 $debianTorrent = "https://cdimage.debian.org/debian-cd/current/amd64/bt-cd/debian-13.7.0-amd64-netinst.iso.torrent"
 $ubuntuTorrent = "https://releases.ubuntu.com/24.04.3/ubuntu-24.04.3-desktop-amd64.iso.torrent"
-$blenderTorrent = "https://download.blender.org/demo/movies/BBB/bbb_sunflower_1080p_30fps_stereo_abl16.mp4.torrent"
+# Official BBB torrent moved; use the documented Big Buck Bunny magnet (same swarm as prior Blender case).
+$blenderTorrent = "magnet:?xt=urn:btih:dd8255DC812C8117559A4BB6580F7CB599B87A64&dn=Big+Buck+Bunny"
 # DHT-only Debian netinst (no tr=)
 $debianDhtMagnet = "magnet:?xt=urn:btih:8cbf5c46714d0c5fd7df22c87a5cfab3d540c74d"
 $bigBuckMagnet = "magnet:?xt=urn:btih:dd8255dc81c8117f5eecb9d6bfdb10faea1d4a1e&dn=Big+Buck+Bunny&tr=udp%3A%2F%2Fexplodie.org%3A6969&tr=udp%3A%2F%2Ftracker.coppersurfer.tk%3A6969&tr=udp%3A%2F%2Ftracker.empire-js.us%3A1337&tr=udp%3A%2F%2Ftracker.opentrackr.org%3A1337&tr=udp%3A%2F%2Ftracker.leechers-paradise.org%3A6969&tr=udp%3A%2F%2Ftracker.pirateparty.gr%3A6969&tr=udp%3A%2F%2Ftracker.cyberia.is%3A6969&tr=udp%3A%2F%2Fopen.demonii.si%3A1337"

@@ -27,16 +27,14 @@ pub fn parse_telegram_link(input: &str) -> Result<TelegramPostRef> {
         return Err(TelegramError::InvalidLink(trimmed.to_string()));
     };
 
-    let host = url.host_str().ok_or_else(|| TelegramError::InvalidLink(trimmed.to_string()))?;
+    let host = url
+        .host_str()
+        .ok_or_else(|| TelegramError::InvalidLink(trimmed.to_string()))?;
     if !tme_host(host) {
         return Err(TelegramError::InvalidLink(trimmed.to_string()));
     }
 
-    let segments: Vec<&str> = url
-        .path()
-        .split('/')
-        .filter(|s| !s.is_empty())
-        .collect();
+    let segments: Vec<&str> = url.path().split('/').filter(|s| !s.is_empty()).collect();
 
     let canonical = canonical_public_url(&url, &segments);
 
@@ -85,13 +83,9 @@ fn parse_private_chat_id(chat: &str) -> Result<i64> {
 
 fn canonical_public_url(url: &Url, segments: &[&str]) -> Option<String> {
     match segments {
-        ["s", channel, msg] | [channel, msg] if message_id_from_path(msg).is_some() => {
-            Some(format!(
-                "https://t.me/{}/{}",
-                channel.trim_start_matches('@'),
-                msg
-            ))
-        }
+        ["s", channel, msg] | [channel, msg] if message_id_from_path(msg).is_some() => Some(
+            format!("https://t.me/{}/{}", channel.trim_start_matches('@'), msg),
+        ),
         _ => Some(url.to_string()),
     }
 }
@@ -100,22 +94,21 @@ static TME_URL_RE: OnceLock<Regex> = OnceLock::new();
 
 /// Return every Telegram post URL found in free text.
 pub fn extract_telegram_urls(text: &str) -> Vec<String> {
-    let re = TME_URL_RE.get_or_init(|| {
-        Regex::new(r#"(?i)https?://(?:t\.me|telegram\.me)/[^\s<>"']+"#).unwrap()
-    });
+    let re = TME_URL_RE
+        .get_or_init(|| Regex::new(r#"(?i)https?://(?:t\.me|telegram\.me)/[^\s<>"']+"#).unwrap());
     let mut out = Vec::new();
     for cap in re.find_iter(text) {
-        let s = cap.as_str().trim_end_matches(|c: char| {
-            matches!(c, '.' | ',' | ';' | ')' | ']' | '}')
-        });
+        let s = cap
+            .as_str()
+            .trim_end_matches(|c: char| matches!(c, '.' | ',' | ';' | ')' | ']' | '}'));
         out.push(s.to_string());
     }
     let bare = Regex::new(r#"(?i)(?:^|[\s(])t\.me/[^\s<>"']+"#).unwrap();
     for cap in bare.find_iter(text) {
-        let slice = cap.as_str().trim_start_matches(|c: char| c.is_whitespace() || c == '(');
-        let s = slice.trim_end_matches(|c: char| {
-            matches!(c, '.' | ',' | ';' | ')' | ']' | '}')
-        });
+        let slice = cap
+            .as_str()
+            .trim_start_matches(|c: char| c.is_whitespace() || c == '(');
+        let s = slice.trim_end_matches(|c: char| matches!(c, '.' | ',' | ';' | ')' | ']' | '}'));
         let url = format!("https://{s}");
         if !out.contains(&url) {
             out.push(url);
@@ -169,7 +162,11 @@ mod tests {
     fn private_c_link() {
         let p = parse_telegram_link("https://t.me/c/1234567890/42").unwrap();
         match p {
-            TelegramPostRef::Private { chat_id, message_id, .. } => {
+            TelegramPostRef::Private {
+                chat_id,
+                message_id,
+                ..
+            } => {
                 assert_eq!(chat_id, -1_001_234_567_890);
                 assert_eq!(message_id, 42);
             }
@@ -179,7 +176,8 @@ mod tests {
 
     #[test]
     fn extract_from_text() {
-        let urls = extract_telegram_urls("see https://t.me/telegram/193 and also t.me/durov/5 here");
+        let urls =
+            extract_telegram_urls("see https://t.me/telegram/193 and also t.me/durov/5 here");
         assert_eq!(urls.len(), 2);
     }
 

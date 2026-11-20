@@ -12,6 +12,7 @@ pub enum ExtensionMessage {
     SetSilentAdd { silent_add: bool },
     GrabLinks { html: String, page_url: String },
     DownloadUrl(BrowserHandoff),
+    ProbeVideoFormats { page_url: String },
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -49,6 +50,7 @@ pub enum PipeMessage {
     GetSettings,
     SetSilentAdd { silent_add: bool },
     GrabLinks { html: String, page_url: String },
+    ProbeVideoFormats { page_url: String },
 }
 
 #[derive(Debug, Error)]

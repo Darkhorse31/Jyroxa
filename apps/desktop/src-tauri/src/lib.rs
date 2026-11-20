@@ -4,12 +4,13 @@ mod engine;
 mod launch_args;
 mod launch_dedupe;
 mod platform;
+mod shell_paths;
+mod sidecar_paths;
 mod torrent_host;
 mod video_sidecar;
-mod shell_paths;
 mod window_state;
 
-use engine::{init_engine, run_clipboard_monitor, EngineState};
+use engine::{init_engine, run_clipboard_monitor, run_queue_watchdog, EngineState};
 use std::path::PathBuf;
 use tauri::menu::{Menu, MenuItem};
 use tauri::tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent};
@@ -58,13 +59,15 @@ fn snapshot_window(app: &tauri::AppHandle) -> Option<WindowState> {
     }
     if w.is_maximized().unwrap_or(false) {
         // Keep the last normal size so un-maximizing next time still looks right.
-        let mut prev = load_window_state(app).filter(|s| s.is_worth_saving()).unwrap_or(WindowState {
-            width: window_state::DEFAULT_WIDTH,
-            height: window_state::DEFAULT_HEIGHT,
-            x: None,
-            y: None,
-            maximized: false,
-        });
+        let mut prev = load_window_state(app)
+            .filter(|s| s.is_worth_saving())
+            .unwrap_or(WindowState {
+                width: window_state::DEFAULT_WIDTH,
+                height: window_state::DEFAULT_HEIGHT,
+                x: None,
+                y: None,
+                maximized: false,
+            });
         prev.maximized = true;
         return Some(prev);
     }
@@ -114,7 +117,10 @@ fn restore_window_geometry(w: &tauri::WebviewWindow, saved: Option<WindowState>)
             let _ = w.set_position(PhysicalPosition::new(x, y));
         }
     } else {
-        tracing::warn!(?ws, "ignoring saved window geometry that is off-screen or too small");
+        tracing::warn!(
+            ?ws,
+            "ignoring saved window geometry that is off-screen or too small"
+        );
         reset_window_geometry(w);
     }
     if ws.maximized {
@@ -264,11 +270,7 @@ pub fn run() {
             if let Ok(exe) = std::env::current_exe() {
                 let reg_handle = handle.clone();
                 tauri::async_runtime::spawn(async move {
-                    let settings = reg_handle
-                        .state::<EngineState>()
-                        .0
-                        .get_settings()
-                        .await;
+                    let settings = reg_handle.state::<EngineState>().0.get_settings().await;
                     browser_integration::ensure_browser_integration_on_start(
                         &exe,
                         &settings.browser_integration,
@@ -276,6 +278,7 @@ pub fn run() {
                 });
             }
             tauri::async_runtime::spawn(run_clipboard_monitor(handle.clone()));
+            tauri::async_runtime::spawn(run_queue_watchdog(handle.clone()));
             tauri::async_runtime::spawn(run_tray_updater(handle.clone()));
 
             let product = app.package_info().name.clone();

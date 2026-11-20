@@ -121,9 +121,23 @@ async function boot() {
   const probeTorrentFilesEl = document.getElementById("probe-torrent-files")!;
 
   let torrentOnlyFiles: number[] | undefined;
+  let torrentInfoHash: string | undefined;
+  let addSubmitInFlight = false;
+
+  function normalizeTorrentInput(s: string): string {
+    const t = s.trim();
+    const lower = t.toLowerCase();
+    if (lower.startsWith("file:///")) {
+      return t.slice(8).replace(/\//g, "\\");
+    }
+    if (lower.startsWith("file://")) {
+      return t.slice(7);
+    }
+    return t;
+  }
 
   function isTorrentSource(s: string): boolean {
-    const t = s.trim();
+    const t = normalizeTorrentInput(s);
     if (!t) return false;
     if (t.startsWith("magnet:")) return true;
     if (/^https?:\/\//i.test(t) && t.toLowerCase().includes(".torrent")) return true;
@@ -382,6 +396,7 @@ async function boot() {
         probeCategoryEl.textContent = "torrent";
         probeCategoryEl.className = "probe-badge cat cat-archives";
         renderTorrentFileList(info.files);
+        torrentInfoHash = info.info_hash;
         if (!filenameUserEdited && info.name) {
           addFilenameInput.value = info.name;
         }
@@ -516,6 +531,7 @@ async function boot() {
     folderUserEdited = false;
     addProbeCard.classList.add("hidden");
     torrentOnlyFiles = undefined;
+    torrentInfoHash = undefined;
     probeTorrentFilesEl.classList.add("hidden");
     probeTorrentFilesEl.innerHTML = "";
 
@@ -560,9 +576,11 @@ async function boot() {
 
   formAdd.addEventListener("submit", async (e) => {
     e.preventDefault();
+    if (addSubmitInFlight) return;
+    addSubmitInFlight = true;
     const urls = addUrlsInput.value
       .split("\n")
-      .map((s) => s.trim())
+      .map((s) => normalizeTorrentInput(s))
       .filter(Boolean);
 
     if (urls.length === 0) {
@@ -587,6 +605,7 @@ async function boot() {
       md5,
       http_headers: pendingBrowserHeaders,
       torrent_only_files: torrentOnlyFiles,
+      torrent_info_hash: torrentInfoHash,
     };
 
     try {
@@ -597,6 +616,8 @@ async function boot() {
       await downloadManager.reload();
     } catch (err) {
       showToast(`Error adding download: ${err}`);
+    } finally {
+      addSubmitInFlight = false;
     }
   });
 
@@ -796,7 +817,13 @@ async function boot() {
   });
 
   await listen<string>("external-url", (ev) => {
-    openAddModal(ev.payload);
+    openAddModal(normalizeTorrentInput(ev.payload));
+  });
+
+  await listen<number>("focus-download", async (ev) => {
+    await downloadManager.reload();
+    downloadManager.focusDownload(ev.payload);
+    showToast("This download is already in your queue");
   });
 
   await listen<{

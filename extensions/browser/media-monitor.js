@@ -10,11 +10,37 @@ function mediaKind(url, mime) {
   return "video";
 }
 
+function basenameFromUrl(url) {
+  try {
+    const p = new URL(url).pathname.split("/").pop() || "";
+    return p.includes(".") ? decodeURIComponent(p) : "";
+  } catch {
+    return "";
+  }
+}
+
 function labelFor(entry) {
+  if (entry.label) return entry.label;
   if (entry.resolution) return entry.resolution;
+  const base = basenameFromUrl(entry.url);
+  if (entry.kind === "hls") {
+    if (entry.bandwidth) {
+      return `${entry.resolution || "HLS"} · ${Math.round(entry.bandwidth / 1000)} kbps`;
+    }
+    return base ? `HLS · ${base}` : "HLS stream";
+  }
+  if (entry.kind === "dash") {
+    return base ? `DASH · ${base}` : "DASH stream";
+  }
+  if (entry.kind === "audio") {
+    return base || "Audio";
+  }
+  if (base) return base;
   if (entry.bandwidth) return `${Math.round(entry.bandwidth / 1000)} kbps`;
-  if (entry.size) return formatBytes(entry.size);
-  return entry.kind.toUpperCase();
+  if (entry.size) return `${formatBytes(entry.size)} file`;
+  const ext = entry.url?.match(/\.(\w+)(\?|$)/i)?.[1];
+  if (ext) return `${ext.toUpperCase()} video`;
+  return "Media stream";
 }
 
 export function formatBytes(n) {
