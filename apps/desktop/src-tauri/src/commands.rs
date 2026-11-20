@@ -7,10 +7,10 @@ use crate::browser_integration::{
 };
 use crate::engine::{AddDownloadArgs, AppSettings, DownloadView, EngineState, GrabOptionsDto};
 use crate::platform::reveal_in_file_manager;
-use tauri_plugin_opener::OpenerExt;
 use jyroxa_core::linkgrabber::{LinkInfo, Package};
-use jyroxa_core::ProbeInfo;
 use jyroxa_core::torrent::TorrentProbeInfo;
+use jyroxa_core::ProbeInfo;
+use tauri_plugin_opener::OpenerExt;
 
 #[tauri::command]
 pub async fn get_settings(state: State<'_, EngineState>) -> Result<AppSettings, String> {
@@ -199,10 +199,7 @@ pub async fn default_category_dirs(
 }
 
 #[tauri::command]
-pub async fn open_folder_cmd(
-    state: State<'_, EngineState>,
-    path: String,
-) -> Result<(), String> {
+pub async fn open_folder_cmd(state: State<'_, EngineState>, path: String) -> Result<(), String> {
     let settings = state.0.get_settings().await;
     let fallback = settings.download_dir;
     reveal_in_file_manager(PathBuf::from(&path).as_path(), Some(fallback.as_str()))
@@ -217,9 +214,7 @@ pub async fn get_browser_integration_status(
 }
 
 #[tauri::command]
-pub async fn install_browser_integration_cmd(
-    state: State<'_, EngineState>,
-) -> Result<(), String> {
+pub async fn install_browser_integration_cmd(state: State<'_, EngineState>) -> Result<(), String> {
     let settings = state.0.get_settings().await;
     let exe = std::env::current_exe().map_err(|e| e.to_string())?;
     install_browser_integration(&exe, &settings.browser_integration)
@@ -243,7 +238,11 @@ pub async fn telegram_set_credentials(
     api_id: i32,
     api_hash: String,
 ) -> Result<(), String> {
-    state.0.telegram().set_api_credentials(api_id, api_hash).await;
+    state
+        .0
+        .telegram()
+        .set_api_credentials(api_id, api_hash)
+        .await;
     Ok(())
 }
 
@@ -288,7 +287,12 @@ pub async fn telegram_submit_password(
 
 #[tauri::command]
 pub async fn telegram_sign_out(state: State<'_, EngineState>) -> Result<(), String> {
-    state.0.telegram().sign_out().await.map_err(|e| e.to_string())
+    state
+        .0
+        .telegram()
+        .sign_out()
+        .await
+        .map_err(|e| e.to_string())
 }
 
 #[tauri::command]

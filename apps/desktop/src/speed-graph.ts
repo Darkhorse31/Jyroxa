@@ -1,4 +1,4 @@
-// High-DPI theme-aware smooth canvas speed graph with Catmull-Rom spline and gradient area
+// High-DPI theme-aware speed history with a flat area fill.
 
 import { fmtSpeed } from "./formatters";
 
@@ -158,11 +158,7 @@ export class SpeedGraph {
     this.ctx.lineTo(firstPt.x, h);
     this.ctx.closePath();
 
-    const gradient = this.ctx.createLinearGradient(0, padTop, 0, h);
-    gradient.addColorStop(0, fillColor);
-    gradient.addColorStop(1, "rgba(0, 0, 0, 0)");
-
-    this.ctx.fillStyle = gradient;
+    this.ctx.fillStyle = fillColor;
     this.ctx.fill();
 
     // Highlight current dot at the tip

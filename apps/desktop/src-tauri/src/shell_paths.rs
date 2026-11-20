@@ -123,7 +123,10 @@ mod tests {
         let gone = dir.join("jyroxa-definitely-missing-file.bin");
         let (select, path) = resolve_explorer_target(&gone.to_string_lossy(), None).unwrap();
         assert!(!select);
-        assert_eq!(path, normalize_explorer_path(&gone.parent().unwrap().to_string_lossy()));
+        assert_eq!(
+            path,
+            normalize_explorer_path(&gone.parent().unwrap().to_string_lossy())
+        );
     }
 
     #[test]

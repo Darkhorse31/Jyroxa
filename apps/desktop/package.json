@@ -7,6 +7,10 @@
   "scripts": {
     "dev": "vite",
     "check": "node scripts/check-contract.mjs",
+    "lint": "eslint src",
+    "test": "node --test scripts/design-unit.test.mjs",
+    "test:design": "node scripts/design-v3-verify.mjs",
+    "brand:design": "node scripts/generate-design-brand.mjs && node scripts/generate-fluent-icons.mjs",
     "build": "npm run check && tsc && vite build",
     "preview": "vite preview",
     "tauri": "tauri",
@@ -19,8 +23,14 @@
     "@tauri-apps/plugin-opener": "^2"
   },
   "devDependencies": {
+    "@eslint/js": "^10.0.1",
+    "@fluentui/svg-icons": "^1.1.347",
+    "@resvg/resvg-js": "^2.6.2",
     "@tauri-apps/cli": "^2",
+    "eslint": "^10.15.0",
+    "playwright": "^1.65.1",
     "typescript": "~5.6.3",
+    "typescript-eslint": "^8.73.0",
     "vite": "^6.0.3"
   }
 }

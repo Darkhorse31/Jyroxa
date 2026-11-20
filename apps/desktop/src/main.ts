@@ -11,6 +11,8 @@ import {
   type DownloadFinishedPayload,
   type ProgressPayload,
 } from "./api";
+import { downloadSources, isDownloadSource } from "./sources";
+import { icons } from "./icons";
 import { APP_NAME } from "./brand";
 import {
   DownloadManager,
@@ -30,11 +32,9 @@ let pendingBrowserHeaders: Record<string, string> | undefined;
 
 function resolveTheme(settingsPref?: string): "dark" | "light" {
   if (settingsPref === "light" || settingsPref === "dark") return settingsPref;
+  if (settingsPref === "system") return window.matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light";
   const saved = localStorage.getItem(THEME_KEY) || localStorage.getItem("swiftget-theme");
   if (saved === "light" || saved === "dark") return saved;
-  if (window.matchMedia && window.matchMedia("(prefers-color-scheme: dark)").matches) {
-    return "dark";
-  }
   return "light";
 }
 
@@ -54,6 +54,13 @@ function toggleTheme(graph: SpeedGraph) {
 }
 
 async function boot() {
+  document.querySelectorAll<HTMLElement>("[data-icon]").forEach(el => {
+    const draw = icons[el.dataset.icon as keyof typeof icons];
+    if (draw) el.insertAdjacentHTML("afterbegin", draw(20));
+  });
+  const commandBar = document.querySelector(".command-bar")!;
+  commandBar.appendChild(document.getElementById("btn-settings")!);
+  commandBar.appendChild(document.getElementById("btn-grabber")!);
   // Set window & brand titles
   document.title = APP_NAME;
   const brandTitleEl = document.getElementById("brand-title");
@@ -145,6 +152,7 @@ async function boot() {
       const cb = document.createElement("input");
       cb.type = "checkbox";
       cb.checked = true;
+      cb.setAttribute("aria-label", `Download ${f.path}`);
       cb.dataset.index = String(f.index);
       cb.addEventListener("change", () => {
         if (cb.checked) {
@@ -191,7 +199,7 @@ async function boot() {
 
   if (window.matchMedia) {
     window.matchMedia("(prefers-color-scheme: light)").addEventListener("change", (e) => {
-      if (!localStorage.getItem(THEME_KEY)) {
+      if (currentSettings?.theme === "system") {
         setTheme(e.matches ? "light" : "dark", graph);
       }
     });
@@ -202,6 +210,7 @@ async function boot() {
   let folderUserEdited = false;
   let probeDebounceTimer: ReturnType<typeof setTimeout> | null = null;
   let lastProbedUrl = "";
+  let probeSequence = 0;
 
   // Initialize Download Manager
   const downloadManager = new DownloadManager(
@@ -299,6 +308,11 @@ async function boot() {
 
   btnTheme.addEventListener("click", () => {
     toggleTheme(graph);
+    if (currentSettings) {
+      currentSettings = { ...currentSettings, theme: document.body.dataset.theme || "light" };
+      settingsView.setSettings(currentSettings);
+      void api.setSettings(currentSettings).catch(err => showToast("Could not save theme: " + err));
+    }
   });
 
   btnShortcuts.addEventListener("click", () => {
@@ -313,27 +327,14 @@ async function boot() {
   aboutCloseBtn.addEventListener("click", () => dlgAbout.close());
   aboutOkBtn.addEventListener("click", () => dlgAbout.close());
 
-  // Left Sidebar Filter Clicks
-  document.querySelectorAll<HTMLButtonElement>(".sidebar-item[data-status]").forEach((btn) => {
+  // Primary navigation selects a single view; file type filters remain available.
+  document.querySelectorAll<HTMLButtonElement>(".sidebar-item").forEach(btn => {
     btn.addEventListener("click", () => {
-      document.querySelectorAll(".sidebar-item[data-status]").forEach((b) => {
-        b.classList.remove("active");
-        b.setAttribute("aria-selected", "false");
+      document.querySelectorAll(".sidebar-item").forEach(item => {
+        item.classList.toggle("active", item === btn);
+        item.setAttribute("aria-selected", String(item === btn));
       });
-      btn.classList.add("active");
-      btn.setAttribute("aria-selected", "true");
       downloadManager.setStatusFilter((btn.dataset.status as StatusFilter) || "all");
-    });
-  });
-
-  document.querySelectorAll<HTMLButtonElement>(".sidebar-item[data-category]").forEach((btn) => {
-    btn.addEventListener("click", () => {
-      document.querySelectorAll(".sidebar-item[data-category]").forEach((b) => {
-        b.classList.remove("active");
-        b.setAttribute("aria-selected", "false");
-      });
-      btn.classList.add("active");
-      btn.setAttribute("aria-selected", "true");
       downloadManager.setCategoryFilter((btn.dataset.category as CategoryFilter) || "all");
     });
   });
@@ -359,6 +360,8 @@ async function boot() {
 
   // Live URL Probing and Auto-naming in Add Modal
   async function triggerProbe(url: string) {
+    const sequence = ++probeSequence;
+    const isCurrent = () => sequence === probeSequence && dlgAdd.open;
     const trimmed = url.trim();
     if (!trimmed) {
       addProbeCard.classList.add("hidden");
@@ -373,6 +376,7 @@ async function boot() {
       probeTorrentFilesEl.classList.add("hidden");
       try {
         const info = await api.probeTorrent(trimmed);
+        if (!isCurrent()) return;
         probeLoadingEl.classList.add("hidden");
         probeDetailsEl.classList.remove("hidden");
         probeSizeEl.textContent = `Size: ${fmtBytes(info.total_bytes)}`;
@@ -386,6 +390,7 @@ async function boot() {
           addFilenameInput.value = info.name;
         }
       } catch (err: unknown) {
+        if (!isCurrent()) return;
         probeLoadingEl.classList.add("hidden");
         probeErrorEl.classList.remove("hidden");
         probeErrorMsg.textContent = String((err as Error)?.message || err || "Torrent probe failed");
@@ -413,6 +418,7 @@ async function boot() {
       const info = pendingBrowserHeaders
         ? await api.probeUrlWithHeaders(trimmed, pendingBrowserHeaders)
         : await api.probeUrl(trimmed);
+      if (!isCurrent()) return;
       probeLoadingEl.classList.add("hidden");
       if (info.telegram_login_required) {
         probeDetailsEl.classList.add("hidden");
@@ -438,6 +444,7 @@ async function boot() {
         const currentFolder = addFolderInput.value.trim() || currentSettings?.download_dir || ".";
         try {
           const suggested = await api.suggestSavePath(currentFolder, info.suggested_name);
+          if (!isCurrent()) return;
           const base = suggested.replace(/^.*[\\\/]/, "");
           if (base) finalName = base;
         } catch {
@@ -454,6 +461,7 @@ async function boot() {
         }
       }
     } catch (err: any) {
+      if (!isCurrent()) return;
       probeLoadingEl.classList.add("hidden");
       probeErrorEl.classList.remove("hidden");
       probeErrorMsg.textContent = String(err?.message || err || "Probing failed");
@@ -473,6 +481,7 @@ async function boot() {
   }
 
   addUrlsInput.addEventListener("input", () => {
+    ++probeSequence;
     const firstUrl = addUrlsInput.value.split("\n")[0].trim();
     if (firstUrl) {
       debouncedProbe(firstUrl);
@@ -512,9 +521,13 @@ async function boot() {
 
   // Open Add Modal
   function openAddModal(prefillUrl?: string) {
+    ++probeSequence;
+    if (probeDebounceTimer) clearTimeout(probeDebounceTimer);
+    pendingBrowserHeaders = undefined;
     filenameUserEdited = false;
     folderUserEdited = false;
     addProbeCard.classList.add("hidden");
+    btnProbeTelegramSettings.classList.add("hidden");
     torrentOnlyFiles = undefined;
     probeTorrentFilesEl.classList.add("hidden");
     probeTorrentFilesEl.innerHTML = "";
@@ -543,8 +556,33 @@ async function boot() {
   }
 
   btnAdd.addEventListener("click", () => openAddModal());
+  const quickSource = document.getElementById("quick-source") as HTMLInputElement;
+  document.getElementById("quick-download")!.addEventListener("submit", e => {
+    e.preventDefault();
+    const source = quickSource.value.trim();
+    if (!source) { openAddModal(); return; }
+    if (!isDownloadSource(source)) {
+      showToast({ title: "Check your link", message: "Use an HTTP or HTTPS link, a magnet link, or a full path to a torrent file.", type: "error" });
+      quickSource.focus();
+      return;
+    }
+    openAddModal(source);
+    quickSource.value = "";
+  });
+  document.getElementById("pause-all")!.addEventListener("click", () => void downloadManager.setAllPaused(true));
+  document.getElementById("resume-all")!.addEventListener("click", () => void downloadManager.setAllPaused(false));
+  document.getElementById("open-download-folder")!.addEventListener("click", async () => {
+    const folder = currentSettings?.download_dir || currentSettings?.default_folder;
+    if (folder && !await openFolder(folder)) showToast("Could not open your download folder. Check its location in Settings.");
+  });
+  document.querySelector(".speed-details")!.addEventListener("toggle", () => graph.draw());
   addCloseBtn.addEventListener("click", () => dlgAdd.close());
   addCancelBtn.addEventListener("click", () => dlgAdd.close());
+  dlgAdd.addEventListener("close", () => {
+    ++probeSequence;
+    if (probeDebounceTimer) clearTimeout(probeDebounceTimer);
+    pendingBrowserHeaders = undefined;
+  });
 
   addAutoConnCb.addEventListener("change", () => {
     addConnectionsInput.disabled = addAutoConnCb.checked;
@@ -567,6 +605,14 @@ async function boot() {
 
     if (urls.length === 0) {
       showToast("Please specify at least one valid URL");
+      return;
+    }
+    if (urls.some(url => !isDownloadSource(url))) {
+      showToast({ title: "Check your links", message: "Each line must contain a download link, magnet, or full torrent file path.", type: "error" });
+      return;
+    }
+    if (torrentOnlyFiles?.length === 0) {
+      showToast({ title: "Choose a file", message: "Select at least one file from the torrent.", type: "error" });
       return;
     }
 
@@ -596,7 +642,7 @@ async function boot() {
       showToast(`Download queued: ${filename}`);
       await downloadManager.reload();
     } catch (err) {
-      showToast(`Error adding download: ${err}`);
+      showToast({ title: "Could not add download", message: String(err), type: "error" });
     }
   });
 
@@ -649,14 +695,24 @@ async function boot() {
       "";
 
     if (text) {
-      const urls = text.split("\n").map((s) => s.trim()).filter((s) => s.startsWith("http"));
+      const urls = downloadSources(text);
       if (urls.length === 1) {
         openAddModal(urls[0]);
       } else if (urls.length > 1) {
-        setDrawer("grabber");
-        linkGrabberView.setInputUrl(text);
+        openAddModal(urls.join("\n"));
       }
     }
+  });
+
+  await listen<{ type: string; paths?: string[] }>("tauri://drag-drop", ev => {
+    dragOverlay.classList.add("hidden");
+    const paths = ev.payload.paths?.filter(path => /\.torrent$/i.test(path));
+    if (paths?.length) openAddModal(paths.join("\n"));
+  });
+
+  document.getElementById("pick-torrent")!.addEventListener("click", async () => {
+    const selected = await open({ multiple: false, filters: [{ name: "Torrent files", extensions: ["torrent"] }] });
+    if (typeof selected === "string") openAddModal(selected);
   });
 
   // Global Keyboard Shortcuts
@@ -667,6 +723,11 @@ async function boot() {
       activeEl instanceof HTMLTextAreaElement ||
       activeEl instanceof HTMLSelectElement;
 
+    const dialogOpen = Boolean(document.querySelector("dialog[open]"));
+    if (dialogOpen && e.key !== "Escape") return;
+    const interactive = activeEl instanceof HTMLElement &&
+      (activeEl.matches("button, a, summary, [role=menuitem]") || activeEl.isContentEditable);
+
     // Ctrl+N: New download
     if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "n") {
       e.preventDefault();
@@ -676,9 +737,9 @@ async function boot() {
     else if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "v" && !isInputActive) {
       try {
         const text = await readText();
-        if (text && (text.startsWith("http://") || text.startsWith("https://"))) {
+        if (text && downloadSources(text).length > 0) {
           e.preventDefault();
-          openAddModal(text.trim());
+          openAddModal(downloadSources(text).join("\n"));
         }
       } catch {
         // clipboard access
@@ -701,15 +762,15 @@ async function boot() {
       downloadManager.selectAll();
     }
     // Space: Pause/Resume selected downloads
-    else if (e.key === " " && !isInputActive) {
+    else if (e.key === " " && !isInputActive && !interactive) {
       e.preventDefault();
       const selectedIds = downloadManager.getSelectedIds();
       if (selectedIds.length > 0) {
-        downloadManager.pauseSelected();
+        void downloadManager.toggleSelectedPaused();
       }
     }
     // Delete: Remove selected downloads
-    else if (e.key === "Delete" && !isInputActive) {
+    else if (e.key === "Delete" && !isInputActive && !interactive) {
       e.preventDefault();
       const selectedIds = downloadManager.getSelectedIds();
       if (selectedIds.length > 0) {
@@ -798,6 +859,7 @@ async function boot() {
   await listen<string>("external-url", (ev) => {
     openAddModal(ev.payload);
   });
+  await listen("open-settings", () => setDrawer("settings"));
 
   await listen<{
     url: string;
@@ -807,13 +869,13 @@ async function boot() {
     user_agent?: string;
   }>("browser-handoff", (ev) => {
     const p = ev.payload;
+    openAddModal(p.url);
     pendingBrowserHeaders = {
       ...(p.user_agent ? { "User-Agent": p.user_agent } : {}),
       ...(p.referrer ? { Referer: p.referrer } : {}),
       ...(p.cookies ? { Cookie: p.cookies } : {}),
     };
     filenameUserEdited = Boolean(p.filename);
-    openAddModal(p.url);
     if (p.filename) {
       addFilenameInput.value = p.filename;
     }
