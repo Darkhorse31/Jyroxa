@@ -31,16 +31,18 @@ try {
     } else {
         Write-Warning "Missing $hostSrc - portable zip will omit jyroxa-native-host.exe"
     }
+    $sidecarStage = Join-Path $stage "sidecars"
+    New-Item -ItemType Directory -Path $sidecarStage -Force | Out-Null
     $cliSrc = Join-Path $targetDir "jyroxa.exe"
     if (Test-Path $cliSrc) {
-        Copy-Item $cliSrc (Join-Path $stage "jyroxa.exe") -Force
+        Copy-Item $cliSrc (Join-Path $sidecarStage "jyroxa.exe") -Force
     } else {
         Write-Warning "Missing $cliSrc - portable zip will omit jyroxa.exe (torrent sidecar)"
     }
     $sidecarDir = Join-Path $PSScriptRoot "src-tauri"
     foreach ($name in @("yt-dlp.exe", "ffmpeg.exe")) {
         $p = Join-Path $sidecarDir $name
-        if (Test-Path $p) { Copy-Item $p (Join-Path $stage $name) -Force }
+        if (Test-Path $p) { Copy-Item $p (Join-Path $sidecarStage $name) -Force }
     }
 
     New-Item -ItemType Directory -Path $distDir -Force | Out-Null

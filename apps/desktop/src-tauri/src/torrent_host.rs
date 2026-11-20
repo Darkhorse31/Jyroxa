@@ -53,10 +53,12 @@ fn jyroxa_cli_exe() -> PathBuf {
     }
     if let Ok(exe) = std::env::current_exe() {
         if let Some(dir) = exe.parent() {
-            for name in ["jyroxa.exe", "jyroxa-cli.exe"] {
-                let c = dir.join(name);
-                if c.is_file() {
-                    return c;
+            for sub in ["", "sidecars"] {
+                for name in ["jyroxa.exe", "jyroxa-cli.exe"] {
+                    let c = dir.join(sub).join(name);
+                    if c.is_file() {
+                        return c;
+                    }
                 }
             }
         }
