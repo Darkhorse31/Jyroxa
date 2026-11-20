@@ -165,3 +165,21 @@ export function extractProtocol(url: string): string {
     return "—";
   }
 }
+
+const PAGE_NOT_FILE_MSG =
+  "This link is a web page; no direct file found";
+
+/** Normalize backend error text for display on download cards. */
+export function formatDownloadError(raw: string | undefined | null): string | undefined {
+  if (!raw) return undefined;
+  const lower = raw.toLowerCase();
+  if (
+    raw.includes("PAGE_NOT_FILE") ||
+    lower.includes("text/html") ||
+    lower.includes("web page") ||
+    lower.includes("not a direct file")
+  ) {
+    return PAGE_NOT_FILE_MSG;
+  }
+  return raw;
+}

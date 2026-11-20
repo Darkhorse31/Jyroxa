@@ -16,6 +16,7 @@ import {
   fmtDuration,
   fmtEta,
   fmtSpeed,
+  formatDownloadError,
   getCategoryIcon,
   getFileCategory,
 } from "./formatters";
@@ -562,7 +563,8 @@ export class DownloadCard {
       if (ev.average_bps !== undefined) this.avgSpeedBps = ev.average_bps;
     } else if (ev.type === "failed") {
       this.view.status = "failed";
-      this.view.error = ev.error ?? "Download failed";
+      this.view.error =
+        formatDownloadError(ev.error) ?? ev.error ?? "Download failed";
       this.view.speed_bps = 0;
       this.smoothedSpeed = 0;
       this.smoothedEta = null;
@@ -688,7 +690,8 @@ export class DownloadCard {
     if (d.error) {
       this.errorBox.classList.remove("hidden");
       const errText = this.errorBox.querySelector(".error-text");
-      if (errText) errText.textContent = d.error;
+      const displayErr = formatDownloadError(d.error) ?? d.error;
+      if (errText) errText.textContent = displayErr;
     } else {
       this.errorBox.classList.add("hidden");
     }

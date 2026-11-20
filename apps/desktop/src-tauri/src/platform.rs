@@ -17,6 +17,8 @@ mod win {
     use std::path::Path;
     use std::sync::atomic::{AtomicU32, Ordering};
 
+    use crate::shell_paths;
+
     const ES_CONTINUOUS: u32 = 0x8000_0000;
     const ES_SYSTEM_REQUIRED: u32 = 0x0000_0001;
     const ERROR_ALREADY_EXISTS: u32 = 183;
@@ -96,27 +98,14 @@ mod win {
         }
     }
 
-    pub fn open_folder(path: &Path) -> Result<(), String> {
-        let path = path
-            .canonicalize()
-            .unwrap_or_else(|_| path.to_path_buf());
-        std::process::Command::new("explorer")
-            .arg(path.as_os_str())
-            .spawn()
-            .map(|_| ())
-            .map_err(|e| e.to_string())
-    }
-
-    pub fn open_file_in_folder(path: &Path) -> Result<(), String> {
-        let path = path
-            .canonicalize()
-            .unwrap_or_else(|_| path.to_path_buf());
-        std::process::Command::new("explorer")
-            .arg("/select,")
-            .arg(path.as_os_str())
-            .spawn()
-            .map(|_| ())
-            .map_err(|e| e.to_string())
+    pub fn reveal_in_file_manager(
+        path: &Path,
+        download_dir_fallback: Option<&str>,
+    ) -> Result<(), String> {
+        shell_paths::reveal_path_in_shell(
+            &path.to_string_lossy(),
+            download_dir_fallback,
+        )
     }
 
     pub struct SingleInstanceGuard(*mut std::ffi::c_void);
@@ -223,18 +212,17 @@ mod win {
 mod win {
     use std::path::Path;
 
+    use crate::shell_paths;
+
     pub fn set_prevent_sleep(_enabled: bool) {}
     pub fn sync_prevent_sleep(_active: usize, _on: bool) {}
     pub fn set_run_at_startup(_n: &str, _exe: &Path, _en: bool, _min: bool) {}
-    pub fn open_folder(path: &Path) -> Result<(), String> {
-        std::process::Command::new("xdg-open")
-            .arg(path)
-            .spawn()
-            .map(|_| ())
-            .map_err(|e| e.to_string())
-    }
-    pub fn open_file_in_folder(path: &Path) -> Result<(), String> {
-        open_folder(path)
+    pub fn reveal_in_file_manager(
+        path: &Path,
+        download_dir_fallback: Option<&str>,
+    ) -> Result<(), String> {
+        let _ = download_dir_fallback;
+        shell_paths::reveal_path_in_shell(&path.to_string_lossy(), None)
     }
 
     pub struct SingleInstanceGuard;

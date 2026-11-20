@@ -6,9 +6,11 @@
   "type": "module",
   "scripts": {
     "dev": "vite",
-    "build": "tsc && vite build",
+    "check": "node scripts/check-contract.mjs",
+    "build": "npm run check && tsc && vite build",
     "preview": "vite preview",
-    "tauri": "tauri"
+    "tauri": "tauri",
+    "e2e": "node scripts/e2e.mjs"
   },
   "dependencies": {
     "@tauri-apps/api": "^2",

@@ -308,6 +308,29 @@
       </li>
     </menu>
 
+    <!-- Remove downloads confirmation -->
+    <dialog id="dlg-remove" class="app-dialog">
+      <form method="dialog" class="dialog-card">
+        <div class="dialog-header">
+          <div class="dialog-title-group">
+            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="3 6 5 6 21 6"></polyline><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"></path></svg>
+            <h3 id="remove-dialog-title">Remove download?</h3>
+          </div>
+          <button type="button" id="remove-close-btn" class="btn-icon" aria-label="Close dialog">
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="18" y1="6" x2="6" y2="18"></line><line x1="6" y1="6" x2="18" y2="18"></line></svg>
+          </button>
+        </div>
+        <div class="dialog-body">
+          <p id="remove-dialog-body" class="remove-dialog-message"></p>
+        </div>
+        <div class="dialog-actions">
+          <button type="button" id="remove-cancel" class="btn secondary">Cancel</button>
+          <button type="button" id="remove-list-only" class="btn primary">Remove</button>
+          <button type="button" id="remove-and-delete" class="btn danger">Remove and delete file</button>
+        </div>
+      </form>
+    </dialog>
+
     <!-- Add Download Modal Dialog -->
     <dialog id="dlg-add" class="app-dialog">
       <form method="dialog" id="form-add" class="dialog-card">
