@@ -131,6 +131,14 @@ enum TorrentCmd {
         /// Download only these file indices (repeat for each).
         #[arg(short = 'f', long = "only-file")]
         only_files: Vec<usize>,
+        #[arg(long)]
+        peer_limit: Option<usize>,
+        #[arg(long)]
+        no_merge_trackers: bool,
+        #[arg(long)]
+        seed: bool,
+        #[arg(long, default_value_t = 1.0)]
+        ratio_limit: f64,
     },
     /// Repeat timed downloads (for benchmarks).
     Bench {
@@ -214,7 +222,24 @@ async fn real_main() -> Result<()> {
                 input,
                 output,
                 only_files,
-            } => torrent_cli::run_torrent_get(input, output, only_files).await,
+                peer_limit,
+                no_merge_trackers,
+                seed,
+                ratio_limit,
+            } => {
+                torrent_cli::run_torrent_get(
+                    input,
+                    output,
+                    only_files,
+                    torrent_cli::TorrentGetOptions {
+                        peer_limit,
+                        merge_trackers: !no_merge_trackers,
+                        allow_seeding: seed,
+                        ratio_limit,
+                    },
+                )
+                .await
+            }
             TorrentCmd::Bench {
                 input,
                 output,

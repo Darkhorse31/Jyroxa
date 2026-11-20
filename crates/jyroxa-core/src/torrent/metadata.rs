@@ -56,7 +56,7 @@ pub async fn probe_torrent_source(input: &str) -> Result<TorrentProbeInfo> {
         .await?;
 
     tokio::time::timeout(
-        Duration::from_secs(120),
+        Duration::from_secs(crate::torrent::sidecar_proto::METADATA_TIMEOUT_SECS),
         handle.inner().wait_until_initialized(),
     )
     .await

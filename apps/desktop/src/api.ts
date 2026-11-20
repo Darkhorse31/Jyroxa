@@ -49,6 +49,7 @@ export interface DownloadView {
   torrent_peers?: number;
   torrent_seeds?: number;
   torrent_ratio?: number;
+  status_note?: string;
 }
 
 export interface AppSettings {

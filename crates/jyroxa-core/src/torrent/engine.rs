@@ -106,7 +106,12 @@ impl TorrentSession {
         opts.peer_limit = Some(tuning.peer_limit);
         opts.client_name_and_version = Some(format!("Jyroxa {}", env!("CARGO_PKG_VERSION")));
         opts.disable_local_service_discovery = false;
-        opts.dht = Some(DhtSessionConfig::default());
+        // Ephemeral DHT per session folder: global default persistence locks across
+        // concurrent jyroxa.exe sidecars and breaks parallel downloads / meta probes.
+        opts.dht = Some(DhtSessionConfig {
+            persistence: None,
+            ..Default::default()
+        });
         opts.disable_trackers = false;
 
         if tuning.merge_builtin_trackers {
@@ -291,5 +296,9 @@ impl TorrentSession {
 
     pub fn output_root(&self) -> &PathBuf {
         &self.output_root
+    }
+
+    pub fn tuning(&self) -> &TorrentTuning {
+        &self.tuning
     }
 }

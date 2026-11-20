@@ -190,6 +190,8 @@ pub struct DownloadView {
     pub torrent_seeds: Option<u32>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub torrent_ratio: Option<f64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub status_note: Option<String>,
 }
 
 fn default_http_kind() -> String {
@@ -697,8 +699,15 @@ impl DesktopEngine {
                 TaskStatus::Running | TaskStatus::Starting => TaskStatus::Queued,
                 other => other,
             };
+            let is_torrent = crate::torrent_host::primary_is_torrent(&item.urls);
             let (downloaded, total, segments) = if status == TaskStatus::Paused {
                 Self::progress_from_state(&output)
+            } else if is_torrent {
+                (
+                    crate::torrent_host::torrent_bytes_on_disk(&output),
+                    None,
+                    Vec::new(),
+                )
             } else {
                 (0, None, Vec::new())
             };
@@ -726,7 +735,7 @@ impl DesktopEngine {
                 speed_bps: 0.0,
                 segments,
                 error: None,
-                kind: if crate::torrent_host::primary_is_torrent(&item.urls) {
+                kind: if is_torrent {
                     "torrent".into()
                 } else {
                     default_http_kind()
@@ -734,6 +743,7 @@ impl DesktopEngine {
                 torrent_peers: None,
                 torrent_seeds: None,
                 torrent_ratio: None,
+                status_note: None,
                 telegram_chat_id: None,
                 telegram_message_id: None,
             };
@@ -809,6 +819,7 @@ impl DesktopEngine {
             torrent_peers: None,
             torrent_seeds: None,
             torrent_ratio: None,
+            status_note: None,
             telegram_chat_id,
             telegram_message_id,
         };
@@ -928,6 +939,7 @@ impl DesktopEngine {
             torrent_peers: None,
             torrent_seeds: None,
             torrent_ratio: None,
+            status_note: None,
             telegram_chat_id,
             telegram_message_id,
         };
