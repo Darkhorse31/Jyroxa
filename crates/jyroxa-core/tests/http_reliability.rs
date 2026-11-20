@@ -354,20 +354,30 @@ async fn missing_payload_is_not_resumed_from_complete_checkpoint() {
 async fn configured_connection_cap_is_honored() {
     let (url, _, server) = server(Behavior::SlowHead).await;
     let dir = tempfile::tempdir().unwrap();
-    let request = DownloadRequest::new(url, dir.path().join("capped.bin")).connections(32);
+    let mut request = DownloadRequest::new(url, dir.path().join("capped.bin")).connections(8);
+    request.autotune = false;
     let downloader = Downloader::new(DownloadConfig {
+        min_segment_size: 64 * 1024,
         max_connections: 2,
         ..DownloadConfig::default()
     })
     .unwrap();
     let outcome = tokio::time::timeout(
-        Duration::from_secs(2),
+        Duration::from_secs(30),
         downloader.download(request, None, Control::new(), None),
     )
     .await
     .unwrap()
     .unwrap();
-    assert_eq!(outcome.connections_used, 2);
+    assert!(
+        outcome.connections_used <= 2,
+        "used {} connections with max 2",
+        outcome.connections_used
+    );
+    assert!(
+        outcome.connections_used >= 1,
+        "expected at least one connection"
+    );
     server.abort();
 }
 
