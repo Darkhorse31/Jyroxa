@@ -3,7 +3,6 @@
 use std::collections::{HashMap, HashSet};
 use std::time::Duration;
 
-use crate::segment::PROBE_MIN_REMAINING;
 
 #[derive(Debug, Clone)]
 pub struct TunerInput {
@@ -28,16 +27,33 @@ const GAIN: f64 = 0.03;
 const GAIN_HIGH: f64 = 0.10;
 const REPROBE_TICKS: usize = 6;
 const CAP_RELAX_TICKS: usize = 60;
+/// Above this aggregate throughput, extra connections usually add contention only.
+pub const SATURATED_THROUGHPUT_BPS: f64 = 200.0 * 1024.0 * 1024.0;
 
 pub fn initial_connections(
     _total: u64,
     max_connections: usize,
     remembered: Option<usize>,
 ) -> usize {
+    initial_connections_with_throughput(_total, max_connections, remembered, None)
+}
+
+/// Prefer a remembered count when it saturated the link (or was already wide).
+/// A narrow memory from a slow 1-conn probe must not pin autotune — explore.
+pub fn initial_connections_with_throughput(
+    _total: u64,
+    max_connections: usize,
+    remembered: Option<usize>,
+    remembered_bps: Option<f64>,
+) -> usize {
     let max_connections = max_connections.max(1);
     let default = DEFAULT_START_CONNECTIONS.min(max_connections);
-    match remembered {
-        Some(n) if n > 0 => n.clamp(1, max_connections),
+    match (remembered, remembered_bps) {
+        (Some(n), Some(bps)) if n > 0 && bps >= SATURATED_THROUGHPUT_BPS => {
+            n.clamp(1, max_connections)
+        }
+        (Some(n), _) if n >= DEFAULT_START_CONNECTIONS => n.clamp(1, max_connections),
+        (Some(n), None) if n > 0 => n.clamp(1, max_connections),
         _ => default,
     }
 }
@@ -84,6 +100,17 @@ impl Tuner {
         }
     }
 
+    /// Host memory already saw wire-saturated throughput at `target` — do not ramp
+    /// up from cold-start under-samples that look like headroom.
+    pub fn hold_saturated_from_memory(&mut self, remembered_bps: f64) {
+        if remembered_bps >= SATURATED_THROUGHPUT_BPS {
+            self.baseline = Some(remembered_bps);
+            self.holding = true;
+            self.hold_ticks = 0;
+            self.measured.insert(self.target, remembered_bps);
+        }
+    }
+
     pub fn target(&self) -> usize {
         self.target
     }
@@ -112,7 +139,9 @@ impl Tuner {
     }
 
     fn probing_viable(&self, input: &TunerInput) -> bool {
-        input.bytes_remaining >= PROBE_MIN_REMAINING
+        // Use the split floor (not the larger probe floor) so growth from a
+        // remembered 1-conn start remains possible on medium transfers.
+        input.bytes_remaining >= crate::segment::SPLIT_MIN_REMAINING
             && (input.throughput <= 0.0 || input.bytes_remaining as f64 / input.throughput >= 1.5)
     }
 
@@ -199,8 +228,14 @@ impl Tuner {
 
         if self.baseline.is_none() {
             self.baseline = Some(speed);
-            self.holding = false;
-            self.hold_ticks = 0;
+            if speed >= SATURATED_THROUGHPUT_BPS {
+                // Wire already saturated at the current count — do not grow.
+                self.holding = true;
+                self.hold_ticks = 0;
+            } else {
+                self.holding = false;
+                self.hold_ticks = 0;
+            }
         }
 
         if self.holding {
@@ -212,6 +247,20 @@ impl Tuner {
             }
             self.holding = false;
             self.hold_ticks = 0;
+        }
+
+        // Wire-saturated baseline (including host-memory): never grow further.
+        // Also hold when the latest sample alone is already past the line.
+        if self
+            .baseline
+            .is_some_and(|b| b >= SATURATED_THROUGHPUT_BPS)
+            || speed >= SATURATED_THROUGHPUT_BPS
+        {
+            self.holding = true;
+            self.hold_ticks = 0;
+            return TunerOutput {
+                target: self.target,
+            };
         }
 
         let next = self.target.saturating_mul(2).min(self.host_cap);
@@ -320,6 +369,20 @@ mod tests {
             assert_eq!(initial_connections(total, 2, None), 2);
             assert_eq!(initial_connections(total, 32, Some(24)), 24);
         }
+    }
+
+    #[test]
+    fn slow_one_conn_memory_does_not_pin_autotune_narrow() {
+        let slow = 200.0 * 1024.0;
+        assert_eq!(
+            initial_connections_with_throughput(1 << 30, 32, Some(1), Some(slow)),
+            8
+        );
+        let saturated = 250.0 * 1024.0 * 1024.0;
+        assert_eq!(
+            initial_connections_with_throughput(1 << 30, 32, Some(1), Some(saturated)),
+            1
+        );
     }
 
     #[test]
@@ -434,5 +497,13 @@ mod tests {
             parse_retry_after("120", Duration::from_secs(30)),
             Some(Duration::from_secs(30))
         );
+    }
+
+    #[test]
+    fn saturated_throughput_does_not_grow_connections() {
+        let mut t = Tuner::new(8, 32, None);
+        let saturated = 250.0 * 1024.0 * 1024.0;
+        run(&mut t, 40, |_| saturated);
+        assert_eq!(t.target(), 8);
     }
 }

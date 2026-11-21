@@ -135,6 +135,24 @@ async fn interruptible_sleep(rx: &mut watch::Receiver<Cmd>, dur: Duration) -> Re
     }
 }
 
+async fn cancellable_http(
+    fut: impl std::future::Future<Output = reqwest::Result<reqwest::Response>>,
+    control: &mut watch::Receiver<Cmd>,
+) -> Result<reqwest::Response> {
+    tokio::pin!(fut);
+    loop {
+        tokio::select! {
+            biased;
+            changed = control.changed() => {
+                if changed.is_err() || matches!(*control.borrow(), Cmd::Cancelled) {
+                    return Err(Error::Cancelled);
+                }
+            }
+            resp = &mut fut => return resp.map_err(Error::from),
+        }
+    }
+}
+
 const SEGMENT_WRITE_BUF: usize = 2 * 1024 * 1024;
 const RETRY_AFTER_CAP: Duration = Duration::from_secs(30);
 const PROGRESS_EMIT_INTERVAL: Duration = Duration::from_millis(250);
@@ -298,10 +316,12 @@ async fn probe(
     url: &str,
     timeout: Duration,
     extra_headers: &Option<ExtraHeaders>,
+    control: &mut watch::Receiver<Cmd>,
 ) -> Result<Meta> {
-    match probe_metadata(client, url, timeout, extra_headers).await {
+    match probe_metadata(client, url, timeout, extra_headers, control).await {
         Ok(m) => Ok(m),
-        Err(_) => probe_streaming_fallback(client, url, timeout, extra_headers).await,
+        Err(Error::Cancelled) => Err(Error::Cancelled),
+        Err(_) => probe_streaming_fallback(client, url, timeout, extra_headers, control).await,
     }
 }
 
@@ -351,14 +371,18 @@ async fn start_lead_get(
     url: &str,
     timeout: Duration,
     extra_headers: &Option<ExtraHeaders>,
+    control: &mut watch::Receiver<Cmd>,
 ) -> Result<(Meta, reqwest::Response)> {
     use reqwest::header as h;
-    let resp = apply_extra_headers(client.get(url), extra_headers)
-        .header(h::RANGE, "bytes=0-")
-        .header(h::ACCEPT_ENCODING, "identity")
-        .timeout(timeout)
-        .send()
-        .await?;
+    let resp = cancellable_http(
+        apply_extra_headers(client.get(url), extra_headers)
+            .header(h::RANGE, "bytes=0-")
+            .header(h::ACCEPT_ENCODING, "identity")
+            .timeout(timeout)
+            .send(),
+        control,
+    )
+    .await?;
     let meta = meta_from_lead_response(&resp)?;
     Ok((meta, resp))
 }
@@ -376,8 +400,14 @@ async fn probe_mirror(
         if attempt > 0 {
             interruptible_sleep(&mut control, backoff_delay(attempt)).await?;
         }
-        if let Ok((meta, resp)) =
-            start_lead_get(client, url, config.request_timeout, extra_headers).await
+        if let Ok((meta, resp)) = start_lead_get(
+            client,
+            url,
+            config.request_timeout,
+            extra_headers,
+            &mut control,
+        )
+        .await
         {
             if meta.supports_ranges && meta.size.map(|s| s > 0).unwrap_or(false) {
                 return Ok(MirrorPick::Lead {
@@ -387,9 +417,21 @@ async fn probe_mirror(
                 });
             }
             drop(resp);
+        } else if matches!(*control.borrow(), Cmd::Cancelled) {
+            return Err(Error::Cancelled);
         }
-        if let Ok(meta) = probe(client, url, config.request_timeout, extra_headers).await {
+        if let Ok(meta) = probe(
+            client,
+            url,
+            config.request_timeout,
+            extra_headers,
+            &mut control,
+        )
+        .await
+        {
             return Ok(MirrorPick::Meta { index, meta });
+        } else if matches!(*control.borrow(), Cmd::Cancelled) {
+            return Err(Error::Cancelled);
         }
     }
     Err(Error::AllMirrorsFailed)
@@ -415,16 +457,20 @@ async fn probe_metadata(
     url: &str,
     timeout: Duration,
     extra_headers: &Option<ExtraHeaders>,
+    control: &mut watch::Receiver<Cmd>,
 ) -> Result<Meta> {
     use reqwest::header as h;
     // One small GET discovers size and actual range support in a single round
     // trip. HEAD is frequently slow or advertises ranges that GET ignores.
-    let resp = apply_extra_headers(client.get(url), extra_headers)
-        .header(h::RANGE, "bytes=0-0")
-        .header(h::ACCEPT_ENCODING, "identity")
-        .timeout(timeout)
-        .send()
-        .await?;
+    let resp = cancellable_http(
+        apply_extra_headers(client.get(url), extra_headers)
+            .header(h::RANGE, "bytes=0-0")
+            .header(h::ACCEPT_ENCODING, "identity")
+            .timeout(timeout)
+            .send(),
+        control,
+    )
+    .await?;
     let status = resp.status();
     if !status.is_success() {
         return Err(Error::Status(status.as_u16()));
@@ -463,11 +509,14 @@ async fn probe_streaming_fallback(
     url: &str,
     timeout: Duration,
     extra_headers: &Option<ExtraHeaders>,
+    control: &mut watch::Receiver<Cmd>,
 ) -> Result<Meta> {
     use reqwest::header as h;
-    let resp = apply_extra_headers(client.get(url).timeout(timeout), extra_headers)
-        .send()
-        .await?;
+    let resp = cancellable_http(
+        apply_extra_headers(client.get(url).timeout(timeout), extra_headers).send(),
+        control,
+    )
+    .await?;
     if !resp.status().is_success() {
         return Err(Error::Status(resp.status().as_u16()));
     }
@@ -905,12 +954,27 @@ impl Downloader {
 
         let host_cap = self.host_stats.host_cap(&host);
         let remembered = self.host_stats.best_connections(&host);
+        let remembered_bps = self.host_stats.best_throughput(&host);
         let initial_conn = if req.autotune {
-            let wide = crate::tuner::initial_connections(total, max_conn, remembered);
+            let wide = crate::tuner::initial_connections_with_throughput(
+                total,
+                max_conn,
+                remembered,
+                remembered_bps,
+            );
             wide.clamp(1, host_cap.unwrap_or(max_conn).clamp(1, max_conn))
         } else {
             max_conn
         };
+        // Saturated host memory already picked the count — skip the tuner loop so
+        // autotune matches a plain N-conn download on short transfers.
+        let mut supervise_req = req.clone();
+        if req.autotune
+            && remembered == Some(initial_conn)
+            && remembered_bps.is_some_and(|b| b >= crate::tuner::SATURATED_THROUGHPUT_BPS)
+        {
+            supervise_req.autotune = false;
+        }
         // Allow enough live segments for the most connections this download may use.
         let steal_cap = max_conn.saturating_mul(4).max(8);
 
@@ -1034,7 +1098,7 @@ impl Downloader {
         // Supervisor: samples throughput, auto-tunes, and checkpoints state.
         let supervisor = tokio::spawn(supervise(
             ctx.clone(),
-            req.clone(),
+            supervise_req,
             meta.clone(),
             state_path.clone(),
             host.clone(),
@@ -1114,20 +1178,21 @@ impl Downloader {
         // The supervisor is aborted above, so its epilogue cannot save results.
         // Save only after successful writes and checksum verification, including
         // short downloads that finish before a complete measurement window.
-        if req.autotune && !host.is_empty() {
-            let measured = *ctx.tuning_result.lock().unwrap();
-            if let Some((count, throughput)) = measured {
-                self.host_stats.observe(&host, count, throughput);
-            } else if ctx.target.load(Ordering::Acquire) == initial_conn
-                && !ctx.tuning_had_errors.load(Ordering::Relaxed)
-                && ctx.recent_errors.load(Ordering::Relaxed) == 0
-                && ctx.recent_throttles.load(Ordering::Relaxed) == 0
-            {
-                self.host_stats.observe(
-                    &host,
-                    initial_conn,
-                    total.saturating_sub(already) as f64 / elapsed.as_secs_f64().max(1e-9),
-                );
+        if !host.is_empty() {
+            let avg_bps = total.saturating_sub(already) as f64 / elapsed.as_secs_f64().max(1e-9);
+            if req.autotune {
+                let measured = *ctx.tuning_result.lock().unwrap();
+                if let Some((count, throughput)) = measured {
+                    self.host_stats.observe(&host, count, throughput);
+                } else if ctx.target.load(Ordering::Acquire) == initial_conn
+                    && !ctx.tuning_had_errors.load(Ordering::Relaxed)
+                    && ctx.recent_errors.load(Ordering::Relaxed) == 0
+                    && ctx.recent_throttles.load(Ordering::Relaxed) == 0
+                {
+                    self.host_stats.observe(&host, initial_conn, avg_bps);
+                }
+            } else {
+                self.host_stats.observe(&host, connections_used, avg_bps);
             }
         }
 
@@ -1891,13 +1956,19 @@ async fn supervise(
 
     let cap = host_cap.unwrap_or(max_conn).clamp(1, max_conn);
     let mut tuner = if req.autotune {
-        Some(Tuner::new(initial_conn, max_conn, Some(cap)))
+        let mut t = Tuner::new(initial_conn, max_conn, Some(cap));
+        if let Some(bps) = host_stats.best_throughput(&host) {
+            t.hold_saturated_from_memory(bps);
+        }
+        Some(t)
     } else {
         None
     };
     let mut target = initial_conn;
     ctx.target.store(target, Ordering::Release);
     ctx.final_connections.fetch_max(target, Ordering::Release);
+    let mut last_persist = Instant::now();
+    let mut last_persisted_target = target;
 
     let mut ctrl_rx = ctx.control.subscribe();
     loop {
@@ -1970,8 +2041,6 @@ async fn supervise(
             ));
         }
 
-        persist_state(&ctx, &req, &meta, &state_path, target);
-
         let errors = ctx.recent_errors.swap(0, Ordering::Relaxed);
         let throttles = ctx.recent_throttles.swap(0, Ordering::Relaxed);
         if errors > 0 || throttles > 0 {
@@ -2022,6 +2091,14 @@ async fn supervise(
             if throttles > 0 && !host.is_empty() {
                 host_stats.record_throttle(&host, t.host_cap());
             }
+        }
+
+        // Checkpoint on connection changes or ~1s — not every 50ms tune tick
+        // (disk sync dominated short loopback autotune runs).
+        if target != last_persisted_target || last_persist.elapsed() >= Duration::from_secs(1) {
+            persist_state(&ctx, &req, &meta, &state_path, target);
+            last_persist = Instant::now();
+            last_persisted_target = target;
         }
 
         reconcile_workers(&ctx);

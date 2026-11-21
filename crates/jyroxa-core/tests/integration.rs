@@ -19,7 +19,7 @@ use futures::stream::unfold;
 use jyroxa_core::download::{preallocate, Control};
 use jyroxa_core::events::{self, ProgressEvent};
 use jyroxa_core::{
-    DownloadConfig, DownloadRequest, DownloadState, Downloader, Error, SegmentState,
+    DownloadConfig, DownloadRequest, DownloadState, Downloader, Error, HostStats, SegmentState,
 };
 
 #[derive(Clone)]
@@ -935,9 +935,9 @@ async fn multi_connection_beats_one_under_per_conn_rate_limit_and_stall() {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn autotune_matches_single_connection_on_unlimited_server() {
-    // 48 MiB so the run measures throughput, not the few ms of extra
-    // connection setup that dominate a 12 MiB loopback transfer (~40 ms).
-    let data = make_data(48 * 1024 * 1024);
+    // Large enough that supervisor/scheduling jitter stays inside the 97% band
+    // on fast loopback (48 MiB finished in ~70–140 ms and flaked).
+    let data = make_data(192 * 1024 * 1024);
     let addr = spawn_server(data.clone()).await;
     let url = format!("http://{addr}/file");
     let dir = tempfile::tempdir().unwrap();
@@ -949,9 +949,12 @@ async fn autotune_matches_single_connection_on_unlimited_server() {
         ..DownloadConfig::default()
     };
 
+    let host_stats = Arc::new(HostStats::in_memory());
     let one = dir.path().join("one.bin");
     let t0 = std::time::Instant::now();
-    let eng = Downloader::new(config.clone()).unwrap();
+    let eng = Downloader::new(config.clone())
+        .unwrap()
+        .with_host_stats(host_stats.clone());
     let mut req1 = DownloadRequest::new(url.clone(), one.clone()).connections(1);
     req1.autotune = false;
     eng.download(req1, None, Control::new(), None)
@@ -961,17 +964,26 @@ async fn autotune_matches_single_connection_on_unlimited_server() {
 
     let auto = dir.path().join("auto.bin");
     let t0 = std::time::Instant::now();
-    let eng = Downloader::new(config).unwrap();
+    let eng = Downloader::new(config).unwrap().with_host_stats(host_stats);
     let mut req_auto = DownloadRequest::new(url, auto.clone()).connections(16);
     req_auto.autotune = true;
-    eng.download(req_auto, None, Control::new(), None)
+    let outcome = eng
+        .download(req_auto, None, Control::new(), None)
         .await
         .expect("auto");
     let t_auto = t0.elapsed();
 
     assert_eq!(std::fs::read(&auto).unwrap(), data);
     assert_eq!(std::fs::read(&one).unwrap(), data);
-    let _ = (t1, t_auto);
+    let bps_one = data.len() as f64 / t1.as_secs_f64();
+    let bps_auto = data.len() as f64 / t_auto.as_secs_f64();
+    assert!(
+        bps_auto >= bps_one * 0.97,
+        "auto {bps_auto} B/s ({} conns) should be >= 97% of 1-conn {bps_one} B/s (wall {:?} vs {:?})",
+        outcome.connections_used,
+        t_auto,
+        t1
+    );
 }
 
 #[derive(Clone)]
@@ -1010,13 +1022,15 @@ async fn serve_per_conn_cap(State(st): State<PerConnCapState>, headers: HeaderMa
     });
     let body = Body::from_stream(stream);
 
+    // Chunked paced body: a Content-Length header panics hyper when a client
+    // aborts early (steal / cancel), which tears down sibling connections.
+    let _ = body_len;
     if let Some(r) = range {
         if let Some((s, e)) = parse_range(r, total) {
             return Response::builder()
                 .status(StatusCode::PARTIAL_CONTENT)
                 .header(header::CONTENT_RANGE, format!("bytes {s}-{e}/{total}"))
                 .header(header::ACCEPT_RANGES, "bytes")
-                .header(header::CONTENT_LENGTH, body_len.to_string())
                 .body(body)
                 .unwrap();
         }
@@ -1024,7 +1038,7 @@ async fn serve_per_conn_cap(State(st): State<PerConnCapState>, headers: HeaderMa
 
     Response::builder()
         .status(StatusCode::OK)
-        .header(header::CONTENT_LENGTH, body_len.to_string())
+        .header(header::ACCEPT_RANGES, "bytes")
         .body(body)
         .unwrap()
 }
@@ -1058,9 +1072,12 @@ async fn autotune_scales_on_per_connection_rate_cap() {
         ..DownloadConfig::default()
     };
 
+    let host_stats = Arc::new(HostStats::in_memory());
     let one = dir.path().join("one.bin");
     let t0 = std::time::Instant::now();
-    let eng = Downloader::new(config.clone()).unwrap();
+    let eng = Downloader::new(config.clone())
+        .unwrap()
+        .with_host_stats(host_stats.clone());
     let mut req1 = DownloadRequest::new(url.clone(), one.clone()).connections(1);
     req1.autotune = false;
     eng.download(req1, None, Control::new(), None)
@@ -1070,7 +1087,7 @@ async fn autotune_scales_on_per_connection_rate_cap() {
 
     let auto = dir.path().join("auto.bin");
     let t0 = std::time::Instant::now();
-    let eng = Downloader::new(config).unwrap();
+    let eng = Downloader::new(config).unwrap().with_host_stats(host_stats);
     let mut req_auto = DownloadRequest::new(url, auto.clone()).connections(8);
     req_auto.autotune = true;
     let outcome = eng
@@ -1087,7 +1104,11 @@ async fn autotune_scales_on_per_connection_rate_cap() {
         "auto should scale past 1 connection on per-conn caps, used {}",
         outcome.connections_used
     );
-    let _ = (t1, t_auto, bps_one, bps_auto);
+    assert!(
+        bps_auto >= bps_one * 1.9,
+        "auto {bps_auto} B/s ({} conns) should clearly beat 1-conn {bps_one} B/s",
+        outcome.connections_used,
+    );
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]

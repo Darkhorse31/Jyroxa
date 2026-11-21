@@ -1,5 +1,5 @@
 $ErrorActionPreference = "Stop"
-. C:\Users\lenovo\.jyroxa-tools\env.ps1
+. C:\Users\Prateek\.jyroxa-tools\env.ps1
 $root = (Resolve-Path (Join-Path $PSScriptRoot "..")).Path
 $jyroxa = Join-Path $root "target\release\jyroxa.exe"
 if (-not (Test-Path $jyroxa)) { throw "build jyroxa.exe first" }
@@ -12,15 +12,15 @@ $debianTorrent = "https://cdimage.debian.org/debian-cd/current/amd64/bt-cd/debia
 $ubuntuTorrent = "https://releases.ubuntu.com/24.04.3/ubuntu-24.04.3-desktop-amd64.iso.torrent"
 # Official BBB torrent moved; use the documented Big Buck Bunny magnet (same swarm as prior Blender case).
 $blenderTorrent = "magnet:?xt=urn:btih:dd8255DC812C8117559A4BB6580F7CB599B87A64&dn=Big+Buck+Bunny"
-# DHT-only Debian netinst (no tr=)
-$debianDhtMagnet = "magnet:?xt=urn:btih:8cbf5c46714d0c5fd7df22c87a5cfab3d540c74d"
+# DHT-only Debian netinst (no tr=); hash must match current cdimage .torrent
+$debianDhtMagnet = "magnet:?xt=urn:btih:7acf8fb590b2060dd9c3146ef770169d593433b0"
 $bigBuckMagnet = "magnet:?xt=urn:btih:dd8255dc81c8117f5eecb9d6bfdb10faea1d4a1e&dn=Big+Buck+Bunny&tr=udp%3A%2F%2Fexplodie.org%3A6969&tr=udp%3A%2F%2Ftracker.coppersurfer.tk%3A6969&tr=udp%3A%2F%2Ftracker.empire-js.us%3A1337&tr=udp%3A%2F%2Ftracker.opentrackr.org%3A1337&tr=udp%3A%2F%2Ftracker.leechers-paradise.org%3A6969&tr=udp%3A%2F%2Ftracker.pirateparty.gr%3A6969&tr=udp%3A%2F%2Ftracker.cyberia.is%3A6969&tr=udp%3A%2F%2Fopen.demonii.si%3A1337"
 
 $cases = @(
     @{ Name = "debian-torrent"; Source = $debianTorrent; CapSec = 90 }
     @{ Name = "ubuntu-torrent"; Source = $ubuntuTorrent; CapSec = 120 }
     @{ Name = "blender-torrent"; Source = $blenderTorrent; CapSec = 120 }
-    @{ Name = "debian-dht-magnet"; Source = $debianDhtMagnet; CapSec = 180 }
+    @{ Name = "debian-dht-magnet"; Source = $debianDhtMagnet; CapSec = 600 }
     @{ Name = "big-buck-bunny"; Source = $bigBuckMagnet; CapSec = 120 }
 )
 

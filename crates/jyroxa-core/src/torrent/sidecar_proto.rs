@@ -1,6 +1,8 @@
 //! Machine-readable progress lines from `jyroxa torrent get` (stderr).
 
 pub const METADATA_TIMEOUT_SECS: u64 = 300;
+/// Cold DHT routing tables often need longer than tracker-assisted probes.
+pub const DHT_COLD_METADATA_TIMEOUT_SECS: u64 = 600;
 pub const STALL_TIMEOUT_SECS: u64 = 120;
 
 #[derive(Clone, Debug, PartialEq, Eq)]

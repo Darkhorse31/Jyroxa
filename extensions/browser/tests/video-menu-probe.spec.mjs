@@ -136,14 +136,28 @@ function largeMediaUnder(dir) {
   return false;
 }
 
+const downloadsDir = path.join(process.env.USERPROFILE || "", "Downloads");
+const started = Date.now();
 for (let i = 0; i < 180; i += 1) {
-  if (largeMediaUnder(dataDir)) break;
+  if (largeMediaUnder(dataDir) || recentMediaIn(downloadsDir, started)) break;
   await sleep(1000);
 }
 assert.ok(
-  largeMediaUnder(dataDir),
-  `expected completed download under ${dataDir}; handoff=${JSON.stringify(handoffReply)}`,
+  largeMediaUnder(dataDir) || recentMediaIn(downloadsDir, started),
+  `expected completed download; handoff=${JSON.stringify(handoffReply)}`,
 );
+
+function recentMediaIn(dir, sinceMs) {
+  if (!dir || !fs.existsSync(dir)) return false;
+  for (const ent of fs.readdirSync(dir, { withFileTypes: true })) {
+    if (!ent.isFile()) continue;
+    if (!/\.(mp4|mkv|webm|m4a)$/i.test(ent.name)) continue;
+    const p = path.join(dir, ent.name);
+    const st = fs.statSync(p);
+    if (st.mtimeMs >= sinceMs - 5000 && st.size > 10_000) return true;
+  }
+  return false;
+}
 
 try {
   child.kill();

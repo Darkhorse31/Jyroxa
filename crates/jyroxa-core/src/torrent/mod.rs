@@ -22,12 +22,15 @@ pub use magnet::{
     normalize_torrent_input, parse_info_hash_hex,
 };
 #[cfg(feature = "torrent-engine")]
-pub use metadata::probe_torrent_source;
+pub use metadata::{
+    isolated_dht_session_dir, probe_torrent_source, probe_torrent_source_with, TorrentProbeOptions,
+};
 pub use probe_types::{TorrentFileProbe, TorrentProbeInfo};
 #[cfg(feature = "torrent-engine")]
 pub use runner::{run_until_done_with_stall, wait_initialized_with_progress};
 pub use sidecar_proto::{
     parse_error_line, parse_progress_line, stall_user_message, TorrentProgressLine,
-    TorrentProgressPhase, METADATA_TIMEOUT_SECS, STALL_TIMEOUT_SECS,
+    TorrentProgressPhase, DHT_COLD_METADATA_TIMEOUT_SECS, METADATA_TIMEOUT_SECS,
+    STALL_TIMEOUT_SECS,
 };
 pub use trackers::{builtin_trackers, merge_tracker_lists, BUILTIN_TRACKERS};

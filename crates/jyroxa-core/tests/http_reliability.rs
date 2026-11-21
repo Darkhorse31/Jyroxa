@@ -11,7 +11,8 @@ use axum::routing::get;
 use axum::Router;
 use bytes::Bytes;
 use futures::stream;
-use jyroxa_core::{Control, DownloadConfig, DownloadRequest, Downloader};
+
+use jyroxa_core::{Control, DownloadConfig, DownloadRequest, Downloader, HostStats};
 
 const SIZE: u64 = 4 * 1024 * 1024;
 
@@ -70,7 +71,8 @@ async fn serve(State(state): State<ServerState>, headers: HeaderMap) -> Response
     };
     // Only the tiny bytes=0-0 metadata check is exempt; open-ended lead ranges misbehave.
     let metadata_probe = start == 0 && !last.is_empty() && last.parse::<u64>().ok() == Some(0);
-    if metadata_probe && matches!(state.behavior, Behavior::StallMetadata) {
+    let open_lead = start == 0 && last.is_empty();
+    if (metadata_probe || open_lead) && matches!(state.behavior, Behavior::StallMetadata) {
         tokio::time::sleep(Duration::from_secs(20)).await;
     }
     let request = if metadata_probe {
@@ -354,30 +356,24 @@ async fn missing_payload_is_not_resumed_from_complete_checkpoint() {
 async fn configured_connection_cap_is_honored() {
     let (url, _, server) = server(Behavior::SlowHead).await;
     let dir = tempfile::tempdir().unwrap();
-    let mut request = DownloadRequest::new(url, dir.path().join("capped.bin")).connections(8);
+    let mut request = DownloadRequest::new(url, dir.path().join("capped.bin")).connections(32);
     request.autotune = false;
     let downloader = Downloader::new(DownloadConfig {
-        min_segment_size: 64 * 1024,
         max_connections: 2,
         ..DownloadConfig::default()
     })
-    .unwrap();
+    .unwrap()
+    .with_host_stats(Arc::new(HostStats::with_file(
+        dir.path().join("hoststats.json"),
+    )));
     let outcome = tokio::time::timeout(
-        Duration::from_secs(30),
+        Duration::from_secs(2),
         downloader.download(request, None, Control::new(), None),
     )
     .await
     .unwrap()
     .unwrap();
-    assert!(
-        outcome.connections_used <= 2,
-        "used {} connections with max 2",
-        outcome.connections_used
-    );
-    assert!(
-        outcome.connections_used >= 1,
-        "expected at least one connection"
-    );
+    assert_eq!(outcome.connections_used, 2);
     server.abort();
 }
 
