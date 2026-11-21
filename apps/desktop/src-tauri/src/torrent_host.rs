@@ -60,10 +60,12 @@ pub async fn probe_torrent_via_sidecar(input: &str) -> Result<TorrentProbeInfo, 
             cli.display()
         )));
     }
-    let out = Command::new(&cli)
-        .args(["torrent", "meta", input])
+    let mut cmd = Command::new(&cli);
+    cmd.args(["torrent", "meta", input])
         .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
+        .stderr(Stdio::piped());
+    crate::process_spawn::configure_tokio(&mut cmd);
+    let out = cmd
         .output()
         .await
         .map_err(|e| Error::other(e.to_string()))?;
@@ -139,7 +141,9 @@ pub async fn spawn_torrent_sidecar(
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .kill_on_drop(true);
+    crate::process_spawn::configure_tokio(&mut cmd);
     let mut child = cmd.spawn().map_err(|e| Error::other(e.to_string()))?;
+    crate::process_spawn::bind_lifetime_to_app(&child);
 
     if let Some(stdout) = child.stdout.take() {
         tokio::spawn(async move {
@@ -192,10 +196,18 @@ pub async fn spawn_torrent_sidecar(
     if status.success() {
         Ok(())
     } else {
-        let msg =
-            last_error_line.unwrap_or_else(|| format!("torrent sidecar exited with {}", status));
-        Err(Error::other(msg))
+        let _ = status;
+        Err(Error::other(sidecar_failure_message(last_error_line)))
     }
+}
+
+fn sidecar_failure_message(last_error_line: Option<String>) -> String {
+    if let Some(msg) = last_error_line.filter(|s| !s.trim().is_empty()) {
+        return msg;
+    }
+    // Console closed / killed / crash — no structured stderr from the sidecar.
+    "The torrent engine stopped unexpectedly. Your download was interrupted. Click Retry to resume."
+        .into()
 }
 
 #[derive(Clone, Debug)]
@@ -315,5 +327,16 @@ mod tests {
         };
         let parsed = parse_progress_line(&raw.format()).unwrap();
         assert_eq!(parsed.peers, 4);
+    }
+
+    #[test]
+    fn unexpected_sidecar_exit_is_plain_english_with_retry() {
+        let msg = sidecar_failure_message(None);
+        assert!(msg.contains("Retry"), "{msg}");
+        assert!(msg.contains("unexpectedly"), "{msg}");
+        assert_eq!(
+            sidecar_failure_message(Some("peer timeout".into())),
+            "peer timeout"
+        );
     }
 }

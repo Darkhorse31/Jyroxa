@@ -547,7 +547,10 @@ impl DesktopEngine {
             }
             inner.view.status = TaskStatus::Queued;
             inner.view.error = None;
-            inner.view.downloaded = 0;
+            // Torrents resume from the on-disk session; keep progress for HTTP retries only reset.
+            if inner.view.kind != "torrent" {
+                inner.view.downloaded = 0;
+            }
             inner.view.speed_bps = 0.0;
             inner.control = None;
             AddDownloadArgs {

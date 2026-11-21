@@ -37,6 +37,17 @@ fn main() {
     let rustc = args.get(1).cloned().unwrap_or_else(|| "rustc".to_string());
 
     let mut rustc_args: Vec<String> = args.drain(2..).collect();
+    // Cargo + clippy may pass `clippy-driver.exe rustc.exe <rustc-args>`.
+    // clippy-driver expects the same argv as rustc (no nested rustc path).
+    if rustc.to_ascii_lowercase().contains("clippy-driver") {
+        if let Some(first) = rustc_args.first() {
+            let f = first.to_ascii_lowercase();
+            if f.ends_with("rustc.exe") || f.ends_with("\\rustc") || f.ends_with("/rustc") || f == "rustc"
+            {
+                rustc_args.remove(0);
+            }
+        }
+    }
     if let Some(wrap) = workspace_toolbin() {
         if !rustc_args.iter().any(|a| a.starts_with("-Cdlltool=")) {
             // Cargo may nest a workspace wrapper before the compiler path.

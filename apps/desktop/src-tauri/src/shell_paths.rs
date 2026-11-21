@@ -58,6 +58,7 @@ pub fn spawn_explorer_reveal(select_file: bool, explorer_path: &str) -> Result<(
     } else {
         cmd.arg(explorer_path);
     }
+    crate::process_spawn::configure_std(&mut cmd);
     cmd.spawn()
         .map(|_| ())
         .map_err(|e| format!("Failed to open Explorer: {e}"))

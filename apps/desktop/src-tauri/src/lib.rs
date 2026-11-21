@@ -4,6 +4,7 @@ mod engine;
 mod launch_args;
 mod launch_dedupe;
 mod platform;
+mod process_spawn;
 mod shell_paths;
 mod sidecar_paths;
 mod torrent_host;
