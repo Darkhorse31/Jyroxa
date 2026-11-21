@@ -1,0 +1,2 @@
+/* RT_MANIFEST = 24 — avoid winuser.h (not on PATH for llvm-windres). */
+1 24 "test-harness.manifest"
