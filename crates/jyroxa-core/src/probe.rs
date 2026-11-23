@@ -188,10 +188,8 @@ mod tests {
             .unwrap();
         if headers.contains_key("range") {
             *resp.status_mut() = StatusCode::PARTIAL_CONTENT;
-            resp.headers_mut().insert(
-                "Content-Range",
-                HeaderValue::from_static("bytes 0-0/4242"),
-            );
+            resp.headers_mut()
+                .insert("Content-Range", HeaderValue::from_static("bytes 0-0/4242"));
         }
         resp
     }
@@ -206,8 +204,7 @@ mod tests {
 
     #[tokio::test]
     async fn probe_uses_content_disposition_with_headers() {
-        let app = Router::new()
-            .route("/file", get(attachment_get).head(attachment_head));
+        let app = Router::new().route("/file", get(attachment_get).head(attachment_head));
         let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
         let addr = listener.local_addr().unwrap();
         tokio::spawn(async move {
@@ -218,14 +215,10 @@ mod tests {
         let url = format!("http://{addr}/file?id=abc");
         let mut headers = HashMap::new();
         headers.insert("Cookie".into(), "sess=1".into());
-        let info = probe_url_with_headers(
-            &client,
-            &url,
-            &headers,
-            std::time::Duration::from_secs(5),
-        )
-        .await
-        .unwrap();
+        let info =
+            probe_url_with_headers(&client, &url, &headers, std::time::Duration::from_secs(5))
+                .await
+                .unwrap();
         assert_eq!(info.suggested_name, "pixeldrain.bin");
         assert_eq!(info.size, Some(4242));
     }

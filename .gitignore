@@ -36,6 +36,9 @@ android/keystore.properties
 # Task specs (local only)
 .tasks/
 
+# Local verification captures (not site content)
+reports/
+
 # GNU toolchain helpers: track scripts under .toolbin/, ignore generated artifacts
 .toolbin/winlibs/
 .toolbin/defs/

@@ -99,9 +99,11 @@
     host.querySelector(".jx-vgrab-menu")?.remove();
     const menu = document.createElement("div");
     menu.className = "jx-vgrab-menu";
-    menu.innerHTML = '<div class="jx-vgrab-muted">Loading…</div>';
+    menu.innerHTML = '<div class="jx-vgrab-muted">Finding qualities…</div>';
     host.appendChild(menu);
 
+  const loadMenu = async () => {
+    menu.innerHTML = '<div class="jx-vgrab-muted">Finding qualities…</div>';
     const pageUrl = location.href;
     const blobLike = isBlobOrEmptySrc(video);
     const res = await api.runtime.sendMessage({
@@ -112,29 +114,42 @@
     });
 
     menu.innerHTML = "";
-    const items = res?.items || [];
-    if (!items.length) {
+    const items = (res?.items || []).filter(
+      (it) => it.label && it.label !== "VIDEO" && it.label !== "video",
+    );
+    if (res?.error && !items.length) {
+      const err = document.createElement("div");
+      err.className = "jx-vgrab-error";
+      err.textContent = res.error;
+      menu.appendChild(err);
+      const retry = document.createElement("button");
+      retry.type = "button";
+      retry.className = "jx-vgrab-item";
+      retry.textContent = "Retry";
+      retry.addEventListener("click", () => void loadMenu());
+      menu.appendChild(retry);
+    } else if (!items.length) {
       const note = document.createElement("div");
       note.className = "jx-vgrab-muted";
-      note.textContent = blobLike
-        ? "No direct URL — page handoff"
-        : "No media URLs captured yet";
+      note.textContent =
+        res?.error ||
+        (blobLike
+          ? "No qualities found for this page"
+          : "No media URLs captured yet");
       menu.appendChild(note);
-      if (blobLike) {
-        const row = document.createElement("button");
-        row.type = "button";
-        row.className = "jx-vgrab-item";
-        row.textContent = "Resolve page with Jyroxa";
-        row.addEventListener("click", () => void handoffPage(pageUrl, menu));
-        menu.appendChild(row);
-      }
+      const retry = document.createElement("button");
+      retry.type = "button";
+      retry.className = "jx-vgrab-item";
+      retry.textContent = "Retry";
+      retry.addEventListener("click", () => void loadMenu());
+      menu.appendChild(retry);
     } else {
       for (const it of items) {
         const row = document.createElement("button");
         row.type = "button";
         row.className = "jx-vgrab-item";
         const size = it.sizeLabel ? ` (${it.sizeLabel})` : "";
-        row.textContent = `${it.label || it.kind}${size}`;
+        row.textContent = `${it.label}${size}`;
         row.addEventListener("click", () => void handoffDirect(it, pageUrl, menu));
         menu.appendChild(row);
       }
@@ -146,6 +161,9 @@
     hideSite.textContent = "Hide on this site";
     hideSite.addEventListener("click", () => void hideOnSite(menu));
     menu.appendChild(hideSite);
+  };
+
+    await loadMenu();
   }
 
   async function hideOnSite(menu) {

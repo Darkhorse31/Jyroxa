@@ -773,6 +773,7 @@ export class SettingsView {
         `Manifest: ${st.host_manifest_present ? "yes" : "no"}`,
         `Chrome: ${st.chrome_registry ? "registered" : "missing"}`,
         `Edge: ${st.edge_registry ? "registered" : "missing"}`,
+        `Brave: ${st.brave_registry ? "registered" : "missing"}`,
         `Firefox: ${st.firefox_registry ? "registered" : "missing"}`,
         `Host exe: ${st.native_host_installed ? "found" : "missing"}`,
       ].join(" · ");

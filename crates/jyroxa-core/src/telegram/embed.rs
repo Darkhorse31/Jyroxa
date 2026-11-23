@@ -9,9 +9,7 @@ use super::TelegramMediaItem;
 
 fn video_src_re() -> &'static Regex {
     static RE: OnceLock<Regex> = OnceLock::new();
-    RE.get_or_init(|| {
-        Regex::new(r#"(?is)<video[^>]+src="([^"]+)""#).unwrap()
-    })
+    RE.get_or_init(|| Regex::new(r#"(?is)<video[^>]+src="([^"]+)""#).unwrap())
 }
 
 fn document_block_re() -> &'static Regex {
@@ -167,11 +165,7 @@ async fn enrich_sizes(client: &reqwest::Client, items: &mut [TelegramMediaItem])
         if item.size.is_some() {
             continue;
         }
-        if let Ok(resp) = client
-            .head(&item.download_url)
-            .send()
-            .await
-        {
+        if let Ok(resp) = client.head(&item.download_url).send().await {
             if let Some(len) = resp.content_length() {
                 item.size = Some(len);
             }
@@ -250,13 +244,16 @@ mod tests {
 
     #[test]
     fn parse_fixture_video() {
-        let html = fs::read_to_string(
-            concat!(env!("CARGO_MANIFEST_DIR"), "/tests/fixtures/telegram_embed_video.html"),
-        )
+        let html = fs::read_to_string(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/tests/fixtures/telegram_embed_video.html"
+        ))
         .expect("fixture");
         let items = parse_embed_html(&html, "https://t.me/telegram/193").unwrap();
         assert!(!items.is_empty());
-        assert!(items[0].download_url.contains("telesco.pe") || items[0].download_url.contains(".mp4"));
+        assert!(
+            items[0].download_url.contains("telesco.pe") || items[0].download_url.contains(".mp4")
+        );
         assert!(items[0].filename.ends_with(".mp4") || items[0].filename.contains("mp4"));
     }
 }

@@ -20,17 +20,12 @@ use crate::events::ProgressEvent;
 pub type TaskId = u64;
 
 /// Task priority. Higher priority tasks start first when slots free up.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, PartialOrd, Ord)]
 pub enum TaskPriority {
     Low,
+    #[default]
     Normal,
     High,
-}
-
-impl Default for TaskPriority {
-    fn default() -> Self {
-        TaskPriority::Normal
-    }
 }
 
 /// A single unit of scheduled work.

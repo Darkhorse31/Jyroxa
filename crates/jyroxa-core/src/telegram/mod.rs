@@ -15,8 +15,8 @@ pub use link::{extract_telegram_urls, is_telegram_post_url, parse_telegram_link}
 
 #[cfg(feature = "telegram")]
 pub use mtproto::{
-    TelegramAccountView, TelegramAuthState, TelegramClientPool, TelegramLoginStep,
-    download_private_media, resolve_private_media,
+    download_private_media, resolve_private_media, TelegramAccountView, TelegramAuthState,
+    TelegramClientPool, TelegramLoginStep,
 };
 #[cfg(feature = "telegram")]
 pub use session::SessionStore;
@@ -74,7 +74,10 @@ impl TelegramMediaItem {
 }
 
 fn embed_error_needs_mtproto_fallback(err: &TelegramError) -> bool {
-    matches!(err, TelegramError::MediaNeedsAccount | TelegramError::NoMedia)
+    matches!(
+        err,
+        TelegramError::MediaNeedsAccount | TelegramError::NoMedia
+    )
 }
 
 /// Resolve a Telegram post URL into zero or more downloadable media items.
@@ -94,9 +97,7 @@ pub async fn resolve_post(
     let post = parse_telegram_link(input_url)?;
     match post {
         TelegramPostRef::Public {
-            embed_url,
-            raw_url,
-            ..
+            embed_url, raw_url, ..
         } => fetch_embed_media(client, &embed_url, &raw_url).await,
         TelegramPostRef::Private { .. } => Err(TelegramError::LoginRequired),
     }
@@ -155,7 +156,6 @@ pub async fn resolve_post_with_pool(
         }
     }
 }
-
 
 /// Probe size/filename for a Telegram post without starting a download.
 #[cfg(feature = "telegram")]

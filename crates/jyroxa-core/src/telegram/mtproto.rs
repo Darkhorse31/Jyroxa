@@ -15,7 +15,9 @@ use tokio::sync::Mutex;
 use tokio::task::JoinHandle;
 
 use super::error::{Result, TelegramError};
-use super::session::{export_memory_session, memory_from_persisted, PersistedTelegramSession, SessionStore};
+use super::session::{
+    export_memory_session, memory_from_persisted, PersistedTelegramSession, SessionStore,
+};
 use super::TelegramMediaItem;
 
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
@@ -96,7 +98,10 @@ impl TelegramClientPool {
                 .unwrap_or(false);
         TelegramAccountView {
             connected,
-            phone: meta.as_ref().map(|m| m.phone.clone()).or_else(|| auth.phone.clone()),
+            phone: meta
+                .as_ref()
+                .map(|m| m.phone.clone())
+                .or_else(|| auth.phone.clone()),
             display_name: meta.as_ref().and_then(|m| m.display_name.clone()),
             api_id: auth.api_id.or_else(|| meta.as_ref().map(|m| m.api_id)),
         }
@@ -153,10 +158,7 @@ impl TelegramClientPool {
         let client = self.client().await?;
         match client.sign_in(&token, &code).await {
             Ok(user) => {
-                let name = user
-                    .first_name()
-                    .unwrap_or("Telegram user")
-                    .to_string();
+                let name = user.first_name().unwrap_or("Telegram user").to_string();
                 self.finalize_login(name).await?;
                 Ok(TelegramLoginStep::Done)
             }
@@ -183,10 +185,7 @@ impl TelegramClientPool {
             .check_password(password_token, password.as_bytes())
             .await
             .map_err(|e| TelegramError::other(e.to_string()))?;
-        let name = user
-            .first_name()
-            .unwrap_or("Telegram user")
-            .to_string();
+        let name = user.first_name().unwrap_or("Telegram user").to_string();
         self.finalize_login(name).await?;
         Ok(TelegramLoginStep::Done)
     }
@@ -289,7 +288,9 @@ impl TelegramClientPool {
             .ok_or(TelegramError::NotFound)?;
         let mut items = Vec::new();
         if let Some(media) = message.media() {
-            items.push(media_item_from_grammers(&media, raw_url, chat_id, message_id)?);
+            items.push(media_item_from_grammers(
+                &media, raw_url, chat_id, message_id,
+            )?);
         }
         if items.is_empty() {
             return Err(TelegramError::NoMedia);
@@ -320,9 +321,7 @@ impl TelegramClientPool {
             .next()
             .flatten()
             .ok_or(TelegramError::NotFound)?;
-        let media = message
-            .media()
-            .ok_or(TelegramError::NoMedia)?;
+        let media = message.media().ok_or(TelegramError::NoMedia)?;
         if let Some(parent) = output.parent() {
             std::fs::create_dir_all(parent)?;
         }
@@ -353,14 +352,13 @@ impl TelegramClientPool {
         message_id: u32,
         output: &Path,
     ) -> Result<u64> {
-        self.download_mtproto_media(chat_id, message_id, output).await
+        self.download_mtproto_media(chat_id, message_id, output)
+            .await
     }
 
     async fn client(&self) -> Result<Client> {
         let guard = self.pool.lock().await;
-        let running = guard
-            .as_ref()
-            .ok_or(TelegramError::LoginRequired)?;
+        let running = guard.as_ref().ok_or(TelegramError::LoginRequired)?;
         Ok(running.client.clone())
     }
 
@@ -383,9 +381,7 @@ impl TelegramClientPool {
         let runner_handle = tokio::spawn(async move {
             runner.run().await;
         });
-        let updates_handle = tokio::spawn(async move {
-            while updates.recv().await.is_some() {}
-        });
+        let updates_handle = tokio::spawn(async move { while updates.recv().await.is_some() {} });
         *self.pool.lock().await = Some(RunningPool {
             session,
             client,
@@ -446,11 +442,7 @@ fn media_item_from_grammers(
     let (filename, size, mime) = match media {
         Media::Document(doc) => document_meta(doc),
         Media::Photo(photo) => photo_meta(photo, message_id),
-        _ => (
-            format!("telegram_{message_id}"),
-            None,
-            None,
-        ),
+        _ => (format!("telegram_{message_id}"), None, None),
     };
     Ok(TelegramMediaItem {
         download_url: String::new(),
@@ -481,7 +473,8 @@ pub async fn resolve_private_media(
     message_id: u32,
     raw_url: &str,
 ) -> Result<Vec<TelegramMediaItem>> {
-    pool.resolve_private_media(chat_id, message_id, raw_url).await
+    pool.resolve_private_media(chat_id, message_id, raw_url)
+        .await
 }
 
 pub async fn download_private_media(
@@ -490,5 +483,6 @@ pub async fn download_private_media(
     message_id: u32,
     output: &Path,
 ) -> Result<u64> {
-    pool.download_private_media(chat_id, message_id, output).await
+    pool.download_private_media(chat_id, message_id, output)
+        .await
 }

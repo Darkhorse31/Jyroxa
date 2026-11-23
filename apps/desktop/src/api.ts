@@ -100,6 +100,7 @@ export interface BrowserIntegrationStatus {
   host_manifest_present: boolean;
   chrome_registry: boolean;
   edge_registry: boolean;
+  brave_registry: boolean;
   firefox_registry: boolean;
   native_host_installed: boolean;
   packaged_extension_id: string;
@@ -115,6 +116,7 @@ export interface TorrentProbeInfo {
   name: string;
   total_bytes: number;
   files: TorrentFileProbe[];
+  info_hash?: string;
 }
 
 export interface AddDownloadArgs {
@@ -127,6 +129,7 @@ export interface AddDownloadArgs {
   md5?: string;
   http_headers?: Record<string, string>;
   torrent_only_files?: number[];
+  torrent_info_hash?: string;
 }
 
 export interface GrabOptionsDto {

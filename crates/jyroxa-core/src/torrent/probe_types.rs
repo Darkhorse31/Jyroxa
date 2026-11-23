@@ -14,4 +14,6 @@ pub struct TorrentProbeInfo {
     pub name: String,
     pub total_bytes: u64,
     pub files: Vec<TorrentFileProbe>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub info_hash: Option<String>,
 }

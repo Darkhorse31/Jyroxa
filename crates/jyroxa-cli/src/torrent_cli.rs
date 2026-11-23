@@ -88,7 +88,9 @@ pub async fn run_torrent_get(
 
     let dl_start = Instant::now();
     let (_tx, rx) = tokio::sync::watch::channel(false);
-    run_until_done_with_stall(&session, handle.clone(), rx, emit).await.context("torrent download")?;
+    run_until_done_with_stall(&session, handle.clone(), rx, emit)
+        .await
+        .context("torrent download")?;
     let elapsed = dl_start.elapsed();
     let snap = jyroxa_core::torrent::TorrentSession::stats(&handle);
     eprintln!(
@@ -105,12 +107,22 @@ pub async fn run_torrent_get(
     Ok(())
 }
 
-pub async fn run_torrent_bench(input: String, output: PathBuf, runs: usize, cap_secs: u64) -> Result<()> {
+pub async fn run_torrent_bench(
+    input: String,
+    output: PathBuf,
+    runs: usize,
+    cap_secs: u64,
+) -> Result<()> {
     for run in 1..=runs {
         let dir = output.join(format!("run-{run}"));
         let _ = std::fs::remove_dir_all(&dir);
         eprintln!("=== jyroxa torrent bench run {run}/{runs} ===");
-        let fut = run_torrent_get(input.clone(), dir.clone(), Vec::new(), TorrentGetOptions::default());
+        let fut = run_torrent_get(
+            input.clone(),
+            dir.clone(),
+            Vec::new(),
+            TorrentGetOptions::default(),
+        );
         match tokio::time::timeout(std::time::Duration::from_secs(cap_secs), fut).await {
             Ok(Ok(())) => {}
             Ok(Err(e)) => eprintln!("run failed: {e:#}"),

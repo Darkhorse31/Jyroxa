@@ -10,6 +10,12 @@ pub struct TorrentTuning {
     pub peer_limit: usize,
     /// Merge [`super::trackers::builtin_trackers`] into every torrent.
     pub merge_builtin_trackers: bool,
+    /// Disable all tracker traffic (DHT / peer exchange / LSD only).
+    pub disable_trackers: bool,
+    /// UPnP port mapping (slow / can hang on some NATs). Off for meta probes.
+    pub enable_upnp: bool,
+    /// Prefer TCP-only listen (faster session start than TCP+uTP).
+    pub tcp_listen_only: bool,
     /// Persist session state for resume across restarts.
     pub fastresume: bool,
     /// Stop seeding when uploaded/downloaded ratio reaches this (0 = disabled).
@@ -29,6 +35,9 @@ impl Default for TorrentTuning {
         Self {
             peer_limit: 200,
             merge_builtin_trackers: true,
+            disable_trackers: false,
+            enable_upnp: true,
+            tcp_listen_only: false,
             fastresume: true,
             ratio_limit: 1.0,
             allow_seeding: false,

@@ -248,6 +248,13 @@ export class DownloadManager {
     menu.querySelector('[data-action="remove-file"]')?.addEventListener("click", removeFromMenu);
   }
 
+  public focusDownload(id: number): void {
+    const card = this.cards.get(id);
+    if (!card) return;
+    card.setSelected(true);
+    card.root.scrollIntoView({ behavior: "smooth", block: "nearest" });
+  }
+
   public async reload(): Promise<void> {
     try {
       const views = await api.listDownloads();

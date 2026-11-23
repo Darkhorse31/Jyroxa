@@ -27,6 +27,12 @@ pub struct Trace {
     last_line: Mutex<Option<String>>,
 }
 
+impl Default for Trace {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl Trace {
     pub fn new() -> Self {
         Trace {
@@ -37,6 +43,7 @@ impl Trace {
         }
     }
 
+    #[allow(clippy::too_many_arguments)]
     pub fn maybe_tick(
         &mut self,
         active: usize,

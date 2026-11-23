@@ -12,6 +12,7 @@ use tokio::process::Command;
 use tokio::sync::watch;
 
 use crate::engine::{AppSettings, DownloadView, TaskStatus};
+use crate::sidecar_paths;
 
 pub fn primary_is_torrent(urls: &[String]) -> bool {
     urls.first().map(|u| is_torrent_source(u)).unwrap_or(false)
@@ -43,25 +44,7 @@ pub fn torrent_filename_hint(urls: &[String]) -> String {
 }
 
 fn jyroxa_cli_exe() -> PathBuf {
-    if let Ok(p) = std::env::var("JYROXA_CLI") {
-        let path = PathBuf::from(p);
-        if path.is_file() {
-            return path;
-        }
-    }
-    if let Ok(exe) = std::env::current_exe() {
-        if let Some(dir) = exe.parent() {
-            for sub in ["", "sidecars"] {
-                for name in ["jyroxa.exe", "jyroxa-cli.exe"] {
-                    let c = dir.join(sub).join(name);
-                    if c.is_file() {
-                        return c;
-                    }
-                }
-            }
-        }
-    }
-    PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../../target/release/jyroxa.exe")
+    sidecar_paths::jyroxa_cli_exe()
 }
 
 /// Spawn `jyroxa torrent get` and stream stderr progress lines back to the UI.

@@ -3,7 +3,7 @@
 use std::path::{Path, PathBuf};
 use std::process::Stdio;
 
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, Deserialize)]
 pub struct YtFormat {
@@ -27,30 +27,125 @@ pub struct YtInfo {
     pub formats: Option<Vec<YtFormat>>,
 }
 
-fn sidecar_exe(name: &str) -> PathBuf {
-    if let Ok(exe) = std::env::current_exe() {
-        if let Some(dir) = exe.parent() {
-            for sub in ["", "sidecars"] {
-                let p = dir.join(sub).join(name);
-                if p.is_file() {
-                    return p;
-                }
-            }
-        }
-    }
-    PathBuf::from(name)
-}
-
 pub fn yt_dlp_path() -> PathBuf {
-    sidecar_exe("yt-dlp.exe")
+    crate::sidecar_paths::sidecar_exe("yt-dlp.exe")
 }
 
 pub fn ffmpeg_path() -> PathBuf {
-    sidecar_exe("ffmpeg.exe")
+    crate::sidecar_paths::sidecar_exe("ffmpeg.exe")
 }
 
 pub fn yt_dlp_available() -> bool {
     yt_dlp_path().is_file()
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct VideoFormatChoice {
+    pub format_id: String,
+    pub label: String,
+    pub size_bytes: Option<u64>,
+}
+
+fn vcodec_none(fmt: &YtFormat) -> bool {
+    fmt.vcodec.as_deref().unwrap_or("none") == "none"
+}
+
+fn acodec_none(fmt: &YtFormat) -> bool {
+    fmt.acodec.as_deref().unwrap_or("none") == "none"
+}
+
+fn format_human_label(fmt: &YtFormat) -> String {
+    if vcodec_none(fmt) && !acodec_none(fmt) {
+        let ext = fmt.ext.as_deref().unwrap_or("audio");
+        return format!("Audio only ({ext})");
+    }
+    let mut parts = Vec::new();
+    if let Some(h) = fmt.height {
+        parts.push(format!("{h}p"));
+    }
+    if let Some(ext) = &fmt.ext {
+        parts.push(ext.to_ascii_uppercase());
+    }
+    if parts.is_empty() {
+        format!("Format {}", fmt.format_id)
+    } else {
+        parts.join(" ")
+    }
+}
+
+/// Pick a short list of qualities for the in-page video menu.
+pub fn formats_for_menu(info: &YtInfo) -> Vec<VideoFormatChoice> {
+    let formats = info.formats.as_deref().unwrap_or_default();
+    let mut out = Vec::new();
+    let mut seen_heights = std::collections::HashSet::new();
+
+    let mut progressive: Vec<&YtFormat> = formats
+        .iter()
+        .filter(|f| !vcodec_none(f) && !acodec_none(f) && f.url.is_some())
+        .collect();
+    progressive.sort_by_key(|f| std::cmp::Reverse(f.height.unwrap_or(0)));
+
+    for fmt in progressive {
+        let h = fmt.height.unwrap_or(0);
+        if h > 0 && !seen_heights.insert(h) {
+            continue;
+        }
+        out.push(VideoFormatChoice {
+            format_id: fmt.format_id.clone(),
+            label: format_human_label(fmt),
+            size_bytes: fmt.filesize,
+        });
+        if out.len() >= 8 {
+            return out;
+        }
+    }
+
+    let audio = formats
+        .iter()
+        .filter(|f| vcodec_none(f) && !acodec_none(f))
+        .max_by_key(|f| f.tbr.unwrap_or(0.0) as u64);
+    if let Some(a) = audio {
+        out.push(VideoFormatChoice {
+            format_id: a.format_id.clone(),
+            label: "Audio only".into(),
+            size_bytes: a.filesize,
+        });
+    }
+
+    for height in [1080u64, 720, 480, 360, 240] {
+        let video = formats
+            .iter()
+            .filter(|f| !vcodec_none(f) && f.height == Some(height))
+            .max_by_key(|f| f.tbr.unwrap_or(0.0) as u64);
+        let audio = formats
+            .iter()
+            .filter(|f| vcodec_none(f) && !acodec_none(f))
+            .max_by_key(|f| f.tbr.unwrap_or(0.0) as u64);
+        let (Some(v), Some(a)) = (video, audio) else {
+            continue;
+        };
+        let fid = format!("{}+{}", v.format_id, a.format_id);
+        if out.iter().any(|c| c.format_id == fid) {
+            continue;
+        }
+        out.push(VideoFormatChoice {
+            format_id: fid,
+            label: format!("{height}p (merged)"),
+            size_bytes: v.filesize.or(a.filesize),
+        });
+        if out.len() >= 12 {
+            break;
+        }
+    }
+
+    if out.is_empty() {
+        out.push(VideoFormatChoice {
+            format_id: "bv*+ba/b".into(),
+            label: "Best available".into(),
+            size_bytes: None,
+        });
+    }
+    out
 }
 
 pub async fn probe_page_formats(page_url: &str) -> Result<YtInfo, String> {
@@ -106,6 +201,10 @@ pub async fn resolve_page_to_url(
     Ok((url, filename))
 }
 
+pub fn sanitize_filename_public(name: &str) -> String {
+    sanitize_filename(name)
+}
+
 fn sanitize_filename(name: &str) -> String {
     let bad = ['<', '>', ':', '"', '/', '\\', '|', '?', '*'];
     name.chars()
@@ -122,15 +221,27 @@ pub async fn download_via_ytdlp(
     if !ytdlp.is_file() {
         return Err("yt-dlp.exe not bundled".into());
     }
-    let mut args = vec![
-        "--no-warnings".to_string(),
-        "--no-playlist".to_string(),
-        "-o".to_string(),
-        output.to_string_lossy().into_owned(),
-    ];
-    if let Some(id) = format_id {
+    let ffmpeg = ffmpeg_path();
+    let mut args = vec!["--no-warnings".to_string(), "--no-playlist".to_string()];
+    if ffmpeg.is_file() {
+        args.push("--ffmpeg-location".into());
+        args.push(ffmpeg.to_string_lossy().into_owned());
+        args.push("--merge-output-format".into());
+        args.push("mp4".into());
+    }
+    let out_arg = if output.extension().is_some() {
+        output.to_string_lossy().into_owned()
+    } else {
+        format!("{}.%(ext)s", output.display())
+    };
+    args.push("-o".to_string());
+    args.push(out_arg);
+    if let Some(id) = format_id.filter(|s| !s.is_empty()) {
         args.push("-f".to_string());
         args.push(id.to_string());
+    } else {
+        args.push("-f".to_string());
+        args.push("bv*+ba/b".to_string());
     }
     args.push(page_url.to_string());
     let out = tokio::process::Command::new(&ytdlp)
@@ -143,8 +254,79 @@ pub async fn download_via_ytdlp(
     if !out.status.success() {
         return Err(String::from_utf8_lossy(&out.stderr).trim().to_string());
     }
-    let meta = tokio::fs::metadata(output)
+    if let Ok(m) = tokio::fs::metadata(output).await {
+        return Ok(m.len());
+    }
+    let stem = output
+        .file_stem()
+        .and_then(|s| s.to_str())
+        .unwrap_or("video");
+    let parent = output.parent().unwrap_or(Path::new("."));
+    let mut rd = tokio::fs::read_dir(parent)
         .await
         .map_err(|e| e.to_string())?;
-    Ok(meta.len())
+    while let Some(ent) = rd.next_entry().await.map_err(|e| e.to_string())? {
+        let fname = ent.file_name();
+        let name = fname.to_string_lossy();
+        if name.starts_with(stem) && name.len() > stem.len() {
+            let m = ent.metadata().await.map_err(|e| e.to_string())?;
+            return Ok(m.len());
+        }
+    }
+    Err("yt-dlp output file missing".into())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn formats_menu_includes_progressive_and_merged() {
+        let info = YtInfo {
+            id: Some("x".into()),
+            title: Some("Title".into()),
+            webpage_url: None,
+            formats: Some(vec![
+                YtFormat {
+                    format_id: "22".into(),
+                    ext: Some("mp4".into()),
+                    height: Some(720),
+                    width: Some(1280),
+                    vcodec: Some("avc1".into()),
+                    acodec: Some("mp4a".into()),
+                    filesize: Some(5_000_000),
+                    tbr: Some(800.0),
+                    url: Some("https://cdn.example/22.mp4".into()),
+                    protocol: Some("https".into()),
+                },
+                YtFormat {
+                    format_id: "140".into(),
+                    ext: Some("m4a".into()),
+                    height: None,
+                    width: None,
+                    vcodec: Some("none".into()),
+                    acodec: Some("mp4a".into()),
+                    filesize: Some(1_000_000),
+                    tbr: Some(128.0),
+                    url: Some("https://cdn.example/140.m4a".into()),
+                    protocol: Some("https".into()),
+                },
+                YtFormat {
+                    format_id: "137".into(),
+                    ext: Some("mp4".into()),
+                    height: Some(1080),
+                    width: Some(1920),
+                    vcodec: Some("avc1".into()),
+                    acodec: Some("none".into()),
+                    filesize: Some(8_000_000),
+                    tbr: Some(2500.0),
+                    url: None,
+                    protocol: Some("https".into()),
+                },
+            ]),
+        };
+        let menu = formats_for_menu(&info);
+        assert!(menu.iter().any(|c| c.label.contains("720p")));
+        assert!(menu.iter().any(|c| c.format_id == "137+140"));
+    }
 }

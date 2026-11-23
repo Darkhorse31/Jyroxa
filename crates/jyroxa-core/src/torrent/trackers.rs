@@ -62,10 +62,8 @@ mod tests {
         assert_eq!(merged[0], a[0]);
         assert_eq!(merged[1], a[1]);
         assert!(merged.len() > 2);
-        let keys: std::collections::HashSet<_> = merged
-            .iter()
-            .map(|s| s.to_ascii_lowercase())
-            .collect();
+        let keys: std::collections::HashSet<_> =
+            merged.iter().map(|s| s.to_ascii_lowercase()).collect();
         assert_eq!(keys.len(), merged.len());
     }
 
@@ -73,7 +71,9 @@ mod tests {
     fn builtin_list_nonempty() {
         assert!(BUILTIN_TRACKERS.len() >= 10);
         for t in BUILTIN_TRACKERS {
-            assert!(t.starts_with("http://") || t.starts_with("https://") || t.starts_with("udp://"));
+            assert!(
+                t.starts_with("http://") || t.starts_with("https://") || t.starts_with("udp://")
+            );
         }
     }
 }

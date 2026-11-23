@@ -5,11 +5,12 @@ mod launch_args;
 mod launch_dedupe;
 mod platform;
 mod shell_paths;
+mod sidecar_paths;
 mod torrent_host;
 mod video_sidecar;
 mod window_state;
 
-use engine::{init_engine, run_clipboard_monitor, EngineState};
+use engine::{init_engine, run_clipboard_monitor, run_queue_watchdog, EngineState};
 use std::path::PathBuf;
 use tauri::menu::{Menu, MenuItem, PredefinedMenuItem};
 use tauri::tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent};
@@ -277,6 +278,7 @@ pub fn run() {
                 });
             }
             tauri::async_runtime::spawn(run_clipboard_monitor(handle.clone()));
+            tauri::async_runtime::spawn(run_queue_watchdog(handle.clone()));
             tauri::async_runtime::spawn(run_tray_updater(handle.clone()));
 
             let product = app.package_info().name.clone();

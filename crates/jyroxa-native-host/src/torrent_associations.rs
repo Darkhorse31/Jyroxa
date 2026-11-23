@@ -44,10 +44,9 @@ pub fn install_torrent_associations(desktop_exe: &Path) -> Result<(), String> {
     let magnet = format!(r"{root}\magnet");
     set_default(&hkcu, &magnet, "URL:Magnet Protocol")?;
     set_default(&hkcu, &format!(r"{magnet}\shell\open\command"), &open_cmd)?;
-    let (k, _) = hkcu
-        .create_subkey(&magnet)
+    let (k, _) = hkcu.create_subkey(&magnet).map_err(|e| e.to_string())?;
+    k.set_value("URL Protocol", &"")
         .map_err(|e| e.to_string())?;
-    k.set_value("URL Protocol", &"").map_err(|e| e.to_string())?;
 
     // .torrent → Jyroxa.torrent → open command
     set_default(&hkcu, &format!(r"{root}\.torrent"), TORRENT_PROG_ID)?;
@@ -79,8 +78,8 @@ pub fn uninstall_torrent_associations() -> Result<(), String> {
     let root = classes_root();
     let _ = delete_tree(&hkcu, &format!(r"{root}\magnet"));
     let _ = delete_tree(&hkcu, &format!(r"{root}\{TORRENT_PROG_ID}"));
-  let (ext_key, _) = hkcu
-        .create_subkey(&format!(r"{root}\.torrent"))
+    let (ext_key, _) = hkcu
+        .create_subkey(format!(r"{root}\.torrent"))
         .map_err(|e| e.to_string())?;
     let _ = ext_key.delete_value("");
     Ok(())
@@ -108,10 +107,7 @@ mod tests {
     #[test]
     fn torrent_assoc_install_under_test_prefix() {
         let _g = lock_test();
-        let prefix = format!(
-            "JyroxaTestTorrentAssoc_{}",
-            std::process::id()
-        );
+        let prefix = format!("JyroxaTestTorrentAssoc_{}", std::process::id());
         std::env::set_var("JYROXA_REGISTRY_PREFIX", &prefix);
         let desktop = std::env::temp_dir().join("jyroxa-desktop-test.exe");
         install_torrent_associations(&desktop).expect("install");

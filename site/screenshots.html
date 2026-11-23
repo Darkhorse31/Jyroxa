@@ -1,0 +1,84 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Screenshots — Jyroxa</title>
+  <meta name="description" content="Jyroxa desktop UI in dark and light themes: main window, add download, settings, and LinkGrabber.">
+  <link rel="icon" href="assets/logo.svg" type="image/svg+xml">
+  <script>
+    (function () {
+      var k = "jyroxa-site-theme";
+      try {
+        var s = localStorage.getItem(k);
+        var t = s === "light" || s === "dark" ? s : "dark";
+        document.documentElement.setAttribute("data-theme", t);
+      } catch (e) {
+        document.documentElement.setAttribute("data-theme", "dark");
+      }
+    })();
+  </script>
+  <link rel="stylesheet" href="css/style.css">
+</head>
+<body>
+  <a class="skip-link" href="#main">Skip to content</a>
+  <header class="site-header">
+    <div class="header-inner">
+      <a class="brand" href="index.html"><img src="assets/logo.svg" width="36" height="36" alt=""><span>Jyroxa</span></a>
+      <nav class="site-nav" id="site-nav" data-site-nav aria-label="Primary">
+        <ul>
+          <li><a href="index.html">Home</a></li>
+          <li><a href="features.html">Features</a></li>
+          <li><a href="screenshots.html" aria-current="page">Screenshots</a></li>
+          <li><a href="install.html">Install</a></li>
+          <li><a href="faq.html">FAQ</a></li>
+          <li><a href="index.html#sponsor">Sponsor</a></li>
+        </ul>
+      </nav>
+      <div class="header-actions">
+        <button type="button" class="theme-toggle" data-theme-toggle aria-pressed="false">Light</button>
+        <button type="button" class="nav-toggle" data-nav-toggle aria-expanded="false" aria-controls="site-nav">Menu</button>
+      </div>
+    </div>
+  </header>
+
+  <main id="main">
+    <h1 class="page-title">Screenshots</h1>
+    <p class="page-intro">Design v3 captures from the desktop shell (1280×800). Shots follow your theme—warm dark or light.</p>
+
+    <div class="shot-grid">
+      <figure>
+        <img class="theme-shot--dark" src="assets/dark-main.png" width="1280" height="800" alt="Main window, dark theme, multiple active downloads">
+        <img class="theme-shot--light" src="assets/light-main.png" width="1280" height="800" alt="Main window, light theme">
+        <figcaption>Main window</figcaption>
+      </figure>
+      <figure>
+        <img class="theme-shot--dark" src="assets/dark-add.png" width="1280" height="800" alt="Add download dialog, dark theme">
+        <img class="theme-shot--light" src="assets/light-add.png" width="1280" height="800" alt="Add download dialog, light theme">
+        <figcaption>Add download</figcaption>
+      </figure>
+      <figure>
+        <img class="theme-shot--dark" src="assets/dark-settings.png" width="1280" height="800" alt="Settings dialog, dark theme">
+        <img class="theme-shot--light" src="assets/light-settings.png" width="1280" height="800" alt="Settings dialog, light theme">
+        <figcaption>Settings</figcaption>
+      </figure>
+      <figure>
+        <img class="theme-shot--dark" src="assets/dark-details.png" width="1280" height="800" alt="LinkGrabber and download details, dark theme">
+        <img class="theme-shot--light" src="assets/light-details.png" width="1280" height="800" alt="LinkGrabber and download details, light theme">
+        <figcaption>LinkGrabber and details</figcaption>
+      </figure>
+    </div>
+  </main>
+
+  <footer class="site-footer">
+    <nav class="footer-links" aria-label="Project">
+      <a href="https://github.com/Darkhorse31/Jyroxa/releases">Releases</a>
+      <a href="https://github.com/Darkhorse31/Jyroxa/blob/main/CONTRIBUTING.md">Contributing</a>
+      <a href="https://github.com/Darkhorse31/Jyroxa/issues">Issues</a>
+      <a href="https://github.com/Darkhorse31/Jyroxa/blob/main/LICENSE">License</a>
+    </nav>
+    <p>© 2026 Prateek Kumar · <a href="https://github.com/Darkhorse31/Jyroxa/blob/main/LICENSE">MIT License</a></p>
+  </footer>
+  <script src="js/main.js" defer></script>
+</body>
+</html>
