@@ -1,0 +1,115 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Install — Jyroxa</title>
+  <meta name="description" content="Install Jyroxa on Windows (installer or portable), set up the browser extension, and fix native messaging errors.">
+  <link rel="icon" href="assets/logo.svg" type="image/svg+xml">
+  <script>
+    (function () {
+      var k = "jyroxa-site-theme";
+      try {
+        var s = localStorage.getItem(k);
+        var t = s === "light" || s === "dark" ? s : "dark";
+        document.documentElement.setAttribute("data-theme", t);
+      } catch (e) {
+        document.documentElement.setAttribute("data-theme", "dark");
+      }
+    })();
+  </script>
+  <link rel="stylesheet" href="css/style.css">
+</head>
+<body>
+  <a class="skip-link" href="#main">Skip to content</a>
+  <header class="site-header">
+    <div class="header-inner">
+      <a class="brand" href="index.html"><img src="assets/logo.svg" width="36" height="36" alt=""><span>Jyroxa</span></a>
+      <nav class="site-nav" id="site-nav" data-site-nav aria-label="Primary">
+        <ul>
+          <li><a href="index.html">Home</a></li>
+          <li><a href="features.html">Features</a></li>
+          <li><a href="screenshots.html">Screenshots</a></li>
+          <li><a href="install.html" aria-current="page">Install</a></li>
+          <li><a href="faq.html">FAQ</a></li>
+          <li><a href="index.html#sponsor">Sponsor</a></li>
+        </ul>
+      </nav>
+      <div class="header-actions">
+        <button type="button" class="theme-toggle" data-theme-toggle aria-pressed="false">Light</button>
+        <button type="button" class="nav-toggle" data-nav-toggle aria-expanded="false" aria-controls="site-nav">Menu</button>
+      </div>
+    </div>
+  </header>
+
+  <main id="main" class="steps">
+    <h1 class="page-title">Install guide</h1>
+    <p class="page-intro">Pick an artifact from <a href="https://github.com/Darkhorse31/Jyroxa/releases/latest">GitHub Releases</a>. Verify checksums with <code>SHA256SUMS.txt</code> when provided.</p>
+
+    <section class="section">
+      <h2>Windows installer</h2>
+      <ol>
+        <li>Download <code>Jyroxa_*_x64-setup.exe</code> and run the NSIS installer.</li>
+        <li>The installer places <code>jyroxa-desktop.exe</code> and registers the native messaging host for the browser extension.</li>
+        <li>On first launch, allow notifications if you want download-completion toasts.</li>
+      </ol>
+    </section>
+
+    <section class="section">
+      <h2>Portable ZIP</h2>
+      <ol>
+        <li>Extract <code>Jyroxa-*-windows-x64-portable.zip</code> to a folder you control.</li>
+        <li>Keep <code>Jyroxa.exe</code>, <code>WebView2Loader.dll</code>, and <code>jyroxa-native-host.exe</code> in the same directory.</li>
+        <li>Run <code>Jyroxa.exe</code> once so the host manifest is written under your user profile.</li>
+      </ol>
+    </section>
+
+    <section class="section">
+      <h2>Browser extension</h2>
+      <ol>
+        <li>Download <code>jyroxa-browser-extension.zip</code> and extract it, or clone <code>extensions/browser</code>.</li>
+        <li>Build or install the desktop app first; start it once so <code>com.jyroxa.browser</code> is registered.</li>
+        <li><strong>Chrome / Edge / Brave:</strong> open <code>chrome://extensions</code> or <code>edge://extensions</code> → Developer mode → Load unpacked → select the extension folder.</li>
+        <li><strong>Firefox:</strong> <code>about:debugging</code> → This Firefox → Load Temporary Add-on → <code>manifest.json</code>.</li>
+        <li>In Jyroxa → Settings → Browser, paste the extension ID if you use a custom unpacked build. Official Chromium ID: <code>njgbdpacpmohafoefmcmnmhdjpjmjipe</code>.</li>
+        <li>Hold <kbd>Alt</kbd> while clicking a link to skip interception for about 30 seconds.</li>
+      </ol>
+    </section>
+
+    <section class="section">
+      <h2>Troubleshooting</h2>
+
+      <div class="callout">
+        <strong>“Host not registered”</strong> in the extension popup means Chromium cannot find <code>com.jyroxa.browser</code>.
+      </div>
+      <ol>
+        <li>Install or update the desktop build and <strong>launch Jyroxa once</strong> (portable: run from the folder that contains <code>jyroxa-native-host.exe</code>).</li>
+        <li>Quit and reopen the browser completely—not only the tab—so it reloads native messaging manifests.</li>
+        <li>If you moved the portable folder, run Jyroxa again from the new path to rewrite the host registration.</li>
+        <li>Check that Settings → Browser lists your extension ID when using a non-default unpacked build.</li>
+      </ol>
+
+      <p>For other errors (“Extension not allowed”, timeouts), see <a href="faq.html">FAQ</a> or <code>extensions/browser/native.js</code> failure strings in the repository.</p>
+    </section>
+
+    <section class="section">
+      <h2>Android</h2>
+      <ol>
+        <li>Install <code>Jyroxa-*-android-universal.apk</code> from Releases (enable install from unknown sources if needed).</li>
+        <li>Grant notification permission for the foreground download service.</li>
+      </ol>
+    </section>
+  </main>
+
+  <footer class="site-footer">
+    <nav class="footer-links" aria-label="Project">
+      <a href="https://github.com/Darkhorse31/Jyroxa/releases">Releases</a>
+      <a href="https://github.com/Darkhorse31/Jyroxa/blob/main/CONTRIBUTING.md">Contributing</a>
+      <a href="https://github.com/Darkhorse31/Jyroxa/issues">Issues</a>
+      <a href="https://github.com/Darkhorse31/Jyroxa/blob/main/LICENSE">License</a>
+    </nav>
+    <p>© 2026 Prateek Kumar · <a href="https://github.com/Darkhorse31/Jyroxa/blob/main/LICENSE">MIT License</a></p>
+  </footer>
+  <script src="js/main.js" defer></script>
+</body>
+</html>

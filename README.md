@@ -74,7 +74,11 @@ Add download, with the advanced connection and checksum options:
 
 Settings:
 
-<p><img src="docs/screenshots/settings-dark.png" width="98%" alt="Jyroxa settings panel" /></p>
+<p><img src="docs/screenshots/settings-dark.png" width="49%" alt="Jyroxa settings panel, dark theme" /> <img src="docs/screenshots/settings-light.png" width="49%" alt="Jyroxa settings panel, light theme" /></p>
+
+Video download details:
+
+<p><img src="docs/screenshots/video-details-dark.png" width="98%" alt="Video download details and metadata" /></p>
 
 ## Download
 

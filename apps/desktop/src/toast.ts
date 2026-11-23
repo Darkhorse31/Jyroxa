@@ -48,10 +48,8 @@ export function showToast(
     html += `<span class="toast-icon">${options.icon}</span>`;
   }
   html += `<div class="toast-content">`;
-  if (options.title) {
-    html += `<div class="toast-title">${options.title}</div>`;
-  }
-  html += `<div class="toast-message">${options.message}</div>`;
+  if (options.title) html += '<div class="toast-title"></div>';
+  html += '<div class="toast-message"></div>';
   html += `</div>`;
 
   if (options.actions && options.actions.length > 0) {
@@ -60,6 +58,9 @@ export function showToast(
 
   html += `<button type="button" class="toast-dismiss" aria-label="Dismiss">&times;</button>`;
   toast.innerHTML = html;
+  const title = toast.querySelector(".toast-title");
+  if (title) title.textContent = options.title || "";
+  toast.querySelector(".toast-message")!.textContent = options.message;
 
   if (options.actions && options.actions.length > 0) {
     const actionsContainer = toast.querySelector(".toast-actions")!;

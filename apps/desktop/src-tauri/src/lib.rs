@@ -15,7 +15,7 @@ mod window_state;
 
 use engine::{init_engine, run_clipboard_monitor, run_queue_watchdog, EngineState};
 use std::path::PathBuf;
-use tauri::menu::{Menu, MenuItem};
+use tauri::menu::{Menu, MenuItem, PredefinedMenuItem};
 use tauri::tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent};
 use tauri::{Emitter, Manager, PhysicalPosition, PhysicalSize, WindowEvent};
 use window_state::{MonitorRect, WindowState};
@@ -285,14 +285,25 @@ pub fn run() {
             tauri::async_runtime::spawn(run_tray_updater(handle.clone()));
 
             let product = app.package_info().name.clone();
-            let show_i = MenuItem::with_id(app, "show", "Show", true, None::<&str>)?;
+            let show_i = MenuItem::with_id(app, "show", "Open Jyroxa", true, None::<&str>)?;
             let pause_i = MenuItem::with_id(app, "pause_all", "Pause all", true, None::<&str>)?;
             let resume_i = MenuItem::with_id(app, "resume_all", "Resume all", true, None::<&str>)?;
-            let quit_i = MenuItem::with_id(app, "quit", "Quit", true, None::<&str>)?;
-            let menu = Menu::with_items(app, &[&show_i, &pause_i, &resume_i, &quit_i])?;
+            let settings_i = MenuItem::with_id(app, "settings", "Settings", true, None::<&str>)?;
+            let separator = PredefinedMenuItem::separator(app)?;
+            let quit_i = MenuItem::with_id(app, "quit", "Exit Jyroxa", true, None::<&str>)?;
+            let menu = Menu::with_items(
+                app,
+                &[
+                    &show_i,
+                    &resume_i,
+                    &pause_i,
+                    &settings_i,
+                    &separator,
+                    &quit_i,
+                ],
+            )?;
 
-            let tray_icon = tauri::image::Image::from_bytes(include_bytes!("../icons/tray.png"))
-                .unwrap_or_else(|_| app.default_window_icon().unwrap().clone());
+            let tray_icon = tauri::image::Image::from_bytes(include_bytes!("../icons/tray.png"))?;
 
             let _tray = TrayIconBuilder::with_id("main-tray")
                 .icon(tray_icon)
@@ -301,6 +312,10 @@ pub fn run() {
                 .on_menu_event(|app, event| match event.id.as_ref() {
                     "show" => {
                         bring_main_window_to_front(app);
+                    }
+                    "settings" => {
+                        bring_main_window_to_front(app);
+                        let _ = app.emit("open-settings", ());
                     }
                     "pause_all" => {
                         let app = app.clone();
