@@ -8,13 +8,17 @@
 //! smooths over slow mirrors or unlucky segments.
 
 use std::collections::VecDeque;
-use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 
 use crate::state::SegmentState;
 
 /// Do not start a probe when less than this remains in the download.
 pub const PROBE_MIN_REMAINING: u64 = 8 << 20;
+/// Minimum remaining bytes before queueing another steal-split for autotune growth.
+/// Lower than [`PROBE_MIN_REMAINING`] so a remembered 1-conn start can still ramp on
+/// medium files (rate-limited hosts) before the transfer ends.
+pub const SPLIT_MIN_REMAINING: u64 = 1 << 20;
 /// Bytes the primary worker should read before a probe may cap its range.
 pub const PROBE_LEAD: u64 = 4 << 20;
 
@@ -53,6 +57,8 @@ pub struct Segment {
     pub(crate) committed: AtomicU64,
     /// Serializes a split with accepting a network chunk. Never held across I/O.
     pub(crate) bounds: Mutex<()>,
+    /// Consecutive failures follow the range across worker handoffs.
+    pub(crate) failures: AtomicUsize,
     /// Set when the segment is fully downloaded.
     pub done: AtomicBool,
     /// Inclusive byte cap for the primary worker (probe splits); 0 = none.
@@ -70,6 +76,7 @@ impl Segment {
             current: AtomicU64::new(current),
             committed: AtomicU64::new(current),
             bounds: Mutex::new(()),
+            failures: AtomicUsize::new(0),
             done: AtomicBool::new(current > end),
             cap_end: AtomicU64::new(0),
             in_use: AtomicBool::new(false),
@@ -289,7 +296,7 @@ impl SegmentTable {
 
     /// Queue half of the largest remaining range for an extra connection.
     pub fn try_queue_probe_split(&self, total_remaining: u64) -> bool {
-        if total_remaining < PROBE_MIN_REMAINING {
+        if total_remaining < SPLIT_MIN_REMAINING {
             return false;
         }
         let min_tail = self.min_steal.saturating_mul(2);

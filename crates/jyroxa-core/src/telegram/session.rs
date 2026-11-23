@@ -3,8 +3,8 @@
 use std::collections::HashMap;
 
 use grammers_session::storages::MemorySession;
-use grammers_session::{Session, SessionData};
 use grammers_session::types::DcOption;
+use grammers_session::{Session, SessionData};
 use serde::{Deserialize, Serialize};
 
 use super::error::{Result, TelegramError};
@@ -13,7 +13,7 @@ use super::error::{Result, TelegramError};
 use windows::Win32::Foundation::LocalFree;
 #[cfg(windows)]
 use windows::Win32::Security::Cryptography::{
-    CryptProtectData, CryptUnprotectData, CRYPT_INTEGER_BLOB, CRYPTPROTECT_UI_FORBIDDEN,
+    CryptProtectData, CryptUnprotectData, CRYPTPROTECT_UI_FORBIDDEN, CRYPT_INTEGER_BLOB,
 };
 
 /// On-disk envelope (encrypted at rest on Windows).
@@ -46,7 +46,8 @@ impl SessionStore {
     pub fn load(&self) -> Result<PersistedTelegramSession> {
         let raw = std::fs::read(&self.path)?;
         let plain = decrypt_blob(&raw)?;
-        serde_json::from_slice(&plain).map_err(|e| TelegramError::other(format!("session json: {e}")))
+        serde_json::from_slice(&plain)
+            .map_err(|e| TelegramError::other(format!("session json: {e}")))
     }
 
     pub fn save(&self, blob: &PersistedTelegramSession) -> Result<()> {
@@ -93,10 +94,8 @@ pub async fn export_memory_session(session: &MemorySession) -> Result<PersistedT
 }
 
 pub fn memory_from_persisted(persisted: &PersistedTelegramSession) -> MemorySession {
-    let mut dc_map: HashMap<i32, DcOption> = SessionData::default()
-        .dc_options
-        .into_iter()
-        .collect();
+    let mut dc_map: HashMap<i32, DcOption> =
+        SessionData::default().dc_options.into_iter().collect();
     for opt in &persisted.dc_options {
         dc_map.insert(opt.id, opt.clone());
     }

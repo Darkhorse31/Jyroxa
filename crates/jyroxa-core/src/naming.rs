@@ -188,9 +188,9 @@ pub fn category_for(name: &str, mime: Option<&str>) -> Category {
         || arch_ext.contains(&ext.as_str())
     {
         Category::Compressed
-    } else if mime.contains("octet-stream") && (ext == "exe" || ext == "msi" || ext == "apk") {
-        Category::Programs
-    } else if prog_ext.contains(&ext.as_str()) {
+    } else if (mime.contains("octet-stream") && (ext == "exe" || ext == "msi" || ext == "apk"))
+        || prog_ext.contains(&ext.as_str())
+    {
         Category::Programs
     } else {
         Category::Other

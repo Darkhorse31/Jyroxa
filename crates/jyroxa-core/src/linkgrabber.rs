@@ -16,23 +16,37 @@ use serde::{Deserialize, Serialize};
 use url::Url;
 
 use crate::error::Result;
-use crate::naming::{suggest_filename, filename_from_url_path};
+use crate::naming::{filename_from_url_path, suggest_filename};
 use crate::probe::probe_url;
 
 /// Common downloadable file extensions used by the bare-URL and filter logic.
 pub const COMMON_EXTENSIONS: &[&str] = &[
     "zip", "rar", "7z", "tar", "gz", "tgz", "bz2", "xz", "iso", "exe", "msi", "dmg", "pkg", "deb",
-    "rpm", "apk", "appimage", "bin", "img", "mp4", "mkv", "avi", "mov", "webm", "flv", "wmv", "m4v",
-    "mp3", "flac", "wav", "aac", "ogg", "opus", "m4a", "pdf", "epub", "mobi", "doc", "docx", "xls",
-    "xlsx", "ppt", "pptx", "csv", "jpg", "jpeg", "png", "gif", "webp", "svg", "torrent", "dat",
-    "zst", "lz", "lzma", "lz4", "cab", "jar", "whl", "nupkg", "vsix", "xpi", "crx", "ipa", "aab",
-    "msix", "appx", "srt", "vtt", "m3u8", "mpd", "3gp", "wma", "aiff", "heic", "tif", "tiff",
+    "rpm", "apk", "appimage", "bin", "img", "mp4", "mkv", "avi", "mov", "webm", "flv", "wmv",
+    "m4v", "mp3", "flac", "wav", "aac", "ogg", "opus", "m4a", "pdf", "epub", "mobi", "doc", "docx",
+    "xls", "xlsx", "ppt", "pptx", "csv", "jpg", "jpeg", "png", "gif", "webp", "svg", "torrent",
+    "dat", "zst", "lz", "lzma", "lz4", "cab", "jar", "whl", "nupkg", "vsix", "xpi", "crx", "ipa",
+    "aab", "msix", "appx", "srt", "vtt", "m3u8", "mpd", "3gp", "wma", "aiff", "heic", "tif",
+    "tiff",
 ];
 
 /// Page assets that a LinkGrabber page crawl should never offer as downloads.
 const PAGE_ASSET_EXTENSIONS: &[&str] = &[
-    "css", "js", "mjs", "map", "woff", "woff2", "ttf", "otf", "eot", "ico", "json", "xml",
-    "webmanifest", "rss", "atom",
+    "css",
+    "js",
+    "mjs",
+    "map",
+    "woff",
+    "woff2",
+    "ttf",
+    "otf",
+    "eot",
+    "ico",
+    "json",
+    "xml",
+    "webmanifest",
+    "rss",
+    "atom",
 ];
 
 /// Metadata discovered for a single link.
@@ -58,14 +72,11 @@ impl LinkInfo {
 
     /// The file extension (lowercase) implied by the filename or URL.
     pub fn extension(&self) -> Option<String> {
-        let name = self
-            .filename
-            .clone()
-            .or_else(|| {
-                Url::parse(&self.url)
-                    .ok()
-                    .and_then(|u| filename_from_url_path(&u))
-            })?;
+        let name = self.filename.clone().or_else(|| {
+            Url::parse(&self.url)
+                .ok()
+                .and_then(|u| filename_from_url_path(&u))
+        })?;
         name.rsplit_once('.').map(|(_, ext)| ext.to_lowercase())
     }
 }
@@ -211,7 +222,9 @@ fn og_media_re() -> &'static Regex {
 /// Tags whose link is something the page offers the visitor (a download, a
 /// video/audio source), as opposed to the page's own furniture (`<img>`,
 /// `<link rel=stylesheet|icon>`, `<script>`, `<iframe>`).
-const OFFERED_TAGS: &[&str] = &["a", "area", "source", "video", "audio", "embed", "track", "object"];
+const OFFERED_TAGS: &[&str] = &[
+    "a", "area", "source", "video", "audio", "embed", "track", "object",
+];
 
 /// Links a crawled HTML page *offers*: anchors and media sources, plus
 /// `og:video`/`og:audio`. Page decoration (images, icons, styles, scripts and
@@ -239,7 +252,9 @@ pub fn extract_page_links(base: Option<&Url>, html: &str) -> (Vec<String>, Vec<S
         .into_iter()
         .filter(|f| {
             // Only same-host fragments; never wander off-site automatically.
-            let fh = Url::parse(f).ok().and_then(|u| u.host_str().map(str::to_string));
+            let fh = Url::parse(f)
+                .ok()
+                .and_then(|u| u.host_str().map(str::to_string));
             let bh = base.and_then(|b| b.host_str().map(str::to_string));
             fh.is_some() && fh == bh
         })
@@ -447,7 +462,7 @@ impl LinkGrabber {
             links.into_iter().map(LinkInfo::bare).collect()
         } else {
             let conc = opts.concurrency_or_default();
-            stream::iter(links.into_iter())
+            stream::iter(links)
                 .map(|l| async move { self.probe_link(&l).await })
                 .buffer_unordered(conc)
                 .collect::<Vec<_>>()
@@ -462,7 +477,9 @@ impl LinkGrabber {
             .filter(|i| !(is_page && is_html_mime(i.mime.as_deref())))
             // An extensionless page link is only a download if the probe
             // confirmed it; unreachable ones (HEAD refused, 404) are dropped.
-            .filter(|i| !(extensionless_links.contains(&i.url) && i.mime.is_none() && i.size.is_none()))
+            .filter(|i| {
+                !(extensionless_links.contains(&i.url) && i.mime.is_none() && i.size.is_none())
+            })
             .collect();
 
         Ok(group_packages(infos))
@@ -617,20 +634,33 @@ fn has_asset_extension(url: &str) -> bool {
 
 fn has_page_extension(url: &str) -> bool {
     url_extension(url)
-        .map(|e| matches!(e.as_str(), "html" | "htm" | "shtml" | "xhtml" | "php" | "asp" | "aspx" | "jsp"))
+        .map(|e| {
+            matches!(
+                e.as_str(),
+                "html" | "htm" | "shtml" | "xhtml" | "php" | "asp" | "aspx" | "jsp"
+            )
+        })
         .unwrap_or(false)
 }
 
 fn has_file_extension(url: &str) -> bool {
     url_extension(url)
-        .map(|e| COMMON_EXTENSIONS.contains(&e.as_str()) || e.len() <= 5 && e.chars().all(|c| c.is_ascii_alphanumeric()) && !e.chars().all(|c| c.is_ascii_digit()))
+        .map(|e| {
+            COMMON_EXTENSIONS.contains(&e.as_str())
+                || e.len() <= 5
+                    && e.chars().all(|c| c.is_ascii_alphanumeric())
+                    && !e.chars().all(|c| c.is_ascii_digit())
+        })
         .unwrap_or(false)
 }
 
 /// The same page with a different fragment/query (e.g. `?lang=fr`).
 fn is_same_page(link: &str, page: &str) -> bool {
     match (Url::parse(link), Url::parse(page)) {
-        (Ok(a), Ok(b)) => a.host_str() == b.host_str() && a.path().trim_end_matches('/') == b.path().trim_end_matches('/'),
+        (Ok(a), Ok(b)) => {
+            a.host_str() == b.host_str()
+                && a.path().trim_end_matches('/') == b.path().trim_end_matches('/')
+        }
         _ => false,
     }
 }
@@ -640,7 +670,8 @@ fn is_page_asset(url: &str) -> bool {
     let Some(u) = Url::parse(url).ok() else {
         return true;
     };
-    let ext = filename_from_url_path(&u).and_then(|n| n.rsplit_once('.').map(|(_, e)| e.to_lowercase()));
+    let ext =
+        filename_from_url_path(&u).and_then(|n| n.rsplit_once('.').map(|(_, e)| e.to_lowercase()));
     match ext {
         Some(e) if PAGE_ASSET_EXTENSIONS.contains(&e.as_str()) => true,
         Some(e) if COMMON_EXTENSIONS.contains(&e.as_str()) => false,
@@ -734,7 +765,9 @@ mod tests {
     #[test]
     fn single_url_detection_rejects_multiline_text() {
         assert!(is_single_url("https://example.com/a.zip"));
-        assert!(!is_single_url("https://example.com/a.zip\nhttps://example.com/b.zip"));
+        assert!(!is_single_url(
+            "https://example.com/a.zip\nhttps://example.com/b.zip"
+        ));
         assert!(!is_single_url("see https://example.com/a.zip"));
         assert!(!is_single_url("ftp://example.com/a.zip"));
     }
@@ -814,9 +847,16 @@ https://mirror.test/pub/tool-1.0.zip</pre>
 
     #[test]
     fn template_and_bogus_hosts_are_rejected() {
-        let links = extract_links(None, r#"<a href="https://{host}/a.zip"> <a href="https://%7Bhost%7D/b.zip"> https://ok.test/c.zip"#);
+        let links = extract_links(
+            None,
+            r#"<a href="https://{host}/a.zip"> <a href="https://%7Bhost%7D/b.zip"> https://ok.test/c.zip"#,
+        );
         assert_eq!(links, vec!["https://ok.test/c.zip".to_string()]);
-        assert!(plain_text_urls("https://{host}/a.zip https://ok.test/d.bin").iter().all(|u| u.starts_with("https://ok.test/")));
+        assert!(
+            plain_text_urls("https://{host}/a.zip https://ok.test/d.bin")
+                .iter()
+                .all(|u| u.starts_with("https://ok.test/"))
+        );
     }
 
     #[test]
@@ -825,7 +865,10 @@ https://mirror.test/pub/tool-1.0.zip</pre>
         let html = r#"<include-fragment loading="lazy" src="https://github.com/o/r/releases/expanded_assets/v1"></include-fragment>
                       <include-fragment src="https://evil.test/x"></include-fragment>"#;
         let (_, frags) = extract_page_links(Some(&base), html);
-        assert_eq!(frags, vec!["https://github.com/o/r/releases/expanded_assets/v1".to_string()]);
+        assert_eq!(
+            frags,
+            vec!["https://github.com/o/r/releases/expanded_assets/v1".to_string()]
+        );
     }
 
     #[test]
@@ -835,7 +878,10 @@ https://mirror.test/pub/tool-1.0.zip</pre>
         assert!(has_file_extension("https://h.test/wget-1.25.0.tar.gz"));
         assert!(has_file_extension("https://h.test/files/10Mb.dat"));
         assert!(!has_file_extension("https://h.test/software/wget/"));
-        assert!(is_same_page("https://h.test/a/?lang=fr", "https://h.test/a"));
+        assert!(is_same_page(
+            "https://h.test/a/?lang=fr",
+            "https://h.test/a"
+        ));
     }
 
     #[test]

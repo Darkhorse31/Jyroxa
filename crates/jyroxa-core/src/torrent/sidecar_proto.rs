@@ -1,6 +1,8 @@
 //! Machine-readable progress lines from `jyroxa torrent get` (stderr).
 
 pub const METADATA_TIMEOUT_SECS: u64 = 300;
+/// Cold DHT routing tables often need longer than tracker-assisted probes.
+pub const DHT_COLD_METADATA_TIMEOUT_SECS: u64 = 600;
 pub const STALL_TIMEOUT_SECS: u64 = 120;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -55,7 +57,13 @@ impl TorrentProgressLine {
 fn sanitize_state_token(state: &str) -> String {
     state
         .chars()
-        .map(|c| if c.is_ascii_alphanumeric() || c == '_' || c == '-' { c } else { '_' })
+        .map(|c| {
+            if c.is_ascii_alphanumeric() || c == '_' || c == '-' {
+                c
+            } else {
+                '_'
+            }
+        })
         .take(64)
         .collect()
 }
@@ -155,7 +163,8 @@ mod tests {
 
     #[test]
     fn legacy_progress_without_phase() {
-        let line = "jyroxa-torrent-progress downloaded=100 total=1000 peers=2 seeds=1 speed_bps=50000";
+        let line =
+            "jyroxa-torrent-progress downloaded=100 total=1000 peers=2 seeds=1 speed_bps=50000";
         let p = parse_progress_line(line).unwrap();
         assert_eq!(p.phase, TorrentProgressPhase::Download);
         assert_eq!(p.downloaded, 100);
@@ -163,10 +172,7 @@ mod tests {
 
     #[test]
     fn error_lines() {
-        assert_eq!(
-            parse_error_line("error: boom"),
-            Some("boom".into())
-        );
+        assert_eq!(parse_error_line("error: boom"), Some("boom".into()));
         assert_eq!(
             parse_error_line("jyroxa-torrent-error meta timeout"),
             Some("meta timeout".into())

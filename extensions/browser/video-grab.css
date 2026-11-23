@@ -59,6 +59,13 @@
   border-bottom: 0;
 }
 
+.jx-vgrab-error {
+  padding: 8px 10px;
+  font-size: 12px;
+  color: #b91c1c;
+  border-bottom: 1px solid #fecaca;
+}
+
 .jx-vgrab-muted {
   padding: 6px 8px;
   color: #6b7280;

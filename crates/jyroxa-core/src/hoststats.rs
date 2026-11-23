@@ -81,6 +81,18 @@ impl HostStats {
         })
     }
 
+    /// Throughput (bytes/sec) recorded with [`Self::best_connections`], if recent.
+    pub fn best_throughput(&self, host: &str) -> Option<f64> {
+        let s = self.store.lock().unwrap();
+        s.hosts.get(host).and_then(|r| {
+            if r.best_connections > 0 && r.best_throughput > 0.0 && Self::best_still_valid(r) {
+                Some(r.best_throughput)
+            } else {
+                None
+            }
+        })
+    }
+
     fn best_still_valid(rec: &HostRecord) -> bool {
         rec.best_updated != 0
             && Self::now_secs().saturating_sub(rec.best_updated) <= BEST_DECAY_SECS

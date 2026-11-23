@@ -19,7 +19,9 @@ pub struct HlsSegment {
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum HlsPlaylist {
-    Master { variants: Vec<HlsVariant> },
+    Master {
+        variants: Vec<HlsVariant>,
+    },
     Media {
         segments: Vec<HlsSegment>,
         init_map: Option<String>,

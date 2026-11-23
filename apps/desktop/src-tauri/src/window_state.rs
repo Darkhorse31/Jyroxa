@@ -67,7 +67,13 @@ mod tests {
     const SCREEN: MonitorRect = (0, 0, 1920, 1080);
 
     fn ws(width: u32, height: u32, x: i32, y: i32) -> WindowState {
-        WindowState { width, height, x: Some(x), y: Some(y), maximized: false }
+        WindowState {
+            width,
+            height,
+            x: Some(x),
+            y: Some(y),
+            maximized: false,
+        }
     }
 
     #[test]

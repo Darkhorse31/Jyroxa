@@ -6,13 +6,14 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use bytes::Bytes;
+use librqbit::dht::DhtPersistenceConfig;
+use librqbit::limits::LimitsConfig;
+use librqbit::ManagedTorrentHandle;
 use librqbit::{
     AddTorrent, AddTorrentOptions, AddTorrentResponse, DhtSessionConfig, ListenerMode,
     ListenerOptions, PeerConnectionOptions, Session, SessionOptions, SessionPersistenceConfig,
     TorrentStats,
 };
-use librqbit::limits::LimitsConfig;
-use librqbit::ManagedTorrentHandle;
 use tokio::sync::watch;
 
 use crate::error::{Error, Result};
@@ -44,7 +45,12 @@ impl From<&TorrentStats> for TorrentSnapshot {
         let (live_peers, live_seeders) = s
             .live
             .as_ref()
-            .map(|l| (l.snapshot.peer_stats.live, l.snapshot.peer_stats.live_seeders))
+            .map(|l| {
+                (
+                    l.snapshot.peer_stats.live,
+                    l.snapshot.peer_stats.live_seeders,
+                )
+            })
             .unwrap_or((0, 0));
         Self {
             downloaded: s.progress_bytes,
@@ -99,22 +105,59 @@ pub struct TorrentSession {
     output_root: PathBuf,
 }
 
+fn dht_routing_store(session_data_dir: &PathBuf) -> PathBuf {
+    session_data_dir.join("dht-routing.json")
+}
+
+/// Well-known public DHT bootstrap nodes (host:port). Explicit list beats relying on
+/// librqbit's two-node default when DNS or a single bootstrap is flaky.
+const PUBLIC_DHT_BOOTSTRAP: &[&str] = &[
+    "dht.transmissionbt.com:6881",
+    "dht.libtorrent.org:25401",
+    "router.bittorrent.com:6881",
+    "router.utorrent.com:6881",
+    "router.bitcomet.com:6881",
+    "dht.aelitis.com:6881",
+    "router.silotis.us:6881",
+];
+
+fn public_dht_bootstrap_addrs() -> Vec<String> {
+    PUBLIC_DHT_BOOTSTRAP
+        .iter()
+        .map(|s| (*s).to_string())
+        .collect()
+}
+
+/// DHT routing table persisted per torrent session folder so parallel sidecars do not
+/// share the global rqbit cache file (which serializes writes and stalls cold bootstrap).
+fn dht_session_config(session_data_dir: &PathBuf) -> DhtSessionConfig {
+    let _ = std::fs::create_dir_all(session_data_dir);
+    DhtSessionConfig {
+        bootstrap_addrs: Some(public_dht_bootstrap_addrs()),
+        persistence: Some(DhtPersistenceConfig {
+            config_filename: Some(dht_routing_store(session_data_dir)),
+            dump_interval: Some(Duration::from_secs(30)),
+        }),
+        ..Default::default()
+    }
+}
+
 impl TorrentSession {
+    #[allow(clippy::field_reassign_with_default)]
     pub async fn open(output_root: PathBuf, tuning: TorrentTuning) -> Result<Self> {
         let mut opts = SessionOptions::default();
         opts.fastresume = tuning.fastresume;
         opts.peer_limit = Some(tuning.peer_limit);
         opts.client_name_and_version = Some(format!("Jyroxa {}", env!("CARGO_PKG_VERSION")));
         opts.disable_local_service_discovery = false;
-        // Ephemeral DHT per session folder: global default persistence locks across
-        // concurrent jyroxa.exe sidecars and breaks parallel downloads / meta probes.
-        opts.dht = Some(DhtSessionConfig {
-            persistence: None,
-            ..Default::default()
-        });
-        opts.disable_trackers = false;
+        let session_data_dir = tuning
+            .session_data_dir
+            .clone()
+            .unwrap_or_else(|| output_root.join(".jyroxa-torrent-session"));
+        opts.dht = Some(dht_session_config(&session_data_dir));
+        opts.disable_trackers = tuning.disable_trackers;
 
-        if tuning.merge_builtin_trackers {
+        if !tuning.disable_trackers && tuning.merge_builtin_trackers {
             for tr in builtin_trackers() {
                 if let Ok(url) = url::Url::parse(&tr) {
                     opts.trackers.insert(url);
@@ -123,8 +166,12 @@ impl TorrentSession {
         }
 
         let mut listen = ListenerOptions::default();
-        listen.mode = ListenerMode::TcpAndUtp;
-        listen.enable_upnp_port_forwarding = true;
+        listen.mode = if tuning.tcp_listen_only {
+            ListenerMode::TcpOnly
+        } else {
+            ListenerMode::TcpAndUtp
+        };
+        listen.enable_upnp_port_forwarding = tuning.enable_upnp;
         listen.max_pending_incoming_handshake_checks = 256;
         opts.listen = Some(listen);
 
@@ -163,6 +210,7 @@ impl TorrentSession {
         &self.inner
     }
 
+    #[allow(clippy::field_reassign_with_default)]
     pub async fn add(
         &self,
         source: TorrentSource<'_>,
@@ -174,9 +222,21 @@ impl TorrentSession {
                 let url = url.trim();
                 if is_magnet_uri(url) {
                     let from_magnet = magnet_trackers(url);
-                    let merged = merge_tracker_lists(&from_magnet, &builtin_trackers());
-                    let magnet = magnet_with_trackers(url, &merged)?;
-                    merged_trackers = merge_tracker_lists(&merged, &merged_trackers);
+                    let merged = if self.tuning.disable_trackers {
+                        from_magnet
+                    } else if self.tuning.merge_builtin_trackers {
+                        merge_tracker_lists(&from_magnet, &builtin_trackers())
+                    } else {
+                        from_magnet
+                    };
+                    let magnet = if merged.is_empty() {
+                        url.to_string()
+                    } else {
+                        magnet_with_trackers(url, &merged)?
+                    };
+                    if !self.tuning.disable_trackers {
+                        merged_trackers = merge_tracker_lists(&merged, &merged_trackers);
+                    }
                     AddTorrent::from_url(magnet)
                 } else {
                     AddTorrent::from_url(url)
@@ -190,6 +250,11 @@ impl TorrentSession {
         peer_opts.read_write_timeout = Some(Duration::from_secs(60));
         peer_opts.keep_alive_interval = Some(Duration::from_secs(30));
 
+        let trackers = if self.tuning.disable_trackers || merged_trackers.is_empty() {
+            None
+        } else {
+            Some(merged_trackers)
+        };
         let add_opts = AddTorrentOptions {
             overwrite: job.overwrite,
             only_files: job.only_files,
@@ -199,11 +264,8 @@ impl TorrentSession {
                 .map(|p| p.to_string_lossy().into_owned()),
             peer_opts: Some(peer_opts),
             peer_limit: Some(self.tuning.peer_limit),
-            trackers: if merged_trackers.is_empty() {
-                None
-            } else {
-                Some(merged_trackers)
-            },
+            trackers,
+            disable_trackers: self.tuning.disable_trackers,
             force_tracker_interval: Some(Duration::from_secs(120)),
             ..Default::default()
         };
@@ -300,5 +362,43 @@ impl TorrentSession {
 
     pub fn tuning(&self) -> &TorrentTuning {
         &self.tuning
+    }
+
+    /// Cancel DHT/listeners so teardown cannot hang past a metadata timeout.
+    pub async fn stop(&self) {
+        self.inner.stop().await;
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::path::PathBuf;
+
+    #[test]
+    fn dht_store_is_under_session_data_dir() {
+        let dir = PathBuf::from("session-folder");
+        assert_eq!(dht_routing_store(&dir), dir.join("dht-routing.json"));
+    }
+
+    #[test]
+    fn dht_session_config_uses_per_folder_persistence() {
+        let dir = PathBuf::from("out/.jyroxa-torrent-session");
+        let cfg = dht_session_config(&dir);
+        let persist = cfg.persistence.expect("dht persistence");
+        assert_eq!(
+            persist.config_filename.as_ref(),
+            Some(&dht_routing_store(&dir))
+        );
+    }
+
+    #[test]
+    fn dht_session_config_sets_public_bootstrap_nodes() {
+        let dir = PathBuf::from("out/.jyroxa-torrent-session");
+        let cfg = dht_session_config(&dir);
+        let addrs = cfg.bootstrap_addrs.expect("bootstrap addrs");
+        assert!(addrs.len() >= 5);
+        assert!(addrs.iter().any(|a| a.contains("transmissionbt")));
+        assert!(addrs.iter().any(|a| a.contains("bittorrent.com")));
     }
 }

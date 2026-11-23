@@ -1,5 +1,18 @@
 # Changelog
 
+## 0.1.12 — 2026-11-20
+
+### Browser native host
+
+- Register native messaging for Chrome, Edge, Brave, and Firefox on every app start and install.
+- Native host manifest keeps the packaged extension ID plus legacy unpacked IDs; copies `jyroxa-native-host.exe` into `%LOCALAPPDATA%\\Jyroxa` for a stable manifest path.
+- Extension popup shows the real connection error, auto-retry, extension ID, and reload-Chrome guidance; error text no longer mis-labels pipe errors as “Host not registered”.
+- Native host survives panics per message and returns JSON errors instead of exiting.
+
+### Distribution
+
+- Workspace, desktop, extension, and Android 0.1.12; Android versionCode 12.
+
 ## 0.1.11 — 2026-11-19
 
 ### BitTorrent reliability

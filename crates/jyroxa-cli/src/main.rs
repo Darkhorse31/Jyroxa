@@ -271,8 +271,10 @@ fn make_engine(
     autotune: bool,
     fresh_host_stats: bool,
 ) -> Result<Arc<Downloader>> {
-    let mut config = DownloadConfig::default();
-    config.autotune = autotune;
+    let config = DownloadConfig {
+        autotune,
+        ..DownloadConfig::default()
+    };
     let host_stats = if fresh_host_stats {
         Arc::new(HostStats::in_memory())
     } else {

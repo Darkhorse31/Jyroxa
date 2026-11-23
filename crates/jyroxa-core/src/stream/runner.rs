@@ -68,9 +68,7 @@ async fn resolve_hls_segments(
             Box::pin(resolve_hls_segments(client, &best.uri, headers)).await
         }
         HlsPlaylist::Media {
-            segments,
-            init_map,
-            ..
+            segments, init_map, ..
         } => {
             let mut urls = Vec::new();
             if let Some(map) = init_map {
@@ -148,7 +146,7 @@ pub async fn stream_download(
 
     let total_hint: u64 = 0;
     let connections = connections.clamp(1, MAX_CONNECTIONS);
-  if let Some(ref tx) = events {
+    if let Some(ref tx) = events {
         let _ = tx.send(ProgressEvent::Started {
             total_size: None,
             connections,
@@ -161,11 +159,16 @@ pub async fn stream_download(
     let started = Instant::now();
     let sem = Arc::new(Semaphore::new(connections));
     let mut handles = Vec::with_capacity(segments.len());
-    let results: Arc<tokio::sync::Mutex<Vec<(usize, Vec<u8>)>>> =
+    type SegmentBuf = (usize, Vec<u8>);
+    let results: Arc<tokio::sync::Mutex<Vec<SegmentBuf>>> =
         Arc::new(tokio::sync::Mutex::new(Vec::new()));
 
     for (idx, url) in segments.into_iter().enumerate() {
-        let permit = sem.clone().acquire_owned().await.map_err(|_| Error::Cancelled)?;
+        let permit = sem
+            .clone()
+            .acquire_owned()
+            .await
+            .map_err(|_| Error::Cancelled)?;
         let client = client.clone();
         let hdrs = headers.clone();
         let ctrl = control.clone();
@@ -216,7 +219,9 @@ pub async fn stream_download(
     let first_bytes: Vec<&[u8]> = parts.iter().map(|(_, b)| b.as_slice()).collect();
 
     if let Some(parent) = output.parent() {
-        tokio::fs::create_dir_all(parent).await.map_err(Error::from)?;
+        tokio::fs::create_dir_all(parent)
+            .await
+            .map_err(Error::from)?;
     }
     let mut file = tokio::fs::File::create(output).await.map_err(Error::from)?;
     let mut total: u64 = 0;
@@ -267,7 +272,10 @@ fn is_raw_stream(output: &Path, parts: &[&[u8]]) -> bool {
     if output.extension().and_then(|e| e.to_str()) == Some("mp4") {
         return false;
     }
-    parts.first().map(|p| p.starts_with(b"\x47")).unwrap_or(false)
+    parts
+        .first()
+        .map(|p| p.starts_with(b"\x47"))
+        .unwrap_or(false)
 }
 
 async fn remux_to_mp4(input: &Path, control: Control) -> Result<PathBuf> {

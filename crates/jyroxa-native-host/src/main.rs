@@ -40,6 +40,9 @@ fn extension_to_pipe(msg: ExtensionMessage) -> PipeMessage {
         ExtensionMessage::GetSettings => PipeMessage::GetSettings,
         ExtensionMessage::SetSilentAdd { silent_add } => PipeMessage::SetSilentAdd { silent_add },
         ExtensionMessage::GrabLinks { html, page_url } => PipeMessage::GrabLinks { html, page_url },
+        ExtensionMessage::ProbeVideoFormats { page_url } => {
+            PipeMessage::ProbeVideoFormats { page_url }
+        }
         ExtensionMessage::Handoff(h) | ExtensionMessage::DownloadUrl(h) => PipeMessage::Handoff(h),
     }
 }
@@ -52,7 +55,10 @@ fn handle_message(
     let parsed = match parse_extension_message(&raw) {
         Ok(m) => m,
         Err(e) => {
-            respond(stdout, serde_json::json!({ "ok": false, "error": e.to_string() }));
+            respond(
+                stdout,
+                serde_json::json!({ "ok": false, "error": e.to_string() }),
+            );
             return Ok(());
         }
     };
@@ -76,9 +82,45 @@ fn handle_message(
 
     match result {
         Ok(v) => respond(stdout, v),
-        Err(e) => respond(stdout, serde_json::json!({ "ok": false, "error": e.to_string() })),
+        Err(e) => respond(
+            stdout,
+            serde_json::json!({ "ok": false, "error": e.to_string() }),
+        ),
     }
     Ok(())
+}
+
+fn run_host_loop(stdin: &mut impl Read, stdout: &mut impl Write) {
+    loop {
+        let frame = read_json_frame(&mut *stdin);
+        match frame {
+            Ok(v) => {
+                let handled = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                    handle_message(&mut *stdin, &mut *stdout, v)
+                }));
+                match handled {
+                    Ok(Ok(())) => {}
+                    Ok(Err(_)) => break,
+                    Err(_) => {
+                        respond(
+                            stdout,
+                            serde_json::json!({
+                                "ok": false,
+                                "error": "native host internal error"
+                            }),
+                        );
+                    }
+                }
+            }
+            Err(FramingError::Io(e))
+                if e.kind() == io::ErrorKind::UnexpectedEof
+                    || e.kind() == io::ErrorKind::BrokenPipe =>
+            {
+                break;
+            }
+            Err(_) => break,
+        }
+    }
 }
 
 fn main() {
@@ -86,20 +128,7 @@ fn main() {
     let mut stdin_lock = stdin.lock();
     let stdout = io::stdout();
     let mut stdout_lock = stdout.lock();
-
-    loop {
-        match read_json_frame(&mut stdin_lock) {
-            Ok(v) => {
-                if handle_message(&mut stdin_lock, &mut stdout_lock, v).is_err() {
-                    break;
-                }
-            }
-            Err(FramingError::Io(e))
-                if e.kind() == io::ErrorKind::UnexpectedEof || e.kind() == io::ErrorKind::BrokenPipe =>
-            {
-                break;
-            }
-            Err(_) => break,
-        }
-    }
+    let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        run_host_loop(&mut stdin_lock, &mut stdout_lock);
+    }));
 }
