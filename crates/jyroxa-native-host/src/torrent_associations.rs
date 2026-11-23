@@ -93,20 +93,12 @@ pub fn uninstall_torrent_associations() -> Result<(), String> {
 #[cfg(all(test, windows))]
 mod tests {
     use super::*;
-    use std::sync::{Mutex, OnceLock};
-
-    static TEST_MUTEX: OnceLock<Mutex<()>> = OnceLock::new();
-
-    fn lock_test() -> std::sync::MutexGuard<'static, ()> {
-        TEST_MUTEX
-            .get_or_init(|| Mutex::new(()))
-            .lock()
-            .expect("torrent assoc test lock")
-    }
 
     #[test]
     fn torrent_assoc_install_under_test_prefix() {
-        let _g = lock_test();
+        let _g = crate::integration::tests::MANIFEST_TEST_LOCK
+            .lock()
+            .expect("registry test lock");
         let prefix = format!("JyroxaTestTorrentAssoc_{}", std::process::id());
         std::env::set_var("JYROXA_REGISTRY_PREFIX", &prefix);
         let desktop = std::env::temp_dir().join("jyroxa-desktop-test.exe");

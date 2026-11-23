@@ -1,7 +1,7 @@
 //! librqbit session wrapper tuned for throughput.
 
 use std::num::NonZeroU32;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -105,7 +105,7 @@ pub struct TorrentSession {
     output_root: PathBuf,
 }
 
-fn dht_routing_store(session_data_dir: &PathBuf) -> PathBuf {
+fn dht_routing_store(session_data_dir: &Path) -> PathBuf {
     session_data_dir.join("dht-routing.json")
 }
 
@@ -130,7 +130,7 @@ fn public_dht_bootstrap_addrs() -> Vec<String> {
 
 /// DHT routing table persisted per torrent session folder so parallel sidecars do not
 /// share the global rqbit cache file (which serializes writes and stalls cold bootstrap).
-fn dht_session_config(session_data_dir: &PathBuf) -> DhtSessionConfig {
+fn dht_session_config(session_data_dir: &Path) -> DhtSessionConfig {
     let _ = std::fs::create_dir_all(session_data_dir);
     DhtSessionConfig {
         bootstrap_addrs: Some(public_dht_bootstrap_addrs()),

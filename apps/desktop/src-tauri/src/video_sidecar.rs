@@ -10,20 +10,16 @@ pub struct YtFormat {
     pub format_id: String,
     pub ext: Option<String>,
     pub height: Option<u64>,
-    pub width: Option<u64>,
     pub vcodec: Option<String>,
     pub acodec: Option<String>,
     pub filesize: Option<u64>,
     pub tbr: Option<f64>,
     pub url: Option<String>,
-    pub protocol: Option<String>,
 }
 
 #[derive(Debug, Clone, Deserialize)]
 pub struct YtInfo {
-    pub id: Option<String>,
     pub title: Option<String>,
-    pub webpage_url: Option<String>,
     pub formats: Option<Vec<YtFormat>>,
 }
 
@@ -35,8 +31,40 @@ pub fn ffmpeg_path() -> PathBuf {
     crate::sidecar_paths::sidecar_exe("ffmpeg.exe")
 }
 
-pub fn yt_dlp_available() -> bool {
-    yt_dlp_path().is_file()
+fn browser_client_args(page_url: &str) -> &'static [&'static str] {
+    let Ok(url) = url::Url::parse(page_url) else {
+        return &[];
+    };
+    // Use a browser client for extraction. Leave full media transfers on the
+    // default downloader; forcing impersonation there can throttle the CDN.
+    if url.host_str().is_some_and(|host| {
+        host == "dailymotion.com" || host.ends_with(".dailymotion.com") || host == "dai.ly"
+    }) {
+        &["--impersonate", "firefox"]
+    } else {
+        &[]
+    }
+}
+
+async fn output_ytdlp(
+    cmd: &mut tokio::process::Command,
+    page_url: &str,
+) -> std::io::Result<std::process::Output> {
+    for attempt in 0..3 {
+        let output = crate::process_spawn::output_tokio(cmd).await?;
+        let error = String::from_utf8_lossy(&output.stderr);
+        // A fresh extraction obtains new signed CDN URLs. Retrying individual
+        // fragments against a rejected URL cannot recover an expired response.
+        let refresh = !browser_client_args(page_url).is_empty()
+            && ["HTTP Error 403", "HTTP Error 429", "No video formats found"]
+                .iter()
+                .any(|message| error.contains(message));
+        if output.status.success() || !refresh || attempt == 2 {
+            return Ok(output);
+        }
+        tokio::time::sleep(std::time::Duration::from_secs(1 << attempt)).await;
+    }
+    unreachable!("the last attempt always returns its output")
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -153,7 +181,8 @@ pub async fn probe_page_formats(page_url: &str) -> Result<YtInfo, String> {
     if !ytdlp.is_file() {
         return Err("yt-dlp.exe not bundled".into());
     }
-    let out = tokio::process::Command::new(&ytdlp)
+    let mut cmd = tokio::process::Command::new(&ytdlp);
+    cmd.args(browser_client_args(page_url))
         .args([
             "--no-warnings",
             "--no-playlist",
@@ -162,8 +191,8 @@ pub async fn probe_page_formats(page_url: &str) -> Result<YtInfo, String> {
             page_url,
         ])
         .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .output()
+        .stderr(Stdio::piped());
+    let out = output_ytdlp(&mut cmd, page_url)
         .await
         .map_err(|e| e.to_string())?;
     if !out.status.success() {
@@ -222,7 +251,14 @@ pub async fn download_via_ytdlp(
         return Err("yt-dlp.exe not bundled".into());
     }
     let ffmpeg = ffmpeg_path();
-    let mut args = vec!["--no-warnings".to_string(), "--no-playlist".to_string()];
+    let mut args = vec![
+        "--no-warnings".to_string(),
+        "--no-playlist".to_string(),
+        // A completed file must contain every fragment. On a rejected CDN URL,
+        // fail this attempt so output_ytdlp can refresh the extraction instead
+        // of silently skipping fragments for the rest of the video.
+        "--abort-on-unavailable-fragments".to_string(),
+    ];
     if ffmpeg.is_file() {
         args.push("--ffmpeg-location".into());
         args.push(ffmpeg.to_string_lossy().into_owned());
@@ -244,11 +280,11 @@ pub async fn download_via_ytdlp(
         args.push("bv*+ba/b".to_string());
     }
     args.push(page_url.to_string());
-    let out = tokio::process::Command::new(&ytdlp)
-        .args(&args)
+    let mut cmd = tokio::process::Command::new(&ytdlp);
+    cmd.args(&args)
         .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .output()
+        .stderr(Stdio::piped());
+    let out = output_ytdlp(&mut cmd, page_url)
         .await
         .map_err(|e| e.to_string())?;
     if !out.status.success() {
@@ -280,48 +316,131 @@ pub async fn download_via_ytdlp(
 mod tests {
     use super::*;
 
+    #[cfg(windows)]
+    #[tokio::test]
+    async fn rejected_cdn_urls_refresh_with_bounded_hidden_processes() {
+        let directory = tempfile::tempdir().unwrap();
+        for (name, url, failures, error, expected_attempts, success) in [
+            (
+                "recover",
+                "https://dai.ly/test",
+                1,
+                "HTTP Error 403",
+                2,
+                true,
+            ),
+            (
+                "bounded",
+                "https://dai.ly/test",
+                9,
+                "HTTP Error 403",
+                3,
+                false,
+            ),
+            (
+                "permanent",
+                "https://dai.ly/test",
+                9,
+                "Video removed",
+                1,
+                false,
+            ),
+            (
+                "other",
+                "https://youtube.com/test",
+                9,
+                "HTTP Error 403",
+                1,
+                false,
+            ),
+        ] {
+            let count_path = directory.path().join(name);
+            let mut cmd = tokio::process::Command::new("powershell.exe");
+            cmd.args([
+                "-NoProfile",
+                "-NonInteractive",
+                "-Command",
+                r#"
+                $path = $env:JYROXA_TEST_ATTEMPTS
+                $count = 1
+                if ([IO.File]::Exists($path)) { $count += [int][IO.File]::ReadAllText($path) }
+                [IO.File]::WriteAllText($path, [string]$count)
+                if ($count -le [int]$env:JYROXA_TEST_FAILURES) {
+                    [Console]::Error.WriteLine($env:JYROXA_TEST_ERROR)
+                    exit 1
+                }
+                [Console]::WriteLine('complete')
+            "#,
+            ]);
+            cmd.env("JYROXA_TEST_ATTEMPTS", &count_path)
+                .env("JYROXA_TEST_FAILURES", failures.to_string())
+                .env("JYROXA_TEST_ERROR", error);
+            let output = output_ytdlp(&mut cmd, url).await.unwrap();
+            assert_eq!(output.status.success(), success, "{name}");
+            assert_eq!(
+                std::fs::read_to_string(count_path).unwrap(),
+                expected_attempts.to_string(),
+                "{name}"
+            );
+            if success {
+                assert_eq!(String::from_utf8_lossy(&output.stdout).trim(), "complete");
+            }
+        }
+    }
+
+    #[test]
+    fn dailymotion_probes_use_a_browser_client() {
+        for page in [
+            "https://www.dailymotion.com/video/x89eyek",
+            "https://dailymotion.com/video/x89eyek",
+            "https://dai.ly/x89eyek",
+        ] {
+            assert_eq!(browser_client_args(page), ["--impersonate", "firefox"]);
+        }
+        for page in [
+            "https://www.youtube.com/watch?v=aqz-KE-bpKQ",
+            "https://dailymotion.com.example/video/x89eyek",
+            "https://example.com/?url=https://dailymotion.com/video/x89eyek",
+            "not a URL",
+        ] {
+            assert!(browser_client_args(page).is_empty(), "{page}");
+        }
+    }
+
     #[test]
     fn formats_menu_includes_progressive_and_merged() {
         let info = YtInfo {
-            id: Some("x".into()),
             title: Some("Title".into()),
-            webpage_url: None,
             formats: Some(vec![
                 YtFormat {
                     format_id: "22".into(),
                     ext: Some("mp4".into()),
                     height: Some(720),
-                    width: Some(1280),
                     vcodec: Some("avc1".into()),
                     acodec: Some("mp4a".into()),
                     filesize: Some(5_000_000),
                     tbr: Some(800.0),
                     url: Some("https://cdn.example/22.mp4".into()),
-                    protocol: Some("https".into()),
                 },
                 YtFormat {
                     format_id: "140".into(),
                     ext: Some("m4a".into()),
                     height: None,
-                    width: None,
                     vcodec: Some("none".into()),
                     acodec: Some("mp4a".into()),
                     filesize: Some(1_000_000),
                     tbr: Some(128.0),
                     url: Some("https://cdn.example/140.m4a".into()),
-                    protocol: Some("https".into()),
                 },
                 YtFormat {
                     format_id: "137".into(),
                     ext: Some("mp4".into()),
                     height: Some(1080),
-                    width: Some(1920),
                     vcodec: Some("avc1".into()),
                     acodec: Some("none".into()),
                     filesize: Some(8_000_000),
                     tbr: Some(2500.0),
                     url: None,
-                    protocol: Some("https".into()),
                 },
             ]),
         };

@@ -40,8 +40,10 @@ pub fn jyroxa_cli_exe() -> PathBuf {
 }
 
 fn collect_sidecar_candidates(dir: &Path, out: &mut Vec<PathBuf>) {
-    for name in CLI_CANDIDATE_NAMES {
-        for sub in ["", "sidecars"] {
+    // Portable Jyroxa.exe and CLI jyroxa.exe compare equal on Windows.
+    // Prefer the explicit sidecar folder before considering root-level names.
+    for sub in ["sidecars", ""] {
+        for name in CLI_CANDIDATE_NAMES {
             push_unique(out, dir.join(sub).join(name));
         }
     }
@@ -65,6 +67,30 @@ pub fn sidecar_exe(name: &str) -> PathBuf {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn portable_layout_selects_cli_before_desktop_executable() {
+        let temp = std::env::temp_dir();
+        let unique = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let root = temp.join(format!(
+            "jyroxa-sidecar-paths-{}-{unique}",
+            std::process::id()
+        ));
+        std::fs::create_dir(&root).unwrap();
+        std::fs::create_dir(root.join("sidecars")).unwrap();
+        let cli = root.join("sidecars/jyroxa.exe");
+        std::fs::write(root.join("Jyroxa.exe"), b"desktop").unwrap();
+        std::fs::write(&cli, b"cli").unwrap();
+        let mut candidates = Vec::new();
+        collect_sidecar_candidates(&root, &mut candidates);
+        assert_eq!(candidates.first(), Some(&cli));
+        let resolved = std::fs::canonicalize(&root).unwrap();
+        assert!(resolved.starts_with(std::fs::canonicalize(temp).unwrap()));
+        std::fs::remove_dir_all(resolved).unwrap();
+    }
 
     #[test]
     fn resolves_current_exe_dir() {

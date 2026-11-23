@@ -196,7 +196,13 @@ async fn handle_pipe_message(app: &AppHandle, env: PipeEnvelope) -> serde_json::
                 match state.0.add_download(app.clone(), args).await {
                     Ok(id) => {
                         crate::bring_main_window_to_front(app);
-                        crate::engine::show_native_notification(app, "Added to Jyroxa", &filename);
+                        if settings.notifications {
+                            crate::engine::show_native_notification(
+                                app,
+                                "Added to Jyroxa",
+                                &filename,
+                            );
+                        }
                         serde_json::json!({ "ok": true, "download_id": id, "silent": true })
                     }
                     Err(e) => serde_json::json!({ "ok": false, "error": e.to_string() }),

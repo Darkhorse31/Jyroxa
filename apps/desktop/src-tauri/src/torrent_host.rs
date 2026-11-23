@@ -60,11 +60,11 @@ pub async fn probe_torrent_via_sidecar(input: &str) -> Result<TorrentProbeInfo, 
             cli.display()
         )));
     }
-    let out = Command::new(&cli)
-        .args(["torrent", "meta", input])
+    let mut cmd = Command::new(&cli);
+    cmd.args(["torrent", "meta", input])
         .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .output()
+        .stderr(Stdio::piped());
+    let out = crate::process_spawn::output_tokio(&mut cmd)
         .await
         .map_err(|e| Error::other(e.to_string()))?;
     if !out.status.success() {
@@ -109,6 +109,12 @@ fn torrent_cli_args(
     }
     args.push("--ratio-limit".into());
     args.push(settings.torrent_ratio_limit.to_string());
+    args.push("--session-dir".into());
+    args.push(
+        torrent_session_dir(output_dir, input)
+            .to_string_lossy()
+            .into_owned(),
+    );
     args
 }
 
@@ -139,7 +145,9 @@ pub async fn spawn_torrent_sidecar(
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .kill_on_drop(true);
+    crate::process_spawn::configure_tokio(&mut cmd);
     let mut child = cmd.spawn().map_err(|e| Error::other(e.to_string()))?;
+    crate::process_spawn::bind_lifetime_to_app(&child);
 
     if let Some(stdout) = child.stdout.take() {
         tokio::spawn(async move {
@@ -192,10 +200,18 @@ pub async fn spawn_torrent_sidecar(
     if status.success() {
         Ok(())
     } else {
-        let msg =
-            last_error_line.unwrap_or_else(|| format!("torrent sidecar exited with {}", status));
-        Err(Error::other(msg))
+        let _ = status;
+        Err(Error::other(sidecar_failure_message(last_error_line)))
     }
+}
+
+fn sidecar_failure_message(last_error_line: Option<String>) -> String {
+    if let Some(msg) = last_error_line.filter(|s| !s.trim().is_empty()) {
+        return msg;
+    }
+    // Console closed / killed / crash — no structured stderr from the sidecar.
+    "The torrent engine stopped unexpectedly. Your download was interrupted. Click Retry to resume."
+        .into()
 }
 
 #[derive(Clone, Debug)]
@@ -206,7 +222,6 @@ pub struct TorrentProgressLine {
     pub peers: u32,
     pub seeds: u32,
     pub speed_bps: f64,
-    pub state: String,
 }
 
 impl TorrentProgressLine {
@@ -218,7 +233,6 @@ impl TorrentProgressLine {
             peers: p.peers,
             seeds: p.seeds,
             speed_bps: p.speed_bps,
-            state: p.state,
         }
     }
 }
@@ -263,8 +277,12 @@ pub fn mark_torrent_completed(view: &mut DownloadView) {
     }
 }
 
-pub fn sidecar_output_dir(data_dir: &Path, id: u64) -> PathBuf {
-    data_dir.join("torrents").join(id.to_string())
+fn torrent_session_dir(output_dir: &Path, source: &str) -> PathBuf {
+    use sha2::{Digest, Sha256};
+    // Source identity survives task renumbering on restart. Separate sidecars
+    // sharing a download folder must not read and rewrite one session database.
+    let key = format!("{:x}", Sha256::digest(source.as_bytes()));
+    output_dir.join(".jyroxa-torrent-session").join(key)
 }
 
 /// Sum on-disk bytes in a torrent job folder (for queue restore).
@@ -303,6 +321,19 @@ mod tests {
     use jyroxa_core::torrent::TorrentProgressLine as CoreLine;
 
     #[test]
+    fn torrent_args_keep_destination_and_isolate_persistent_sessions() {
+        let output = Path::new("downloads");
+        let source = "magnet:?xt=urn:btih:0000000000000000000000000000000000000001";
+        let args = torrent_cli_args(source, output, None, &AppSettings::default());
+        assert_eq!(args[4], output.to_string_lossy());
+        let session = torrent_session_dir(output, source);
+        assert_eq!(args.last().unwrap(), &session.to_string_lossy());
+        assert_eq!(session, torrent_session_dir(output, source));
+        assert_ne!(session, torrent_session_dir(output, "another source"));
+        assert!(session.starts_with(output.join(".jyroxa-torrent-session")));
+    }
+
+    #[test]
     fn parses_stderr_progress() {
         let raw = CoreLine {
             phase: TorrentProgressPhase::Metadata,
@@ -315,5 +346,16 @@ mod tests {
         };
         let parsed = parse_progress_line(&raw.format()).unwrap();
         assert_eq!(parsed.peers, 4);
+    }
+
+    #[test]
+    fn unexpected_sidecar_exit_is_plain_english_with_retry() {
+        let msg = sidecar_failure_message(None);
+        assert!(msg.contains("Retry"), "{msg}");
+        assert!(msg.contains("unexpectedly"), "{msg}");
+        assert_eq!(
+            sidecar_failure_message(Some("peer timeout".into())),
+            "peer timeout"
+        );
     }
 }

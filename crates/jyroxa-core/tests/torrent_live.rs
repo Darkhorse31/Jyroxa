@@ -1,13 +1,11 @@
-//! Live BitTorrent metadata (network). Current Debian netinst info hash without tracker params.
+//! Live BitTorrent metadata (network), independently checked against Debian metainfo.
+#![cfg(feature = "torrent-engine")]
 
 use std::time::Duration;
 
 use jyroxa_core::torrent::{
-    probe_torrent_source_with, DHT_COLD_METADATA_TIMEOUT_SECS, TorrentProbeOptions,
+    probe_torrent_source_with, TorrentProbeOptions, DHT_COLD_METADATA_TIMEOUT_SECS,
 };
-
-/// debian-13.7.0-amd64-netinst.iso (cdimage.debian.org current amd64 bt-cd).
-const DEBIAN_DHT_MAGNET: &str = "magnet:?xt=urn:btih:7acf8fb590b2060dd9c3146ef770169d593433b0";
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn dht_only_debian_magnet_metadata() {
@@ -16,16 +14,54 @@ async fn dht_only_debian_magnet_metadata() {
         return;
     }
 
-    // Reuse the isolated persisted DHT store so a prior warm table speeds cold start.
-    let session_data_dir = jyroxa_core::torrent::isolated_dht_session_dir();
-    let _ = std::fs::create_dir_all(&session_data_dir);
+    // Discover the current official image rather than testing a retired swarm.
+    // The downloaded metainfo establishes identity only; the probe receives just
+    // its info hash, with tracker discovery disabled.
+    let client = reqwest::Client::builder()
+        .timeout(Duration::from_secs(30))
+        .build()
+        .unwrap();
+    let base = "https://cdimage.debian.org/debian-cd/current/amd64/bt-cd/";
+    let listing = client
+        .get(base)
+        .send()
+        .await
+        .unwrap()
+        .error_for_status()
+        .unwrap()
+        .text()
+        .await
+        .unwrap();
+    let pattern =
+        regex::Regex::new(r#"href="(debian-[0-9.]+-amd64-netinst\.iso\.torrent)""#).unwrap();
+    let filename = &pattern
+        .captures(&listing)
+        .expect("official Debian netinst torrent")[1];
+    let source = format!("{base}{filename}");
+    let bytes = client
+        .get(&source)
+        .send()
+        .await
+        .unwrap()
+        .error_for_status()
+        .unwrap()
+        .bytes()
+        .await
+        .unwrap();
+    let expected = librqbit::torrent_from_bytes(&bytes).expect("official torrent metainfo");
+    let hash = expected.info_hash.as_string();
+    let magnet = format!("magnet:?xt=urn:btih:{hash}");
+    eprintln!("DHT-only source={source} info_hash={hash}");
+
+    // A fresh table proves cold bootstrap and avoids touching the user's cache.
+    let session_data_dir = tempfile::tempdir().unwrap();
 
     let info = probe_torrent_source_with(
-        DEBIAN_DHT_MAGNET,
+        &magnet,
         TorrentProbeOptions {
             dht_only: true,
             timeout: Some(Duration::from_secs(DHT_COLD_METADATA_TIMEOUT_SECS)),
-            session_data_dir: Some(session_data_dir),
+            session_data_dir: Some(session_data_dir.path().to_path_buf()),
         },
     )
     .await
@@ -40,8 +76,5 @@ async fn dht_only_debian_magnet_metadata() {
         "name={}",
         info.name
     );
-    assert_eq!(
-        info.info_hash.as_deref(),
-        Some("7acf8fb590b2060dd9c3146ef770169d593433b0")
-    );
+    assert_eq!(info.info_hash.as_deref(), Some(hash.as_str()));
 }

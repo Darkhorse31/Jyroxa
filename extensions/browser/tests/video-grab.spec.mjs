@@ -64,6 +64,7 @@ const page = context.pages()[0] || (await context.newPage());
 await context.waitForEvent("serviceworker", { timeout: 20000 }).catch(() => null);
 
 await page.addInitScript(() => {
+  globalThis.__jxHandoffs = [];
   const mock = {
     runtime: {
       getURL: (p) => p,
@@ -85,10 +86,20 @@ await page.addInitScript(() => {
                 sizeLabel: "",
                 filename: "master.m3u8",
               },
+              {
+                url: `${location.origin}/manifest.mpd`,
+                kind: "dash",
+                label: "DASH",
+                sizeLabel: "",
+                filename: "manifest.mpd",
+              },
             ],
           };
         }
-        if (msg?.type === "video-grab-handoff") return { ok: true };
+        if (msg?.type === "video-grab-handoff") {
+          globalThis.__jxHandoffs.push(msg.payload);
+          return { ok: true };
+        }
         return { ok: true };
       },
       onMessage: { addListener: () => {} },
@@ -116,7 +127,14 @@ await btn.click();
 const menu = page.locator(".jx-vgrab-menu");
 await menu.waitFor({ state: "visible" });
 const items = await page.locator(".jx-vgrab-item").count();
-assert.ok(items >= 1, "expected at least one media row");
+assert.ok(items >= 3, "expected MP4, HLS, and DASH media rows");
+for (const [label, suffix] of [["clip.mp4", "/clip.mp4"], ["HLS", "/master.m3u8"], ["DASH", "/manifest.mpd"]]) {
+  if (!(await menu.isVisible())) await btn.click();
+  await page.locator(".jx-vgrab-item").filter({ hasText: label }).click();
+  const handedOff = await page.evaluate(() => globalThis.__jxHandoffs.at(-1));
+  assert.equal(handedOff.url, `${base.slice(0, -1)}${suffix}`);
+  assert.equal(handedOff.page_url, base);
+}
 await context.close();
 server.close();
 console.log("video-grab.spec.mjs OK");

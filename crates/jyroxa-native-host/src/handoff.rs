@@ -64,7 +64,26 @@ pub enum HandoffError {
 impl BrowserHandoff {
     pub fn validate(&self) -> Result<(), HandoffError> {
         let u = self.url.trim();
-        if u.is_empty() || (!u.starts_with("http://") && !u.starts_with("https://")) {
+        let valid = url::Url::parse(u)
+            .ok()
+            .is_some_and(|parsed| match parsed.scheme() {
+                "http" | "https" => parsed.host_str().is_some(),
+                "magnet" => parsed.query_pairs().any(|(key, value)| {
+                    key == "xt"
+                        && value.strip_prefix("urn:btih:").is_some_and(|hash| {
+                            hash.len() == 40 && hash.bytes().all(|b| b.is_ascii_hexdigit())
+                        })
+                }),
+                "file" => parsed.to_file_path().ok().is_some_and(|path| {
+                    path.is_file()
+                        && path
+                            .extension()
+                            .and_then(|ext| ext.to_str())
+                            .is_some_and(|ext| ext.eq_ignore_ascii_case("torrent"))
+                }),
+                _ => false,
+            });
+        if !valid {
             return Err(HandoffError::MissingUrl);
         }
         Ok(())
@@ -121,6 +140,36 @@ mod tests {
     fn rejects_bad_url() {
         let raw = serde_json::json!({ "type": "handoff", "url": "ftp://x" });
         assert!(parse_extension_message(&raw).is_err());
+    }
+
+    #[test]
+    fn accepts_magnet_handoff_and_rejects_invalid_hash() {
+        let magnet = "magnet:?xt=urn:btih:0123456789abcdef0123456789abcdef01234567";
+        assert!(
+            parse_extension_message(&serde_json::json!({ "type": "handoff", "url": magnet }))
+                .is_ok()
+        );
+        assert!(parse_extension_message(
+            &serde_json::json!({ "type": "handoff", "url": "magnet:?xt=urn:btih:invalid" })
+        )
+        .is_err());
+    }
+
+    #[test]
+    fn accepts_existing_torrent_file_handoff() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("sample + test.torrent");
+        std::fs::write(&path, b"fixture").unwrap();
+        let file = url::Url::from_file_path(&path).unwrap();
+        assert!(parse_extension_message(
+            &serde_json::json!({ "type": "handoff", "url": file.as_str() })
+        )
+        .is_ok());
+        std::fs::remove_file(path).unwrap();
+        assert!(parse_extension_message(
+            &serde_json::json!({ "type": "handoff", "url": file.as_str() })
+        )
+        .is_err());
     }
 
     #[test]

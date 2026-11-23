@@ -370,7 +370,7 @@ pub fn integration_status(desktop_exe: &Path) -> BrowserIntegrationStatus {
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use super::*;
     use crate::ext_id::PACKAGED_CHROME_EXTENSION_ID;
 
@@ -422,6 +422,7 @@ mod tests {
 
     #[test]
     fn native_messaging_registry_key_paths() {
+        let _guard = MANIFEST_TEST_LOCK.lock().expect("manifest test lock");
         // SAFETY: env mutation; other tests should not rely on JYROXA_REGISTRY_PREFIX.
         unsafe { std::env::remove_var("JYROXA_REGISTRY_PREFIX") };
         let prod = native_messaging_registry_key(r"Google\Chrome");
@@ -435,7 +436,7 @@ mod tests {
         unsafe { std::env::remove_var("JYROXA_REGISTRY_PREFIX") };
     }
 
-    static MANIFEST_TEST_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+    pub(crate) static MANIFEST_TEST_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
     #[test]
     fn preserves_ids_from_existing_manifest_on_disk() {
@@ -519,7 +520,11 @@ mod windows_live {
                     let n = server.read(&mut buf).await.unwrap_or(0);
                     let text = String::from_utf8_lossy(&buf[..n]);
                     let line = text.lines().next().unwrap_or("").trim();
-                    let resp = if line.contains("Ping") {
+                    let ping = serde_json::from_str::<crate::handoff::PipeEnvelope>(line)
+                        .is_ok_and(|envelope| {
+                            matches!(envelope.message, crate::handoff::PipeMessage::Ping)
+                        });
+                    let resp = if ping {
                         r#"{"ok":true,"connected":true}"#
                     } else {
                         r#"{"ok":false,"error":"unexpected"}"#
@@ -545,6 +550,10 @@ mod windows_live {
 
     #[test]
     fn install_and_framed_ping_in_temp_data_dir() {
+        use std::os::windows::process::CommandExt;
+        let _guard = super::tests::MANIFEST_TEST_LOCK
+            .lock()
+            .expect("manifest test lock");
         let tmp = tempfile::tempdir().expect("tempdir");
         let data = tmp.path().join("jyroxa-data");
         std::fs::create_dir_all(&data).expect("data dir");
@@ -582,6 +591,7 @@ mod windows_live {
         install_native_host(&desktop, &BrowserOriginsConfig::default()).expect("install");
 
         let mut child = Command::new(&host_dst)
+            .creation_flags(0x0800_0000)
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
             .stderr(Stdio::null())

@@ -1,12 +1,14 @@
 //! Headless torrent download and benchmark helpers.
 
+use std::future::Future;
 use std::path::PathBuf;
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
 use anyhow::{Context, Result};
 use jyroxa_core::torrent::{
-    run_until_done_with_stall, wait_initialized_with_progress, TorrentJobOptions, TorrentSession,
-    TorrentSource, TorrentTuning,
+    run_until_done_with_stall, wait_initialized_with_progress, TorrentJobOptions,
+    TorrentProgressLine, TorrentProgressPhase, TorrentSession, TorrentSource, TorrentTuning,
+    METADATA_TIMEOUT_SECS,
 };
 
 pub struct TorrentGetOptions {
@@ -14,6 +16,7 @@ pub struct TorrentGetOptions {
     pub merge_trackers: bool,
     pub allow_seeding: bool,
     pub ratio_limit: f64,
+    pub session_data_dir: Option<PathBuf>,
 }
 
 impl Default for TorrentGetOptions {
@@ -23,7 +26,41 @@ impl Default for TorrentGetOptions {
             merge_trackers: true,
             allow_seeding: false,
             ratio_limit: 1.0,
+            session_data_dir: None,
         }
+    }
+}
+
+async fn resolve_with_progress<T>(
+    future: impl Future<Output = jyroxa_core::Result<T>>,
+    timeout: Duration,
+    mut emit: impl FnMut(TorrentProgressLine),
+) -> Result<T> {
+    tokio::pin!(future);
+    let mut interval = tokio::time::interval(Duration::from_millis(500));
+    let resolution = tokio::time::timeout(timeout, async {
+        loop {
+            tokio::select! {
+                result = &mut future => return result,
+                _ = interval.tick() => emit(TorrentProgressLine {
+                    phase: TorrentProgressPhase::Metadata,
+                    state: "resolving".into(),
+                    downloaded: 0,
+                    total: 0,
+                    peers: 0,
+                    seeds: 0,
+                    speed_bps: 0.0,
+                }),
+            }
+        }
+    })
+    .await;
+    match resolution {
+        Ok(result) => result.map_err(Into::into),
+        Err(_) => Err(anyhow::anyhow!(
+            "torrent metadata timeout after {}s; check peers and firewall settings",
+            timeout.as_secs_f64()
+        )),
     }
 }
 
@@ -49,6 +86,9 @@ pub async fn run_torrent_get(
     tuning.merge_builtin_trackers = opts.merge_trackers;
     tuning.allow_seeding = opts.allow_seeding;
     tuning.ratio_limit = opts.ratio_limit;
+    if let Some(dir) = opts.session_data_dir {
+        tuning.session_data_dir = Some(dir);
+    }
 
     let session = TorrentSession::open(output.clone(), tuning)
         .await
@@ -62,26 +102,35 @@ pub async fn run_torrent_get(
         let bytes = std::fs::read(&input).with_context(|| format!("read {input}"))?;
         TorrentSource::FileBytes(bytes.into())
     };
-    let handle = session
-        .add(
-            source,
-            TorrentJobOptions {
-                output_folder: Some(output.clone()),
-                only_files: if only_files.is_empty() {
-                    None
-                } else {
-                    Some(only_files)
-                },
-                ..Default::default()
-            },
-        )
-        .await?;
-
     let meta_start = Instant::now();
-    let (_tx, cancel_rx) = tokio::sync::watch::channel(false);
-    let emit = |p: jyroxa_core::torrent::TorrentProgressLine| {
+    let emit = |p: TorrentProgressLine| {
         eprintln!("{}", p.format());
     };
+    // Magnet resolution happens inside add(), before a handle is returned.
+    // Include that work in the metadata deadline and keep stdout/stderr clients
+    // informed while DHT and trackers discover peers.
+    let add = session.add(
+        source,
+        TorrentJobOptions {
+            output_folder: Some(output.clone()),
+            only_files: if only_files.is_empty() {
+                None
+            } else {
+                Some(only_files)
+            },
+            ..Default::default()
+        },
+    );
+    let resolution =
+        resolve_with_progress(add, Duration::from_secs(METADATA_TIMEOUT_SECS), emit).await;
+    let handle = match resolution {
+        Ok(handle) => handle,
+        Err(error) => {
+            session.stop().await;
+            return Err(error);
+        }
+    };
+    let (_tx, cancel_rx) = tokio::sync::watch::channel(false);
     wait_initialized_with_progress(&handle, cancel_rx, emit).await?;
     let metadata_ms = meta_start.elapsed().as_millis();
     eprintln!("metadata: {metadata_ms} ms");
@@ -131,4 +180,42 @@ pub async fn run_torrent_bench(
         let _ = std::fs::remove_dir_all(&dir);
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn pending_resolution_emits_metadata_and_has_a_deadline() {
+        let mut updates = Vec::new();
+        let result = resolve_with_progress(
+            std::future::pending::<jyroxa_core::Result<()>>(),
+            Duration::from_millis(100),
+            |update| updates.push(update),
+        )
+        .await;
+        assert!(result.unwrap_err().to_string().contains("metadata timeout"));
+        assert!(!updates.is_empty());
+        assert!(updates
+            .iter()
+            .all(|update| update.phase == TorrentProgressPhase::Metadata));
+    }
+
+    #[tokio::test]
+    async fn resolution_preserves_success_and_errors() {
+        assert_eq!(
+            resolve_with_progress(async { Ok(42) }, Duration::from_secs(1), |_| {})
+                .await
+                .unwrap(),
+            42
+        );
+        let result = resolve_with_progress(
+            async { Err::<(), _>(jyroxa_core::Error::other("peer failed")) },
+            Duration::from_secs(1),
+            |_| {},
+        )
+        .await;
+        assert!(result.unwrap_err().to_string().contains("peer failed"));
+    }
 }

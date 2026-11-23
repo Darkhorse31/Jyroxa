@@ -1,6 +1,6 @@
 # Changelog
 
-## 0.1.12 — 2026-11-20
+## 0.1.12 — 2026-11-23
 
 ### Browser native host
 
@@ -8,6 +8,23 @@
 - Native host manifest keeps the packaged extension ID plus legacy unpacked IDs; copies `jyroxa-native-host.exe` into `%LOCALAPPDATA%\\Jyroxa` for a stable manifest path.
 - Extension popup shows the real connection error, auto-retry, extension ID, and reload-Chrome guidance; error text no longer mis-labels pipe errors as “Host not registered”.
 - Native host survives panics per message and returns JSON errors instead of exiting.
+
+### HTTP and torrent reliability
+
+- Reuse saturated-host connection counts and bound worker growth to the selected connection cap.
+- Claim the fast-start lead range once so parallel workers do not download duplicate bytes.
+- Resolve torrent metadata without unconditional bootstrap delays, with progress and timeout coverage during magnet resolution.
+- Preserve torrent output folders and per-source session state across pause, resume, and restart.
+- Release the active-download lock before pumping the torrent queue so Retry can recover after a sidecar exits.
+- Accept native-host magnet and local torrent handoffs, including file URLs containing literal plus signs.
+
+### Windows sidecars
+
+- Keep torrent and video subprocesses hidden and terminate them with the desktop app.
+- Use a browser client for Dailymotion format probes while preserving full-download throughput with the default media client.
+- Refresh Dailymotion metadata after CDN rejection and fail incomplete video fragments instead of silently skipping them.
+- Prefer portable `sidecars` binaries when the desktop executable is named `Jyroxa.exe`.
+- Respect the notification setting for completed and failed downloads.
 
 ### Distribution
 

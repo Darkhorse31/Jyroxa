@@ -7,6 +7,15 @@ authors.workspace = true
 rust-version.workspace = true
 description = "Jyroxa desktop download manager (Tauri)"
 
+[features]
+# Internal stdin/stdout harness; excluded from normal desktop distributions.
+release-gate = []
+
+[[bin]]
+name = "jyroxa-release-gate"
+path = "src/bin/release_gate.rs"
+required-features = ["release-gate"]
+
 [lib]
 name = "jyroxa_desktop_lib"
 # MinGW ld chokes on huge cdylib export tables (ordinarly >64k); desktop links as rlib.
@@ -29,5 +38,9 @@ tokio = { workspace = true }
 tracing = { workspace = true }
 url = { workspace = true }
 regex = { workspace = true }
+sha2 = { workspace = true }
 winreg = "0.55"
+
+[dev-dependencies]
+tempfile = "3"
 
