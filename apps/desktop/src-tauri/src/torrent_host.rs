@@ -64,9 +64,7 @@ pub async fn probe_torrent_via_sidecar(input: &str) -> Result<TorrentProbeInfo, 
     cmd.args(["torrent", "meta", input])
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
-    crate::process_spawn::configure_tokio(&mut cmd);
-    let out = cmd
-        .output()
+    let out = crate::process_spawn::output_tokio(&mut cmd)
         .await
         .map_err(|e| Error::other(e.to_string()))?;
     if !out.status.success() {
@@ -111,6 +109,12 @@ fn torrent_cli_args(
     }
     args.push("--ratio-limit".into());
     args.push(settings.torrent_ratio_limit.to_string());
+    args.push("--session-dir".into());
+    args.push(
+        torrent_session_dir(output_dir, input)
+            .to_string_lossy()
+            .into_owned(),
+    );
     args
 }
 
@@ -218,7 +222,6 @@ pub struct TorrentProgressLine {
     pub peers: u32,
     pub seeds: u32,
     pub speed_bps: f64,
-    pub state: String,
 }
 
 impl TorrentProgressLine {
@@ -230,7 +233,6 @@ impl TorrentProgressLine {
             peers: p.peers,
             seeds: p.seeds,
             speed_bps: p.speed_bps,
-            state: p.state,
         }
     }
 }
@@ -275,8 +277,12 @@ pub fn mark_torrent_completed(view: &mut DownloadView) {
     }
 }
 
-pub fn sidecar_output_dir(data_dir: &Path, id: u64) -> PathBuf {
-    data_dir.join("torrents").join(id.to_string())
+fn torrent_session_dir(output_dir: &Path, source: &str) -> PathBuf {
+    use sha2::{Digest, Sha256};
+    // Source identity survives task renumbering on restart. Separate sidecars
+    // sharing a download folder must not read and rewrite one session database.
+    let key = format!("{:x}", Sha256::digest(source.as_bytes()));
+    output_dir.join(".jyroxa-torrent-session").join(key)
 }
 
 /// Sum on-disk bytes in a torrent job folder (for queue restore).
@@ -313,6 +319,19 @@ pub fn torrent_bytes_on_disk(dir: &Path) -> u64 {
 mod tests {
     use super::*;
     use jyroxa_core::torrent::TorrentProgressLine as CoreLine;
+
+    #[test]
+    fn torrent_args_keep_destination_and_isolate_persistent_sessions() {
+        let output = Path::new("downloads");
+        let source = "magnet:?xt=urn:btih:0000000000000000000000000000000000000001";
+        let args = torrent_cli_args(source, output, None, &AppSettings::default());
+        assert_eq!(args[4], output.to_string_lossy());
+        let session = torrent_session_dir(output, source);
+        assert_eq!(args.last().unwrap(), &session.to_string_lossy());
+        assert_eq!(session, torrent_session_dir(output, source));
+        assert_ne!(session, torrent_session_dir(output, "another source"));
+        assert!(session.starts_with(output.join(".jyroxa-torrent-session")));
+    }
 
     #[test]
     fn parses_stderr_progress() {

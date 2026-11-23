@@ -297,8 +297,10 @@ impl DesktopEngine {
     pub fn build(data_dir: PathBuf) -> CoreResult<Arc<Self>> {
         let client = build_client()?;
         let host_stats = Arc::new(HostStats::with_file(data_dir.join("hoststats.json")));
-        let mut config = DownloadConfig::default();
-        config.autotune = true;
+        let config = DownloadConfig {
+            autotune: true,
+            ..DownloadConfig::default()
+        };
 
         let downloader = Arc::new(RwLock::new(
             Downloader::new(config)?
@@ -734,14 +736,14 @@ impl DesktopEngine {
             };
             let is_torrent =
                 item.kind == "torrent" || crate::torrent_host::primary_is_torrent(&urls);
-            let (downloaded, total, segments) = if status == TaskStatus::Paused {
-                Self::progress_from_state(&output)
-            } else if is_torrent {
+            let (downloaded, total, segments) = if is_torrent {
                 (
                     crate::torrent_host::torrent_bytes_on_disk(&output),
                     None,
                     Vec::new(),
                 )
+            } else if status == TaskStatus::Paused {
+                Self::progress_from_state(&output)
             } else {
                 (0, None, Vec::new())
             };
@@ -794,9 +796,8 @@ impl DesktopEngine {
                     },
                 );
             }
-            match status {
-                TaskStatus::Queued => self.enqueue(id).await,
-                _ => {}
+            if status == TaskStatus::Queued {
+                self.enqueue(id).await;
             }
         }
         let _ = app.emit("downloads-changed", ());
@@ -1146,7 +1147,7 @@ impl DesktopEngine {
                 inner.view.status = TaskStatus::Starting;
                 (
                     inner.view.urls.clone(),
-                    crate::torrent_host::sidecar_output_dir(&engine.data_dir, id),
+                    PathBuf::from(&inner.view.output),
                     inner.torrent_only_files.clone(),
                 )
             };
@@ -1212,8 +1213,10 @@ impl DesktopEngine {
                     inner.torrent_cancel = None;
                 }
             }
-            let mut active = engine.active_count.lock().await;
-            *active = active.saturating_sub(1);
+            {
+                let mut active = engine.active_count.lock().await;
+                *active = active.saturating_sub(1);
+            }
             let _ = app.emit("downloads-changed", ());
             let max = engine.settings.lock().await.max_concurrent;
             engine.pump_queue(app.clone(), max).await;
@@ -1885,46 +1888,6 @@ pub fn clipboard_url_re() -> &'static regex::Regex {
     RE.get_or_init(|| regex::Regex::new(r"https?://\S+").unwrap())
 }
 
-#[cfg(test)]
-mod tests {
-    #[test]
-    fn manual_connections_disable_autotune() {
-        assert!(!super::request_autotune(false, true));
-        assert!(!super::request_autotune(false, false));
-        assert!(super::request_autotune(true, true));
-        assert!(!super::request_autotune(true, false));
-    }
-
-    use super::*;
-
-    #[test]
-    fn persisted_status_defaults_to_queued() {
-        let json = r#"{"urls":["http://x"],"output":"C:\\f.bin","connections":4,"connections_auto":false,"sha256":null,"md5":null}"#;
-        let item: PersistedItem = serde_json::from_str(json).unwrap();
-        assert_eq!(item.status, TaskStatus::Queued);
-    }
-
-    #[test]
-    fn persisted_pause_roundtrip() {
-        let item = PersistedItem {
-            urls: vec!["http://x".into()],
-            output: r"C:\f.bin".into(),
-            filename: "f.bin".into(),
-            connections: 4,
-            connections_auto: false,
-            sha256: None,
-            md5: None,
-            status: TaskStatus::Paused,
-            kind: "http".into(),
-            torrent_only_files: None,
-            torrent_info_hash: None,
-        };
-        let json = serde_json::to_string(&item).unwrap();
-        let back: PersistedItem = serde_json::from_str(&json).unwrap();
-        assert_eq!(back.status, TaskStatus::Paused);
-    }
-}
-
 pub async fn run_queue_watchdog(app: AppHandle) {
     loop {
         tokio::time::sleep(std::time::Duration::from_secs(3)).await;
@@ -1990,5 +1953,45 @@ pub async fn run_clipboard_monitor(app: AppHandle) {
                 let _ = app.emit("clipboard-url", url);
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn manual_connections_disable_autotune() {
+        assert!(!super::request_autotune(false, true));
+        assert!(!super::request_autotune(false, false));
+        assert!(super::request_autotune(true, true));
+        assert!(!super::request_autotune(true, false));
+    }
+
+    use super::*;
+
+    #[test]
+    fn persisted_status_defaults_to_queued() {
+        let json = r#"{"urls":["http://x"],"output":"C:\\f.bin","connections":4,"connections_auto":false,"sha256":null,"md5":null}"#;
+        let item: PersistedItem = serde_json::from_str(json).unwrap();
+        assert_eq!(item.status, TaskStatus::Queued);
+    }
+
+    #[test]
+    fn persisted_pause_roundtrip() {
+        let item = PersistedItem {
+            urls: vec!["http://x".into()],
+            output: r"C:\f.bin".into(),
+            filename: "f.bin".into(),
+            connections: 4,
+            connections_auto: false,
+            sha256: None,
+            md5: None,
+            status: TaskStatus::Paused,
+            kind: "http".into(),
+            torrent_only_files: None,
+            torrent_info_hash: None,
+        };
+        let json = serde_json::to_string(&item).unwrap();
+        let back: PersistedItem = serde_json::from_str(&json).unwrap();
+        assert_eq!(back.status, TaskStatus::Paused);
     }
 }

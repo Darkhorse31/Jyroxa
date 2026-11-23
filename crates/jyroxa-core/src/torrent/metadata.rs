@@ -11,7 +11,7 @@ use crate::torrent::probe_types::{TorrentFileProbe, TorrentProbeInfo};
 use crate::torrent::sidecar_proto::{DHT_COLD_METADATA_TIMEOUT_SECS, METADATA_TIMEOUT_SECS};
 
 /// Options for [`probe_torrent_source_with`].
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Default)]
 pub struct TorrentProbeOptions {
     /// Disable tracker traffic; resolve metadata via DHT (and LSD/PEX) only.
     pub dht_only: bool,
@@ -19,16 +19,6 @@ pub struct TorrentProbeOptions {
     pub timeout: Option<Duration>,
     /// Override the persisted DHT session folder (isolated sidecar routing table).
     pub session_data_dir: Option<PathBuf>,
-}
-
-impl Default for TorrentProbeOptions {
-    fn default() -> Self {
-        Self {
-            dht_only: false,
-            timeout: None,
-            session_data_dir: None,
-        }
-    }
 }
 
 /// Stable, process-isolated DHT routing directory (not under the ephemeral probe folder).
@@ -72,16 +62,16 @@ pub async fn probe_torrent_source_with(
         .unwrap_or_else(isolated_dht_session_dir);
     let _ = std::fs::create_dir_all(&session_data_dir);
 
-    let mut tuning = TorrentTuning::default();
-    tuning.session_data_dir = Some(session_data_dir.clone());
-    tuning.fastresume = false;
     // Meta probes must not wait on UPnP / dual-stack uTP bring-up.
-    tuning.enable_upnp = false;
-    tuning.tcp_listen_only = true;
-    if options.dht_only {
-        tuning.merge_builtin_trackers = false;
-        tuning.disable_trackers = true;
-    }
+    let tuning = TorrentTuning {
+        session_data_dir: Some(session_data_dir.clone()),
+        fastresume: false,
+        enable_upnp: false,
+        tcp_listen_only: true,
+        merge_builtin_trackers: !options.dht_only,
+        disable_trackers: options.dht_only,
+        ..TorrentTuning::default()
+    };
 
     let dht_store = session_data_dir.join("dht-routing.json");
     let cold_dht = !dht_store.is_file()
@@ -97,17 +87,16 @@ pub async fn probe_torrent_source_with(
         }
     });
 
+    let mut session = None;
     let result = tokio::time::timeout(timeout, async {
-        let session = TorrentSession::open(probe_dir.clone(), tuning)
-            .await
-            .map_err(|e| Error::other(e.to_string()))?;
+        let session = session.insert(
+            TorrentSession::open(probe_dir.clone(), tuning)
+                .await
+                .map_err(|e| Error::other(e.to_string()))?,
+        );
 
-        // Cold DHT: let bootstrap fill the routing table before get_peers races an empty table.
-        if cold_dht {
-            tokio::time::sleep(Duration::from_secs(45)).await;
-        } else {
-            tokio::time::sleep(Duration::from_secs(5)).await;
-        }
+        // DHT discovery retries while bootstrap fills the routing table. Start
+        // immediately so trackers and local torrent metadata need not wait.
 
         let source = if is_magnet_uri(input)
             || input.starts_with("http://")
@@ -118,8 +107,6 @@ pub async fn probe_torrent_source_with(
             let bytes = std::fs::read(input).map_err(|e| Error::other(e.to_string()))?;
             TorrentSource::FileBytes(bytes.into())
         } else {
-            session.stop().await;
-            let _ = std::fs::remove_dir_all(&probe_dir);
             return Err(Error::other(format!("torrent source not found: {input}")));
         };
 
@@ -170,11 +157,15 @@ pub async fn probe_torrent_source_with(
             .map_err(|e| Error::other(e.to_string()))?;
 
         drop(handle);
-        session.stop().await;
         Ok(info)
     })
     .await;
 
+    // Dropping a timed-out future does not stop the session's background tasks.
+    // Stop listeners and discovery on every exit before removing probe files.
+    if let Some(session) = session {
+        session.stop().await;
+    }
     let _ = std::fs::remove_dir_all(&probe_dir);
 
     match result {

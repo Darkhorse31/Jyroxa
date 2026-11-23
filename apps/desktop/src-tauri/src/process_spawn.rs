@@ -34,12 +34,23 @@ pub fn configure_std(cmd: &mut std::process::Command) {
 
 /// Stdin null + Windows CREATE_NO_WINDOW for `tokio::process::Command`.
 pub fn configure_tokio(cmd: &mut tokio::process::Command) {
-    cmd.stdin(Stdio::null());
+    cmd.stdin(Stdio::null()).kill_on_drop(true);
     #[cfg(windows)]
     {
         // tokio::process::Command provides an inherent `creation_flags` on Windows.
         cmd.creation_flags(child_creation_flags());
     }
+}
+
+/// Capture a sidecar's output while keeping its process tree in the app job.
+pub async fn output_tokio(
+    cmd: &mut tokio::process::Command,
+) -> std::io::Result<std::process::Output> {
+    configure_tokio(cmd);
+    cmd.stdout(Stdio::piped()).stderr(Stdio::piped());
+    let child = cmd.spawn()?;
+    bind_lifetime_to_app(&child);
+    child.wait_with_output().await
 }
 
 /// Assign a spawned tokio child to the app job so it dies when the app exits.
@@ -130,49 +141,47 @@ mod job {
 
     fn app_job() -> Option<&'static JobHandle> {
         static JOB: OnceLock<Option<JobHandle>> = OnceLock::new();
-        JOB.get_or_init(|| {
-            unsafe {
-                let handle = CreateJobObjectW(ptr::null_mut(), ptr::null());
-                if handle.is_null() {
-                    return None;
-                }
-                let mut info = JobObjectExtendedLimitInformation {
-                    basic_limit_information: JobObjectBasicLimitInformation {
-                        per_process_user_time_limit: 0,
-                        per_job_user_time_limit: 0,
-                        limit_flags: JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE,
-                        minimum_working_set_size: 0,
-                        maximum_working_set_size: 0,
-                        active_process_limit: 0,
-                        affinity: 0,
-                        priority_class: 0,
-                        scheduling_class: 0,
-                    },
-                    io_info: IoCounters {
-                        read_operation_count: 0,
-                        write_operation_count: 0,
-                        other_operation_count: 0,
-                        read_transfer_count: 0,
-                        write_transfer_count: 0,
-                        other_transfer_count: 0,
-                    },
-                    process_memory_limit: 0,
-                    job_memory_limit: 0,
-                    peak_process_memory_used: 0,
-                    peak_job_memory_used: 0,
-                };
-                let ok = SetInformationJobObject(
-                    handle,
-                    JOB_OBJECT_EXTENDED_LIMIT_INFORMATION,
-                    &mut info as *mut _ as *mut core::ffi::c_void,
-                    std::mem::size_of::<JobObjectExtendedLimitInformation>() as u32,
-                );
-                if ok == 0 {
-                    CloseHandle(handle);
-                    return None;
-                }
-                Some(JobHandle(handle))
+        JOB.get_or_init(|| unsafe {
+            let handle = CreateJobObjectW(ptr::null_mut(), ptr::null());
+            if handle.is_null() {
+                return None;
             }
+            let mut info = JobObjectExtendedLimitInformation {
+                basic_limit_information: JobObjectBasicLimitInformation {
+                    per_process_user_time_limit: 0,
+                    per_job_user_time_limit: 0,
+                    limit_flags: JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE,
+                    minimum_working_set_size: 0,
+                    maximum_working_set_size: 0,
+                    active_process_limit: 0,
+                    affinity: 0,
+                    priority_class: 0,
+                    scheduling_class: 0,
+                },
+                io_info: IoCounters {
+                    read_operation_count: 0,
+                    write_operation_count: 0,
+                    other_operation_count: 0,
+                    read_transfer_count: 0,
+                    write_transfer_count: 0,
+                    other_transfer_count: 0,
+                },
+                process_memory_limit: 0,
+                job_memory_limit: 0,
+                peak_process_memory_used: 0,
+                peak_job_memory_used: 0,
+            };
+            let ok = SetInformationJobObject(
+                handle,
+                JOB_OBJECT_EXTENDED_LIMIT_INFORMATION,
+                &mut info as *mut _ as *mut core::ffi::c_void,
+                std::mem::size_of::<JobObjectExtendedLimitInformation>() as u32,
+            );
+            if ok == 0 {
+                CloseHandle(handle);
+                return None;
+            }
+            Some(JobHandle(handle))
         })
         .as_ref()
     }
@@ -193,6 +202,20 @@ mod job {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[cfg(windows)]
+    #[tokio::test]
+    async fn captured_sidecar_uses_shared_spawn_policy() {
+        let mut cmd = tokio::process::Command::new("cmd");
+        cmd.args(["/C", "echo", "captured-sidecar"]);
+        let output = output_tokio(&mut cmd).await.expect("captured child");
+        assert!(output.status.success());
+        assert_eq!(
+            String::from_utf8_lossy(&output.stdout).trim(),
+            "captured-sidecar"
+        );
+        assert!(output.stderr.is_empty());
+    }
 
     #[test]
     fn windows_spawn_sets_create_no_window() {
@@ -232,7 +255,7 @@ mod tests {
         configure_tokio(&mut cmd);
         let mut child = cmd.spawn().expect("spawn hidden ping");
         bind_lifetime_to_app(&child);
-        let pid = child.id().expect("pid") as u32;
+        let pid = child.id().expect("pid");
 
         tokio::time::sleep(Duration::from_millis(400)).await;
 

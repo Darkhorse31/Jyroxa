@@ -30,16 +30,9 @@ pub fn normalize_torrent_input(s: &str) -> String {
 }
 
 fn percent_decode_path(s: &str) -> String {
-    let decoded: String = url::form_urlencoded::parse(s.as_bytes())
-        .map(|(k, v)| {
-            if v.is_empty() {
-                k.into_owned()
-            } else {
-                format!("{k}{v}")
-            }
-        })
-        .collect();
-    decoded.replace('/', "\\")
+    percent_encoding::percent_decode_str(s)
+        .decode_utf8_lossy()
+        .replace('/', "\\")
 }
 
 /// True for magnets, local `.torrent` paths, or HTTP(S) URLs ending in `.torrent`.
@@ -187,6 +180,14 @@ mod tests {
     fn normalizes_file_uri() {
         let n = normalize_torrent_input("file:///C:/Users/me/game.torrent");
         assert_eq!(n, r"C:\Users\me\game.torrent");
+    }
+
+    #[test]
+    fn file_uri_keeps_literal_plus_ampersand_and_equals() {
+        assert_eq!(
+            normalize_torrent_input("file:///C:/Downloads/a+b%20%26%20c=d.torrent"),
+            r"C:\Downloads\a+b & c=d.torrent"
+        );
     }
 
     #[test]

@@ -100,7 +100,7 @@ pub fn extract_telegram_urls(text: &str) -> Vec<String> {
     for cap in re.find_iter(text) {
         let s = cap
             .as_str()
-            .trim_end_matches(|c: char| matches!(c, '.' | ',' | ';' | ')' | ']' | '}'));
+            .trim_end_matches(['.', ',', ';', ')', ']', '}']);
         out.push(s.to_string());
     }
     let bare = Regex::new(r#"(?i)(?:^|[\s(])t\.me/[^\s<>"']+"#).unwrap();
@@ -108,7 +108,7 @@ pub fn extract_telegram_urls(text: &str) -> Vec<String> {
         let slice = cap
             .as_str()
             .trim_start_matches(|c: char| c.is_whitespace() || c == '(');
-        let s = slice.trim_end_matches(|c: char| matches!(c, '.' | ',' | ';' | ')' | ']' | '}'));
+        let s = slice.trim_end_matches(['.', ',', ';', ')', ']', '}']);
         let url = format!("https://{s}");
         if !out.contains(&url) {
             out.push(url);

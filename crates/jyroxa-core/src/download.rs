@@ -938,7 +938,7 @@ impl Downloader {
         }
         let state_path = DownloadState::state_path(&output);
 
-        let max_conn = req.connections.clamp(
+        let mut max_conn = req.connections.clamp(
             1,
             self.config.max_connections.clamp(1, crate::MAX_CONNECTIONS),
         );
@@ -974,8 +974,9 @@ impl Downloader {
             && remembered_bps.is_some_and(|b| b >= crate::tuner::SATURATED_THROUGHPUT_BPS)
         {
             supervise_req.autotune = false;
+            supervise_req.connections = initial_conn;
+            max_conn = initial_conn;
         }
-        // Allow enough live segments for the most connections this download may use.
         let steal_cap = max_conn.saturating_mul(4).max(8);
 
         // Load resume state if validators still match.
@@ -1078,11 +1079,16 @@ impl Downloader {
         persist_state(&ctx, &req, &meta, &state_path, initial_conn);
 
         let lead = lead_response.and_then(|resp| {
-            ctx.table
-                .segments()
-                .into_iter()
-                .find(|s| s.start == 0 && !s.done.load(Ordering::Acquire))
-                .map(|seg| (resp, seg))
+            // Claim ownership before spawning any workers. Merely finding the
+            // segment leaves it queued and lets another worker fetch it again.
+            let seg = ctx.table.next_work(false)?;
+            if seg.current() == 0 {
+                Some((resp, seg))
+            } else {
+                // A resumed cursor cannot consume a response beginning at zero.
+                ctx.table.requeue(seg);
+                None
+            }
         });
         if let Some((resp, seg)) = lead {
             spawn_lead_worker(ctx.clone(), resp, seg);
@@ -1394,58 +1400,21 @@ impl Downloader {
 // ---------------------------------------------------------------------------
 
 fn spawn_lead_worker(ctx: Arc<Ctx>, resp: reqwest::Response, seg: Arc<Segment>) {
-    ctx.active_workers.fetch_add(1, Ordering::AcqRel);
-    let task_ctx = ctx.clone();
-    let handle = tokio::spawn(async move {
-        let ctx = task_ctx;
-        let client = ctx.client.clone();
-        let mut ctrl_rx = ctx.control.subscribe();
-        ctx.busy_workers.fetch_add(1, Ordering::AcqRel);
-        seg.set_in_use(true);
-        let seg_result = run_segment(&ctx, &client, &seg, &mut ctrl_rx, Some(resp)).await;
-        seg.set_in_use(false);
-        ctx.busy_workers.fetch_sub(1, Ordering::AcqRel);
-        match seg_result {
-            Ok(()) => {
-                ctx.global_fail_streak.store(0, Ordering::Release);
-            }
-            Err(Error::Cancelled) => {}
-            Err(e @ Error::LinkExpired { .. }) => ctx.set_fatal(e),
-            Err(Error::RangeIgnored) => {
-                ctx.range_fallback.store(true, Ordering::Release);
-                ctx.notify.notify_waiters();
-            }
-            Err(e) => {
-                if seg.remaining() > 0 {
-                    ctx.table.requeue(seg.clone());
-                    let streak = ctx.global_fail_streak.fetch_add(1, Ordering::AcqRel) + 1;
-                    emit_retry(&ctx, streak, &e.to_string());
-                    if streak < ctx.global_fail_bound
-                        && seg.failures.load(Ordering::Relaxed) <= ctx.config.max_retries
-                    {
-                        spawn_worker(ctx.clone());
-                    } else {
-                        ctx.set_fatal(e);
-                    }
-                    ctx.notify.notify_waiters();
-                }
-            }
-        }
-        ctx.active_workers.fetch_sub(1, Ordering::AcqRel);
-        ctx.notify.notify_waiters();
-    });
-    let mut workers = ctx.workers.lock().unwrap();
-    workers.retain(|worker| !worker.is_finished());
-    workers.push(handle);
+    spawn_worker_with_lead(ctx, Some((resp, seg)));
 }
 
 fn spawn_worker(ctx: Arc<Ctx>) {
+    spawn_worker_with_lead(ctx, None);
+}
+
+fn spawn_worker_with_lead(ctx: Arc<Ctx>, lead: Option<(reqwest::Response, Arc<Segment>)>) {
     ctx.active_workers.fetch_add(1, Ordering::AcqRel);
     let task_ctx = ctx.clone();
     let handle = tokio::spawn(async move {
         let ctx = task_ctx;
         let client = ctx.client.clone();
         let mut ctrl_rx = ctx.control.subscribe();
+        let mut lead = lead;
         // Keep claiming work (queue, then stealing) until nothing remains.
         loop {
             if ctx.range_fallback.load(Ordering::Acquire)
@@ -1458,24 +1427,32 @@ fn spawn_worker(ctx: Arc<Ctx>) {
             let active = ctx.active_workers.load(Ordering::Acquire);
             if active > target {
                 // Over the connection target — retire without taking new work.
+                if let Some((_, seg)) = lead.take() {
+                    ctx.table.requeue(seg);
+                }
                 break;
             }
             let target_now = ctx.target.load(Ordering::Acquire);
             let active_now = ctx.active_workers.load(Ordering::Acquire);
             let idle = active_now > ctx.busy_workers.load(Ordering::Acquire);
             let allow_steal = idle && target_now > 1 && active_now > 1;
-            let Some(seg) = ctx.table.next_work(allow_steal) else {
-                if ctx.table.all_done() {
-                    break;
-                }
-                let _ =
-                    tokio::time::timeout(Duration::from_millis(50), ctx.notify.notified()).await;
-                continue;
+            let (seg, prefetched) = if let Some((response, seg)) = lead.take() {
+                (seg, Some(response))
+            } else {
+                let Some(seg) = ctx.table.next_work(allow_steal) else {
+                    if ctx.table.all_done() {
+                        break;
+                    }
+                    let _ = tokio::time::timeout(Duration::from_millis(50), ctx.notify.notified())
+                        .await;
+                    continue;
+                };
+                (seg, None)
             };
             ctx.notify.notify_waiters();
             ctx.busy_workers.fetch_add(1, Ordering::AcqRel);
             seg.set_in_use(true);
-            let seg_result = run_segment(&ctx, &client, &seg, &mut ctrl_rx, None).await;
+            let seg_result = run_segment(&ctx, &client, &seg, &mut ctrl_rx, prefetched).await;
             seg.set_in_use(false);
             ctx.busy_workers.fetch_sub(1, Ordering::AcqRel);
             match seg_result {
@@ -1957,8 +1934,13 @@ async fn supervise(
     let cap = host_cap.unwrap_or(max_conn).clamp(1, max_conn);
     let mut tuner = if req.autotune {
         let mut t = Tuner::new(initial_conn, max_conn, Some(cap));
-        if let Some(bps) = host_stats.best_throughput(&host) {
-            t.hold_saturated_from_memory(bps);
+        if host_stats
+            .best_connections(&host)
+            .is_some_and(|n| n >= crate::tuner::DEFAULT_START_CONNECTIONS)
+        {
+            if let Some(bps) = host_stats.best_throughput(&host) {
+                t.hold_saturated_from_memory(bps);
+            }
         }
         Some(t)
     } else {
@@ -1970,10 +1952,16 @@ async fn supervise(
     let mut last_persist = Instant::now();
     let mut last_persisted_target = target;
 
+    let sample_interval = if tuner.is_some() {
+        ctx.config.tune_interval
+    } else {
+        ctx.config.tune_interval.max(Duration::from_secs(1))
+    };
+
     let mut ctrl_rx = ctx.control.subscribe();
     loop {
         tokio::select! {
-            _ = tokio::time::sleep(ctx.config.tune_interval) => {}
+            _ = tokio::time::sleep(sample_interval) => {}
             res = ctrl_rx.changed() => {
                 if res.is_err() || ctx.control.is_cancelled() {
                     break;

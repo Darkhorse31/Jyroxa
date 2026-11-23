@@ -206,6 +206,160 @@ async fn auto_starts_at_eight_and_remembers_successful_short_download() {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn prefetched_lead_is_claimed_once_from_segment_queue() {
+    async fn tracked(
+        State((data, starts)): State<(Bytes, Arc<AtomicUsize>)>,
+        headers: HeaderMap,
+    ) -> Response {
+        let total = data.len() as u64;
+        let (start, end) = parse_range(headers[header::RANGE].to_str().unwrap(), total).unwrap();
+        if start == 0 {
+            starts.fetch_add(1, Ordering::SeqCst);
+        }
+        // Keep the lead outstanding until the other worker has claimed work.
+        let body = unfold((data, start), move |(data, position)| async move {
+            if position > end {
+                return None;
+            }
+            tokio::time::sleep(Duration::from_millis(2)).await;
+            let next = (position + 16 * 1024).min(end + 1);
+            let chunk = data.slice(position as usize..next as usize);
+            Some((Ok::<_, std::convert::Infallible>(chunk), (data, next)))
+        });
+        Response::builder()
+            .status(StatusCode::PARTIAL_CONTENT)
+            .header(header::CONTENT_LENGTH, end - start + 1)
+            .header(
+                header::CONTENT_RANGE,
+                format!("bytes {start}-{end}/{total}"),
+            )
+            .header(header::ACCEPT_RANGES, "bytes")
+            .body(Body::from_stream(body))
+            .unwrap()
+    }
+    let data = make_data(4 * 1024 * 1024);
+    let starts = Arc::new(AtomicUsize::new(0));
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    let app = Router::new()
+        .route("/file", get(tracked))
+        .with_state((Bytes::from(data.clone()), starts.clone()));
+    let server = tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+    let dir = tempfile::tempdir().unwrap();
+    let output = dir.path().join("lead.bin");
+    let mut request = DownloadRequest::new(format!("http://{addr}/file"), &output).connections(2);
+    request.autotune = false;
+    let outcome = tokio::time::timeout(
+        Duration::from_secs(10),
+        test_engine().download(request, None, Control::new(), None),
+    )
+    .await
+    .expect("download deadline")
+    .expect("download");
+    server.abort();
+    assert_eq!(outcome.total_size, data.len() as u64);
+    assert_eq!(std::fs::read(output).unwrap(), data);
+    assert_eq!(
+        starts.load(Ordering::SeqCst),
+        1,
+        "lead range downloaded twice"
+    );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn lead_worker_reuses_its_slot_before_the_supervisor_ticks() {
+    async fn tracked(
+        State((data, requests)): State<(Bytes, Arc<AtomicUsize>)>,
+        headers: HeaderMap,
+    ) -> Response {
+        let total = data.len() as u64;
+        let range = headers[header::RANGE].to_str().unwrap();
+        let fast_lead = range == "bytes=0-";
+        let (start, end) = parse_range(range, total).unwrap();
+        requests.fetch_add(1, Ordering::SeqCst);
+        let body = unfold((data, start), move |(data, position)| async move {
+            if position > end {
+                return None;
+            }
+            if !fast_lead {
+                tokio::time::sleep(Duration::from_millis(10)).await;
+            }
+            let next = (position + 64 * 1024).min(end + 1);
+            let chunk = data.slice(position as usize..next as usize);
+            Some((Ok::<_, std::convert::Infallible>(chunk), (data, next)))
+        });
+        Response::builder()
+            .status(StatusCode::PARTIAL_CONTENT)
+            .header(header::CONTENT_LENGTH, end - start + 1)
+            .header(
+                header::CONTENT_RANGE,
+                format!("bytes {start}-{end}/{total}"),
+            )
+            .body(Body::from_stream(body))
+            .unwrap()
+    }
+    let data = make_data(4 * 1024 * 1024);
+    let requests = Arc::new(AtomicUsize::new(0));
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    let app = Router::new()
+        .route("/file", get(tracked))
+        .with_state((Bytes::from(data.clone()), requests.clone()));
+    let server = tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+    let dir = tempfile::tempdir().unwrap();
+    let output = dir.path().join("lead-tail.bin");
+    let engine = Downloader::new(DownloadConfig {
+        tune_interval: Duration::from_secs(60),
+        min_segment_size: 64 * 1024,
+        max_connections: 2,
+        ..DownloadConfig::default()
+    })
+    .unwrap()
+    .with_host_stats(Arc::new(HostStats::in_memory()));
+    let mut request = DownloadRequest::new(format!("http://{addr}/file"), &output).connections(2);
+    request.autotune = false;
+    let outcome = tokio::time::timeout(
+        Duration::from_secs(10),
+        engine.download(request, None, Control::new(), None),
+    )
+    .await
+    .expect("download must finish before the supervisor ticks")
+    .expect("download");
+    server.abort();
+    assert_eq!(outcome.connections_used, 2);
+    assert_eq!(std::fs::read(output).unwrap(), data);
+    assert!(
+        requests.load(Ordering::SeqCst) > 2,
+        "lead slot did not help the slow tail"
+    );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn saturated_host_memory_keeps_the_successful_narrow_count() {
+    let data = make_data(8 * 1024 * 1024);
+    let addr = spawn_server(data.clone()).await;
+    let dir = tempfile::tempdir().unwrap();
+    let stats = Arc::new(HostStats::in_memory());
+    stats.observe("127.0.0.1", 1, 250.0 * 1024.0 * 1024.0);
+    let engine = test_engine().with_host_stats(stats);
+    let out = dir.path().join("remembered.bin");
+    let outcome = tokio::time::timeout(
+        Duration::from_secs(5),
+        engine.download(
+            DownloadRequest::new(format!("http://{addr}/file"), &out).connections(16),
+            None,
+            Control::new(),
+            None,
+        ),
+    )
+    .await
+    .unwrap()
+    .unwrap();
+    assert_eq!(outcome.connections_used, 1);
+    assert_eq!(std::fs::read(out).unwrap(), data);
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn queued_multibuffer_writes_preserve_cursor_and_contents() {
     let data = make_data(32 * 1024 * 1024);
     let addr = spawn_server(data.clone()).await;
@@ -935,10 +1089,56 @@ async fn multi_connection_beats_one_under_per_conn_rate_limit_and_stall() {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn autotune_matches_single_connection_on_unlimited_server() {
-    // Large enough that supervisor/scheduling jitter stays inside the 97% band
-    // on fast loopback (48 MiB finished in ~70–140 ms and flaked).
-    let data = make_data(192 * 1024 * 1024);
-    let addr = spawn_server(data.clone()).await;
+    // Count every sample in a fixed alternating series, after warming both
+    // outputs. Transfer 16 GiB per mode to amortize short-transfer jitter while
+    // reusing just 512 MiB of output files. The 97% requirement is unchanged.
+    const TOTAL: u64 = 256 * 1024 * 1024;
+    const BLOCK: usize = 256 * 1024;
+    const ROUNDS: usize = 64;
+    async fn unlimited(headers: HeaderMap) -> Response {
+        let range = headers
+            .get(header::RANGE)
+            .and_then(|value| value.to_str().ok());
+        let (start, end) = range
+            .and_then(|value| parse_range(value, TOTAL))
+            .unwrap_or((0, TOTAL - 1));
+        let chunk = Bytes::from(make_data(BLOCK));
+        let body = unfold(start, move |position| {
+            let chunk = chunk.clone();
+            async move {
+                if position > end {
+                    return None;
+                }
+                let offset = (position % BLOCK as u64) as usize;
+                let count = (end - position + 1).min((BLOCK - offset) as u64);
+                Some((
+                    Ok::<_, std::convert::Infallible>(chunk.slice(offset..offset + count as usize)),
+                    position + count,
+                ))
+            }
+        });
+        Response::builder()
+            .status(if range.is_some() {
+                StatusCode::PARTIAL_CONTENT
+            } else {
+                StatusCode::OK
+            })
+            .header(
+                header::CONTENT_RANGE,
+                format!("bytes {start}-{end}/{TOTAL}"),
+            )
+            .header(header::CONTENT_LENGTH, end - start + 1)
+            .header(header::ACCEPT_RANGES, "bytes")
+            .body(Body::from_stream(body))
+            .unwrap()
+    }
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    let server = tokio::spawn(async move {
+        axum::serve(listener, Router::new().route("/file", get(unlimited)))
+            .await
+            .unwrap();
+    });
     let url = format!("http://{addr}/file");
     let dir = tempfile::tempdir().unwrap();
 
@@ -949,38 +1149,71 @@ async fn autotune_matches_single_connection_on_unlimited_server() {
         ..DownloadConfig::default()
     };
 
-    let host_stats = Arc::new(HostStats::in_memory());
     let one = dir.path().join("one.bin");
-    let t0 = std::time::Instant::now();
-    let eng = Downloader::new(config.clone())
-        .unwrap()
-        .with_host_stats(host_stats.clone());
-    let mut req1 = DownloadRequest::new(url.clone(), one.clone()).connections(1);
-    req1.autotune = false;
-    eng.download(req1, None, Control::new(), None)
-        .await
-        .expect("1-conn");
-    let t1 = t0.elapsed();
-
     let auto = dir.path().join("auto.bin");
-    let t0 = std::time::Instant::now();
-    let eng = Downloader::new(config).unwrap().with_host_stats(host_stats);
-    let mut req_auto = DownloadRequest::new(url, auto.clone()).connections(16);
-    req_auto.autotune = true;
-    let outcome = eng
-        .download(req_auto, None, Control::new(), None)
-        .await
-        .expect("auto");
-    let t_auto = t0.elapsed();
-
-    assert_eq!(std::fs::read(&auto).unwrap(), data);
-    assert_eq!(std::fs::read(&one).unwrap(), data);
-    let bps_one = data.len() as f64 / t1.as_secs_f64();
-    let bps_auto = data.len() as f64 / t_auto.as_secs_f64();
+    let mut expected = Sha256::new();
+    let block = make_data(BLOCK);
+    for _ in 0..TOTAL / BLOCK as u64 {
+        expected.update(&block);
+    }
+    let expected = hex::encode(expected.finalize());
+    let eng = Downloader::new(config)
+        .unwrap()
+        .with_host_stats(Arc::new(HostStats::in_memory()));
+    let mut t1 = Duration::ZERO;
+    let mut t_auto = Duration::ZERO;
+    let mut auto_connections = 0;
+    for round in 0..=ROUNDS {
+        let order = if round == 0 || round % 2 == 1 {
+            [false, true]
+        } else {
+            [true, false]
+        };
+        for (position, autotune) in order.into_iter().enumerate() {
+            // Each mode uses each file/position equally across the series.
+            let file = if position == 0 { &one } else { &auto };
+            let mut request =
+                DownloadRequest::new(&url, file).connections(if autotune { 16 } else { 1 });
+            request.autotune = autotune;
+            let start = std::time::Instant::now();
+            let outcome = tokio::time::timeout(
+                Duration::from_secs(60),
+                eng.download(request, None, Control::new(), None),
+            )
+            .await
+            .expect("transfer deadline")
+            .expect("download");
+            let elapsed = start.elapsed();
+            eprintln!(
+                "round={round} auto={autotune} file={} seconds={:.6} connections={}",
+                file.file_name().unwrap().to_string_lossy(),
+                elapsed.as_secs_f64(),
+                outcome.connections_used
+            );
+            assert_eq!(outcome.total_size, TOTAL);
+            assert_eq!(std::fs::metadata(file).unwrap().len(), TOTAL);
+            assert_eq!(
+                jyroxa_core::checksum::hash_file(file, jyroxa_core::checksum::Algo::Sha256)
+                    .unwrap(),
+                expected
+            );
+            if round > 0 {
+                if autotune {
+                    t_auto += elapsed;
+                    auto_connections = auto_connections.max(outcome.connections_used);
+                } else {
+                    t1 += elapsed;
+                }
+            }
+        }
+    }
+    server.abort();
+    let bps_one = TOTAL as f64 * ROUNDS as f64 / t1.as_secs_f64();
+    let bps_auto = TOTAL as f64 * ROUNDS as f64 / t_auto.as_secs_f64();
     assert!(
         bps_auto >= bps_one * 0.97,
         "auto {bps_auto} B/s ({} conns) should be >= 97% of 1-conn {bps_one} B/s (wall {:?} vs {:?})",
-        outcome.connections_used,
+        auto_connections,
         t_auto,
         t1
     );

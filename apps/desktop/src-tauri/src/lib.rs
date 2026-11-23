@@ -5,6 +5,8 @@ mod launch_args;
 mod launch_dedupe;
 mod platform;
 mod process_spawn;
+#[cfg(feature = "release-gate")]
+pub mod release_gate;
 mod shell_paths;
 mod sidecar_paths;
 mod torrent_host;
@@ -353,8 +355,8 @@ pub fn run() {
             let app = window.app_handle();
             match event {
                 WindowEvent::Moved(_) | WindowEvent::Resized(_) => {
-                    if let Some(ws) = snapshot_window(&app) {
-                        save_window_state(&app, &ws);
+                    if let Some(ws) = snapshot_window(app) {
+                        save_window_state(app, &ws);
                     }
                 }
                 WindowEvent::CloseRequested { api, .. } => {
@@ -362,8 +364,8 @@ pub fn run() {
                     if close_to_tray {
                         api.prevent_close();
                         let _ = window.hide();
-                    } else if let Some(ws) = snapshot_window(&app) {
-                        save_window_state(&app, &ws);
+                    } else if let Some(ws) = snapshot_window(app) {
+                        save_window_state(app, &ws);
                     }
                 }
                 _ => {}

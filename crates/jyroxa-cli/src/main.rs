@@ -139,6 +139,9 @@ enum TorrentCmd {
         seed: bool,
         #[arg(long, default_value_t = 1.0)]
         ratio_limit: f64,
+        /// Isolate persisted routing and resume state from other torrent jobs.
+        #[arg(long)]
+        session_dir: Option<PathBuf>,
     },
     /// Repeat timed downloads (for benchmarks).
     Bench {
@@ -226,6 +229,7 @@ async fn real_main() -> Result<()> {
                 no_merge_trackers,
                 seed,
                 ratio_limit,
+                session_dir,
             } => {
                 torrent_cli::run_torrent_get(
                     input,
@@ -236,6 +240,7 @@ async fn real_main() -> Result<()> {
                         merge_trackers: !no_merge_trackers,
                         allow_seeding: seed,
                         ratio_limit,
+                        session_data_dir: session_dir,
                     },
                 )
                 .await

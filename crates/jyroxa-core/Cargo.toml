@@ -38,6 +38,7 @@ md-5 = { workspace = true }
 hex = { workspace = true }
 bytes = { workspace = true }
 tracing = { workspace = true }
+percent-encoding = "2"
 grammers-client = { version = "0.12", optional = true, default-features = false, features = ["fs"] }
 grammers-mtsender = { version = "0.12", optional = true }
 grammers-session = { version = "0.12", optional = true, default-features = false, features = ["serde"] }
