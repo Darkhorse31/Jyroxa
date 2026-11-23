@@ -153,19 +153,18 @@ pub async fn probe_page_formats(page_url: &str) -> Result<YtInfo, String> {
     if !ytdlp.is_file() {
         return Err("yt-dlp.exe not bundled".into());
     }
-    let out = tokio::process::Command::new(&ytdlp)
-        .args([
-            "--no-warnings",
-            "--no-playlist",
-            "-J",
-            "--flat-playlist",
-            page_url,
-        ])
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .output()
-        .await
-        .map_err(|e| e.to_string())?;
+    let mut cmd = tokio::process::Command::new(&ytdlp);
+    cmd.args([
+        "--no-warnings",
+        "--no-playlist",
+        "-J",
+        "--flat-playlist",
+        page_url,
+    ])
+    .stdout(Stdio::piped())
+    .stderr(Stdio::piped());
+    crate::process_spawn::configure_tokio(&mut cmd);
+    let out = cmd.output().await.map_err(|e| e.to_string())?;
     if !out.status.success() {
         let err = String::from_utf8_lossy(&out.stderr);
         return Err(err.trim().to_string());
@@ -244,13 +243,12 @@ pub async fn download_via_ytdlp(
         args.push("bv*+ba/b".to_string());
     }
     args.push(page_url.to_string());
-    let out = tokio::process::Command::new(&ytdlp)
-        .args(&args)
+    let mut cmd = tokio::process::Command::new(&ytdlp);
+    cmd.args(&args)
         .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .output()
-        .await
-        .map_err(|e| e.to_string())?;
+        .stderr(Stdio::piped());
+    crate::process_spawn::configure_tokio(&mut cmd);
+    let out = cmd.output().await.map_err(|e| e.to_string())?;
     if !out.status.success() {
         return Err(String::from_utf8_lossy(&out.stderr).trim().to_string());
     }
