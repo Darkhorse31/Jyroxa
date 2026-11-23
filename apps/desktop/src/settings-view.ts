@@ -589,7 +589,21 @@ export class SettingsView {
 
   private wireListeners() {
     // Tabs switching
-    this.container.querySelectorAll(".settings-tab-btn").forEach((btn) => {
+    this.container.querySelectorAll<HTMLButtonElement>(".settings-tab-btn").forEach((btn) => {
+      const selected = btn.dataset.tab === this.activeTab;
+      btn.setAttribute("aria-selected", String(selected));
+      btn.tabIndex = selected ? 0 : -1;
+      btn.addEventListener("keydown", event => {
+        if (!["ArrowRight", "ArrowLeft", "Home", "End"].includes(event.key)) return;
+        event.preventDefault();
+        const tabs = Array.from(this.container.querySelectorAll<HTMLButtonElement>(".settings-tab-btn"));
+        const index = tabs.indexOf(btn);
+        const next = event.key === "Home" ? 0 : event.key === "End" ? tabs.length - 1
+          : (index + (event.key === "ArrowRight" ? 1 : -1) + tabs.length) % tabs.length;
+        const tab = tabs[next].dataset.tab;
+        tabs[next].click();
+        this.container.querySelector<HTMLButtonElement>(`.settings-tab-btn[data-tab="${tab}"]`)?.focus();
+      });
       btn.addEventListener("click", () => {
         const tab = (btn as HTMLElement).dataset.tab as SettingsTab;
         this.activeTab = tab;

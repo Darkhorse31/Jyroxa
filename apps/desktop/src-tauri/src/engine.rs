@@ -128,7 +128,7 @@ impl Default for AppSettings {
             start_with_windows: false,
             prevent_sleep: true,
             auto_resume: true,
-            theme: "system".into(),
+            theme: "light".into(),
             scheduler_start: None,
             scheduler_stop: None,
             scheduler_days: vec![0, 1, 2, 3, 4, 5, 6],
@@ -1884,6 +1884,11 @@ pub fn clipboard_url_re() -> &'static regex::Regex {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn new_installations_use_light_theme() {
+        assert_eq!(super::AppSettings::default().theme, "light");
+    }
+
     #[test]
     fn manual_connections_disable_autotune() {
         assert!(!super::request_autotune(false, true));

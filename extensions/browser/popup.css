@@ -1,14 +1,14 @@
 :root {
-  --teal: #0f766e;
-  --coral: #ff5a3c;
+  --accent: #7a5c2e;
+  --error: #b91c1c;
   --bg: #ffffff;
-  --text: #134e4a;
+  --text: #1c1712;
 }
 
 body {
   margin: 0;
   width: 280px;
-  font-family: "Segoe UI", system-ui, sans-serif;
+  font-family: "Segoe UI Variable Text", "Segoe UI", system-ui, sans-serif;
   background: var(--bg);
   color: var(--text);
 }
@@ -18,7 +18,7 @@ body {
   gap: 10px;
   align-items: center;
   padding: 12px;
-  border-bottom: 3px solid var(--teal);
+  border-bottom: 1px solid #e6e1da;
 }
 
 .muted {
@@ -45,29 +45,37 @@ body {
   width: calc(100% - 24px);
   margin: 0 12px 12px;
   padding: 8px 12px;
-  border: 2px solid var(--teal);
-  border-radius: 0;
-  background: var(--teal);
-  color: #fff;
+  border: 1px solid var(--accent);
+  border-radius: 4px;
+  background: var(--accent);
+  color: #faf6f0;
   font-weight: 600;
   cursor: pointer;
 }
 
 .btn:hover {
-  background: var(--coral);
-  border-color: var(--coral);
+  background: #684e26;
+  border-color: #684e26;
 }
 
 #toggle-enabled {
   width: 18px;
   height: 18px;
-  accent-color: var(--teal);
+  accent-color: var(--accent);
 }
 
 .connected {
-  color: var(--teal);
+  color: var(--accent);
 }
 
 .disconnected {
-  color: var(--coral);
+  color: var(--error);
+}
+
+:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+@media (prefers-color-scheme: dark) {
+  :root { color-scheme: dark; --accent: #c9a46a; --bg: #1c1712; --text: #f3eadf; --error: #f87171; }
+  .hdr { border-color: #2e2620; }
+  .btn { background: #f1e6d6; border-color: #e8dbc8; color: #14100d; }
+  .btn:hover { background: #e8dbc8; border-color: #ddd0bb; }
 }

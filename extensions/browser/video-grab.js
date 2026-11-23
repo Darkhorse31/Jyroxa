@@ -1,6 +1,6 @@
 (function () {
   const api = globalThis.browser ?? globalThis.chrome;
-  const TEAL = "#0f766e";
+  const TEAL = "#7a5c2e";
   const HOST_ID = "jx-vgrab-host";
 
   let enabled = true;

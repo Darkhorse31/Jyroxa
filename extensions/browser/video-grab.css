@@ -13,16 +13,16 @@
   align-items: center;
   gap: 4px;
   padding: 3px 6px;
-  border: 1px solid #0b5c56;
-  background: #0f766e;
+  border: 1px solid #684e26;
+  background: #7a5c2e;
   color: #fff;
   cursor: pointer;
   box-shadow: 0 1px 3px rgba(0, 0, 0, 0.35);
-  border-radius: 0;
+  border-radius: 4px;
 }
 
 .jx-vgrab-btn:hover {
-  background: #0d6b64;
+  background: #684e26;
 }
 
 .jx-vgrab-menu {
@@ -32,10 +32,10 @@
   max-width: 260px;
   max-height: 220px;
   overflow: auto;
-  border: 1px solid #0b5c56;
+  border: 1px solid #e6e1da;
   background: #fff;
-  color: #111;
-  border-radius: 0;
+  color: #1c1712;
+  border-radius: 4px;
   box-shadow: 0 2px 8px rgba(0, 0, 0, 0.25);
 }
 
@@ -48,11 +48,11 @@
   border-bottom: 1px solid #e5e7eb;
   background: #fff;
   cursor: pointer;
-  border-radius: 0;
+  border-radius: 4px;
 }
 
 .jx-vgrab-item:hover {
-  background: #ecfeff;
+  background: #f7f2e8;
 }
 
 .jx-vgrab-item:last-child {
@@ -81,5 +81,5 @@
   background: #fafafa;
   cursor: pointer;
   color: #374151;
-  border-radius: 0;
+  border-radius: 4px;
 }

@@ -21,7 +21,10 @@ import {
   getFileCategory,
 } from "./formatters";
 import { icons } from "./icons";
+import { remainingTime } from "./sources";
 import { showToast } from "./toast";
+
+const compactSize = (value: number) => fmtBytes(value, 1).replace(".0 ", " ");
 
 export interface DownloadCardCallbacks {
   onSelect: (id: number, selected: boolean, shiftKey: boolean) => void;
@@ -87,6 +90,7 @@ export class DownloadCard {
   private checksumRow!: HTMLElement;
   private errorBox!: HTMLElement;
   private pathTextEl!: HTMLElement;
+  private summaryEl!: HTMLElement;
 
   constructor(view: DownloadView, callbacks: DownloadCardCallbacks) {
     this.id = view.id;
@@ -103,6 +107,7 @@ export class DownloadCard {
     this.root = document.createElement("article");
     this.root.className = "dl-card";
     this.root.dataset.id = String(view.id);
+    this.root.tabIndex = 0;
 
     this.buildDom();
     this.updateDom();
@@ -126,6 +131,7 @@ export class DownloadCard {
             </div>
           </div>
 
+          <div class="dl-summary" data-slot="summary"></div>
           <div class="dl-progress-row">
             <div class="progress-track" role="progressbar" aria-valuenow="0" aria-valuemin="0" aria-valuemax="100">
               <span class="progress-fill" data-slot="progress-fill"></span>
@@ -162,12 +168,15 @@ export class DownloadCard {
             ${icons.cancel(16)}
           </button>
           <button type="button" class="btn-icon btn-details-toggle" data-slot="btn-toggle" title="Show details" aria-label="Show details" aria-expanded="false">
-            ${icons.chevronDown(16)}
+            Show details
           </button>
+          <button type="button" class="btn secondary btn-quick-open hidden" title="Open downloaded file">Open</button>
+          <button type="button" class="btn-icon btn-quick-folder" title="Open containing folder" aria-label="Open containing folder">${icons.folder(22)}</button>
         </div>
       </div>
 
       <div class="dl-details-panel hidden" data-slot="details-panel">
+        <div class="detail-transfer-stats"></div>
         <div class="details-section">
           <div class="details-section-header">
             <span class="details-section-title">Segment Progress</span>
@@ -253,11 +262,30 @@ export class DownloadCard {
     this.checksumRow = this.root.querySelector('[data-slot="checksum-row"]')!;
     this.errorBox = this.root.querySelector('[data-slot="error-box"]')!;
     this.pathTextEl = this.root.querySelector('[data-slot="path-val"]')!;
+    this.summaryEl = this.root.querySelector('[data-slot="summary"]')!;
+
+    this.detailsPanel.querySelector(".detail-transfer-stats")!.appendChild(this.root.querySelector(".dl-stats-row")!);
+    this.root.querySelector(".dl-actions-col")!.prepend(this.speedText);
+    this.root.appendChild(this.btnToggleDetails);
+    this.detailsPanel.appendChild(this.btnCancel);
+    this.btnCancel.classList.add("btn-mini");
+    this.btnCancel.insertAdjacentText("beforeend", " Cancel download");
+    this.root.querySelector(".btn-quick-folder")!.addEventListener("click", () => {
+      (this.root.querySelector(".btn-open-folder") as HTMLButtonElement).click();
+    });
+    this.root.querySelector(".btn-quick-open")!.addEventListener("click", () => {
+      (this.root.querySelector(".btn-open-file") as HTMLButtonElement).click();
+    });
 
     this.wireListeners();
   }
 
   private wireListeners() {
+    this.root.addEventListener("click", e => {
+      if ((e.target as HTMLElement).closest("button, input, a, .dl-details-panel")) return;
+      this.setSelected(!this.isSelected);
+      this.callbacks.onSelect(this.id, this.isSelected, e.shiftKey);
+    });
     // Checkbox selection
     this.checkbox.addEventListener("click", (e) => {
       e.stopPropagation();
@@ -284,8 +312,10 @@ export class DownloadCard {
         await api.pauseDownload(this.id);
       } catch (e) {
         console.error("Pause failed:", e);
+        showToast({ title: "Could not pause download", message: String(e), type: "error" });
       } finally {
         this.isPausing = false;
+        this.updateDom();
       }
     });
 
@@ -300,8 +330,10 @@ export class DownloadCard {
         await api.resumeDownload(this.id);
       } catch (e) {
         console.error("Resume failed:", e);
+        showToast({ title: "Could not resume download", message: String(e), type: "error" });
       } finally {
         this.isResuming = false;
+        this.updateDom();
       }
     });
 
@@ -320,6 +352,7 @@ export class DownloadCard {
         showToast(`Retry failed: ${e}`);
       } finally {
         this.isRetrying = false;
+        this.updateDom();
       }
     };
 
@@ -341,8 +374,10 @@ export class DownloadCard {
         await api.cancelDownload(this.id);
       } catch (e) {
         console.error("Cancel failed:", e);
+        showToast({ title: "Could not cancel download", message: String(e), type: "error" });
       } finally {
         this.isCancelling = false;
+        this.updateDom();
       }
     });
 
@@ -418,14 +453,17 @@ export class DownloadCard {
     return this.isSelected;
   }
 
+  public isTorrent(): boolean {
+    return this.view.kind === "torrent" || this.view.urls.some(url => /^magnet:/i.test(url) || /\.torrent(?:[?#]|$)/i.test(url));
+  }
+
   public setExpanded(expanded: boolean) {
     this.isExpanded = expanded;
     this.detailsPanel.classList.toggle("hidden", !expanded);
     this.btnToggleDetails.setAttribute("aria-expanded", String(expanded));
-    this.btnToggleDetails.innerHTML = expanded
-      ? icons.chevronUp(16)
-      : icons.chevronDown(16);
+    this.btnToggleDetails.textContent = expanded ? "Hide details" : "Show details";
     this.btnToggleDetails.title = expanded ? "Hide details" : "Show details";
+    this.btnToggleDetails.setAttribute("aria-label", this.btnToggleDetails.title);
 
     if (expanded) {
       this.renderSegments();
@@ -575,6 +613,8 @@ export class DownloadCard {
 
   public updateDom() {
     const d = this.view;
+    this.root.dataset.status = d.status;
+    this.root.setAttribute("aria-label", `${d.filename}, ${d.status}`);
 
     // File category and icon
     const cat = getFileCategory(d.filename);
@@ -587,6 +627,7 @@ export class DownloadCard {
 
     // Filename
     this.filenameEl.textContent = d.filename || basenameFromUrl(d.urls[0] || "");
+    this.checkbox.setAttribute("aria-label", `Select ${this.filenameEl.textContent}`);
 
     // Status Pill
     this.applyStatusPill();
@@ -615,9 +656,17 @@ export class DownloadCard {
       d.status === "starting" ||
       d.status === "connecting";
 
+    const eta = this.smoothedEta ?? (total > downloaded && this.smoothedSpeed > 0 ? (total - downloaded) / this.smoothedSpeed : null);
+    const size = `${compactSize(downloaded)}${total > 0 ? ` of ${compactSize(total)}` : " downloaded"}`;
+    this.summaryEl.textContent = isRunning ? `${size}, ${remainingTime(eta)}`
+      : d.status === "completed" || d.status === "done" ? "Completed"
+      : d.status === "failed" ? `Download failed. ${formatDownloadError(d.error) || "Show details to retry."}`
+      : `${this.statusPill.textContent} · ${size}`;
+    this.root.querySelector(".btn-quick-open")!.classList.toggle("hidden", d.status !== "completed" && d.status !== "done");
+    this.speedText.classList.toggle("hidden", !isRunning);
+
     if (isRunning && this.smoothedSpeed > 0) {
-      const avgPart = this.avgSpeedBps && this.avgSpeedBps > 0 ? ` · avg ${fmtSpeed(this.avgSpeedBps)}` : "";
-      this.speedText.textContent = `${fmtSpeed(this.smoothedSpeed)}${avgPart}`;
+      this.speedText.textContent = fmtSpeed(this.smoothedSpeed);
     } else if (d.status === "completed" || d.status === "done") {
       this.speedText.textContent = this.avgSpeedBps ? `Avg ${fmtSpeed(this.avgSpeedBps)}` : "Finished";
     } else if (d.status_note && isRunning) {
