@@ -57,12 +57,17 @@
 
     <details>
       <summary>How fast is it?</summary>
-      <p>Throughput depends on your link and the remote server. The only torrent comparison published on this site is the Debian netinst test on one Windows host: Jyroxa median ~50&nbsp;MiB/s vs tuned aria2c ~15&nbsp;MiB/s. HTTP benchmarks on Hetzner speed tests are documented in the README with full methodology; they are not universal guarantees.</p>
+      <p>Throughput depends on your link and the remote server. Our published historical runs measured Jyroxa above an IDM 6.42 reference on two HTTP routes and above tuned aria2c 1.37.0 in one Debian torrent test on the same Windows PC. The <a href="index.html#performance">comparison table and method</a> name the versions and limits; these results do not prove Jyroxa is faster than every client or on every network.</p>
     </details>
 
     <details>
-      <summary>Does it replace Internet Download Manager or Ghost?</summary>
-      <p>No comparison to Ghost is published. README includes measured Hetzner HTTP medians vs an IDM reference on specific dates; treat those as historical data points, not proof on every file or network path.</p>
+      <summary>Does Jyroxa use an API to speed up downloads?</summary>
+      <p>No third-party acceleration API or proxy is used. HTTP speed comes from range requests, adaptive parallel connections, and segment work-stealing. The optional Telegram API is only for downloading Telegram media; it does not accelerate regular HTTP or torrent downloads.</p>
+    </details>
+
+    <details>
+      <summary>Is Jyroxa faster than IDM or every torrent client?</summary>
+      <p>Published historical benchmarks show higher throughput than the listed IDM 6.42 and aria2c 1.37.0 reference runs. They cover two HTTP servers and one BitTorrent swarm on one Windows PC—not every download manager, torrent engine, server, or network. Ghost Downloader has not been benchmarked.</p>
     </details>
 
     <details>

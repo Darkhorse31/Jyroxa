@@ -73,6 +73,40 @@
       </div>
     </section>
 
+    <section class="section performance-section" id="performance" aria-labelledby="performance-title">
+      <p class="performance-kicker">Measured comparisons · named versions · same Windows PC</p>
+      <h2 id="performance-title">Built for speed. Checked against IDM and aria2c.</h2>
+      <p class="prose-muted">In the published test runs below, Jyroxa delivered higher median throughput than the listed IDM and aria2c references. These are specific historical measurements, not a claim that Jyroxa beats every download manager or torrent client on every network.</p>
+
+      <div class="table-scroll" role="region" aria-label="Jyroxa speed benchmark results" tabindex="0">
+        <table class="spec-table performance-table">
+          <thead>
+            <tr><th scope="col">Test</th><th scope="col">Jyroxa</th><th scope="col">Reference</th><th scope="col">Measured result</th></tr>
+          </thead>
+          <tbody>
+            <tr><th scope="row">HTTP · Singapore</th><td>24.59 MB/s</td><td>IDM 6.42 · 10.57 MB/s</td><td>2.33× the reference</td></tr>
+            <tr><th scope="row">HTTP · Falkenstein</th><td>10.13 MB/s</td><td>IDM 6.42 · 7.05 MB/s</td><td>1.44× the reference</td></tr>
+            <tr><th scope="row">BitTorrent · Debian 13.7 netinst</th><td>~50 MiB/s</td><td>aria2c 1.37.0 · ~15 MiB/s</td><td>~3.3× in this swarm test</td></tr>
+          </tbody>
+        </table>
+      </div>
+
+      <div class="grid-2 performance-details">
+        <article class="card">
+          <h3>How HTTP acceleration works</h3>
+          <p>Jyroxa uses HTTP range requests and adaptive parallel connections. It keeps a wider connection count only when total throughput improves, and lets idle workers take over remaining segments.</p>
+          <p class="prose-muted">There is no third-party speed-up API or proxy. The server must support range requests, and the result depends on the route and server load.</p>
+        </article>
+        <article class="card">
+          <h3>What was tested</h3>
+          <p>The HTTP figures are three-run medians from two Hetzner 100 MiB files. IDM’s archived reference was collected on the same PC and day, but was not rerun alongside Jyroxa.</p>
+          <p class="prose-muted">The torrent figures are three runs each for one Debian netinst swarm, using tuned aria2c on the same PC. They do not compare every torrent engine or swarm.</p>
+        </article>
+      </div>
+
+      <p class="stat-line">The HTTP comparison is historical v0.1.3 data; the torrent comparison is v0.1.8 data. Both are published with their methodology in the <a href="https://github.com/Darkhorse31/Jyroxa#speed">README benchmark section</a> and <a href="https://github.com/Darkhorse31/Jyroxa/blob/main/docs/BENCHMARK.md">HTTP benchmark notes</a>.</p>
+    </section>
+
     <section class="section" id="highlights">
       <h2>What ships in the repo today</h2>
       <p class="prose-muted">No bundled cloud account, no closed plugin store. Binaries come from GitHub Releases; the engine and UI source live in the same tree.</p>
