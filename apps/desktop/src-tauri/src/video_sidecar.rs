@@ -3,9 +3,63 @@
 use std::path::{Path, PathBuf};
 use std::process::Stdio;
 
+use jyroxa_core::events::{EventSender, ProgressEvent};
 pub use jyroxa_core::probe::VideoFormatChoice;
 use serde::Deserialize;
 use std::collections::HashMap;
+use tokio::io::{AsyncBufReadExt, BufReader};
+
+/// Drain both pipes while the hidden child runs. Progress must reach the UI
+/// before process exit, and diagnostics must not grow with download duration.
+async fn stream_download(
+    cmd: &mut tokio::process::Command,
+    tx: &EventSender,
+) -> std::io::Result<std::process::Output> {
+    crate::process_spawn::configure_tokio(cmd);
+    cmd.stdout(Stdio::piped()).stderr(Stdio::piped());
+    let mut child = cmd.spawn()?;
+    crate::process_spawn::bind_lifetime_to_app(&child);
+    let mut stdout = BufReader::new(child.stdout.take().expect("piped stdout")).lines();
+    let mut stderr = BufReader::new(child.stderr.take().expect("piped stderr")).lines();
+    let mut tracker = crate::video_progress::Tracker::default();
+    let mut diagnostics = String::new();
+    let mut stdout_open = true;
+    let mut stderr_open = true;
+    while stdout_open || stderr_open {
+        let line = tokio::select! {
+            line = stdout.next_line(), if stdout_open => {
+                let line = line?;
+                stdout_open = line.is_some();
+                line
+            },
+            line = stderr.next_line(), if stderr_open => {
+                let line = line?;
+                stderr_open = line.is_some();
+                line
+            },
+        };
+        if let Some(line) = line {
+            if let Some(progress) = tracker.line(&line) {
+                let _ = tx.send(ProgressEvent::VideoProgress { progress });
+            } else if !line.starts_with("JX_") {
+                diagnostics.push_str(&line);
+                diagnostics.push('\n');
+                if diagnostics.len() > 65_536 {
+                    let mut start = diagnostics.len() - 65_536;
+                    while !diagnostics.is_char_boundary(start) {
+                        start += 1;
+                    }
+                    diagnostics.drain(..start);
+                }
+            }
+        }
+    }
+    Ok(std::process::Output {
+        status: child.wait().await?,
+        stdout: Vec::new(),
+        stderr: diagnostics.into_bytes(),
+    })
+}
 
 #[derive(Debug, Clone, Deserialize)]
 pub struct YtFormat {
@@ -374,6 +428,7 @@ pub async fn download_via_ytdlp_with_headers(
     output: &Path,
     format_id: Option<&str>,
     headers: &HashMap<String, String>,
+    tx: EventSender,
 ) -> Result<u64, String> {
     let canonical = jyroxa_core::video::youtube_page_url(page_url);
     let page_url = canonical.as_deref().unwrap_or(page_url);
@@ -424,12 +479,45 @@ pub async fn download_via_ytdlp_with_headers(
     args.push(page_url.to_string());
     let mut cmd = tokio::process::Command::new(&ytdlp);
     let _cookies = configure_extraction(&mut cmd, page_url, headers)?;
+    cmd.args([
+        "--newline",
+        "--progress",
+        "--progress-delta",
+        "0.25",
+        "--no-simulate",
+        "--output-na-placeholder",
+        "null",
+        "--print",
+        crate::video_progress::PLAN_TEMPLATE,
+        "--progress-template",
+        crate::video_progress::DOWNLOAD_TEMPLATE,
+        "--progress-template",
+        crate::video_progress::POST_TEMPLATE,
+    ]);
     cmd.args(&args)
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
-    let out = output_ytdlp(&mut cmd, page_url)
-        .await
-        .map_err(|e| e.to_string())?;
+    let mut out = None;
+    for attempt in 0..3 {
+        let _ = tx.send(ProgressEvent::VideoProgress {
+            progress: crate::video_progress::Tracker::fetching(),
+        });
+        let result = stream_download(&mut cmd, &tx)
+            .await
+            .map_err(|e| e.to_string())?;
+        let error = String::from_utf8_lossy(&result.stderr);
+        let refresh = !browser_client_args(page_url).is_empty()
+            && ["HTTP Error 403", "HTTP Error 429", "No video formats found"]
+                .iter()
+                .any(|message| error.contains(message));
+        let done = result.status.success() || !refresh || attempt == 2;
+        out = Some(result);
+        if done {
+            break;
+        }
+        tokio::time::sleep(std::time::Duration::from_secs(1 << attempt)).await;
+    }
+    let out = out.expect("at least one download attempt");
     if !out.status.success() {
         return Err(extraction_error(&out.stderr));
     }
@@ -445,6 +533,48 @@ pub async fn download_via_ytdlp_with_headers(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[cfg(windows)]
+    #[tokio::test]
+    async fn download_progress_arrives_before_exit_and_drains_diagnostics() {
+        let (tx, mut rx) = jyroxa_core::events::channel();
+        let task = tokio::spawn(async move {
+            let mut cmd = tokio::process::Command::new("powershell.exe");
+            cmd.args(["-NoProfile", "-NonInteractive", "-Command", r#"
+                [Console]::Out.WriteLine('JX_PROGRESS:{"id":"18","downloaded":512,"total":1024,"speed":256}')
+                [Console]::Out.Flush()
+                Start-Sleep -Seconds 3
+                for ($i=0; $i -lt 3000; $i++) { [Console]::Error.WriteLine('diagnostic fixture line draining both pipes') }
+                [Console]::Out.WriteLine('JX_POST:Merger')
+                [Console]::Error.WriteLine('fixture terminal failure')
+                exit 7
+            "#]);
+            stream_download(&mut cmd, &tx).await.unwrap()
+        });
+        let first = tokio::time::timeout(std::time::Duration::from_secs(15), rx.recv())
+            .await
+            .unwrap()
+            .unwrap();
+        let ProgressEvent::VideoProgress { progress } = first else {
+            panic!("video progress required")
+        };
+        assert_eq!((progress.downloaded, progress.total), (512, Some(1024)));
+        assert!(
+            !task.is_finished(),
+            "progress must arrive while the child is running"
+        );
+        let output = tokio::time::timeout(std::time::Duration::from_secs(20), task)
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(output.status.code(), Some(7));
+        assert!(output.stderr.len() <= 65_536);
+        assert!(String::from_utf8_lossy(&output.stderr).contains("fixture terminal failure"));
+        let ProgressEvent::VideoProgress { progress } = rx.recv().await.unwrap() else {
+            panic!("processing progress required")
+        };
+        assert_eq!(progress.phase, "merging");
+    }
 
     #[test]
     fn browser_cookies_use_a_temporary_jar_not_process_arguments() {

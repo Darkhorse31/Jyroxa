@@ -5,10 +5,13 @@ use std::path::PathBuf;
 use std::sync::Arc;
 
 use serde_json::{json, Value};
-use tauri::{AppHandle, Manager};
+use tauri::{AppHandle, Listener, Manager};
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 
 use crate::engine::{AddDownloadArgs, DesktopEngine, EngineState};
+
+#[derive(Default)]
+struct ProgressJournal(std::sync::Mutex<Vec<Value>>);
 
 async fn command(
     app: &AppHandle,
@@ -41,6 +44,9 @@ async fn command(
             .map(|packages| json!(packages))
             .map_err(|e| e.to_string()),
         "list" => Ok(json!(engine.list_downloads().await)),
+        "progress_events" => Ok(json!(std::mem::take(
+            &mut *app.state::<ProgressJournal>().0.lock().unwrap()
+        ))),
         "add" => {
             let args: AddDownloadArgs =
                 serde_json::from_value(input["args"].clone()).map_err(|e| e.to_string())?;
@@ -136,6 +142,18 @@ pub fn run() {
     context.config_mut().app.windows.clear();
     tauri::Builder::default()
         .setup(move |app| {
+            app.manage(ProgressJournal::default());
+            let progress_handle = app.handle().clone();
+            app.listen("download-progress", move |event| {
+                if let Ok(value) = serde_json::from_str::<Value>(event.payload()) {
+                    let journal = progress_handle.state::<ProgressJournal>();
+                    let mut events = journal.0.lock().unwrap();
+                    if events.len() == 2048 {
+                        events.remove(0);
+                    }
+                    events.push(value);
+                }
+            });
             let engine = DesktopEngine::build(data_dir.clone())?;
             tauri::async_runtime::block_on(async {
                 let mut settings = engine.get_settings().await;

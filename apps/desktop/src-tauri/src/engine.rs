@@ -193,6 +193,8 @@ pub struct DownloadView {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub status_note: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub video_progress: Option<jyroxa_core::events::VideoProgress>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub torrent_info_hash: Option<String>,
 }
 
@@ -563,6 +565,7 @@ impl DesktopEngine {
             }
             inner.view.status = TaskStatus::Queued;
             inner.view.error = None;
+            inner.view.video_progress = None;
             // Torrents resume from the on-disk session; keep progress for HTTP retries only reset.
             if inner.view.kind != "torrent" {
                 inner.view.downloaded = 0;
@@ -794,6 +797,7 @@ impl DesktopEngine {
                 torrent_seeds: None,
                 torrent_ratio: None,
                 status_note: None,
+                video_progress: None,
                 torrent_info_hash: item.torrent_info_hash.clone(),
                 telegram_chat_id: None,
                 telegram_message_id: None,
@@ -866,6 +870,7 @@ impl DesktopEngine {
             torrent_seeds: None,
             torrent_ratio: None,
             status_note: None,
+            video_progress: None,
             torrent_info_hash: None,
             telegram_chat_id,
             telegram_message_id,
@@ -1064,6 +1069,7 @@ impl DesktopEngine {
             torrent_seeds: None,
             torrent_ratio: None,
             status_note: None,
+            video_progress: None,
             torrent_info_hash: torrent_info_hash.clone(),
             telegram_chat_id,
             telegram_message_id,
@@ -1306,6 +1312,16 @@ impl DesktopEngine {
                     let mut active = engine.active_count.lock().await;
                     *active += 1;
                 }
+                let (tx, mut rx) = jyroxa_core::events::channel();
+                let progress_items = Arc::clone(&engine.items);
+                let progress_app = app.clone();
+                let consumer = tauri::async_runtime::spawn(async move {
+                    while let Some(event) = rx.recv().await {
+                        apply_event(&progress_items, id, &event).await;
+                        let _ =
+                            progress_app.emit("download-progress", ProgressPayload { id, event });
+                    }
+                });
                 let dl_result = crate::video_sidecar::download_via_ytdlp_with_headers(
                     &page_url,
                     &request.output,
@@ -1314,13 +1330,17 @@ impl DesktopEngine {
                         .extra_headers
                         .as_ref()
                         .unwrap_or(&Default::default()),
+                    tx,
                 )
                 .await;
+                let _ = consumer.await;
                 let notifications_on = engine.settings.lock().await.notifications;
                 let mut native_toast: Option<(String, String)> = None;
                 {
                     let mut items = engine.items.lock().await;
                     if let Some(inner) = items.get_mut(&id) {
+                        inner.view.video_progress = None;
+                        inner.view.speed_bps = 0.0;
                         match dl_result {
                             Ok(total) => {
                                 inner.view.status = TaskStatus::Completed;
@@ -1815,6 +1835,12 @@ async fn apply_event(items: &Mutex<HashMap<u64, InnerItem>>, id: u64, ev: &Progr
         inner.view.status = TaskStatus::Running;
     }
     match ev {
+        ProgressEvent::VideoProgress { progress } => {
+            inner.view.downloaded = progress.downloaded;
+            inner.view.total = progress.total;
+            inner.view.speed_bps = progress.speed_bps;
+            inner.view.video_progress = Some(progress.clone());
+        }
         ProgressEvent::Started { total_size, .. } => {
             inner.view.total = *total_size;
         }
@@ -2011,6 +2037,62 @@ pub async fn run_clipboard_monitor(app: AppHandle) {
 
 #[cfg(test)]
 mod tests {
+    #[tokio::test]
+    async fn video_progress_updates_polling_snapshot_with_nullable_totals() {
+        let view: super::DownloadView = serde_json::from_value(serde_json::json!({
+            "id": 1, "urls": ["https://youtu.be/test"], "filename": "video.mp4",
+            "output": "video.mp4", "connections": 1, "connections_auto": false,
+            "status": "running", "downloaded": 0, "total": null, "speed_bps": 0,
+            "segments": [], "error": null, "sha256": null, "md5": null
+        }))
+        .unwrap();
+        assert!(view.video_progress.is_none(), "old views remain compatible");
+        let items = tokio::sync::Mutex::new(std::collections::HashMap::from([(
+            1,
+            super::InnerItem {
+                view,
+                control: None,
+                torrent_cancel: None,
+                torrent_only_files: None,
+            },
+        )]));
+        let progress = jyroxa_core::events::VideoProgress {
+            phase: "downloading".into(),
+            downloaded: 500,
+            total: Some(1200),
+            total_is_estimate: true,
+            speed_bps: 100.0,
+            eta_secs: Some(7.0),
+        };
+        super::apply_event(
+            &items,
+            1,
+            &jyroxa_core::events::ProgressEvent::VideoProgress {
+                progress: progress.clone(),
+            },
+        )
+        .await;
+        let snapshot = items.lock().await[&1].view.clone();
+        assert_eq!(
+            (snapshot.downloaded, snapshot.total, snapshot.speed_bps),
+            (500, Some(1200), 100.0)
+        );
+        assert_eq!(snapshot.video_progress, Some(progress));
+        super::apply_event(
+            &items,
+            1,
+            &jyroxa_core::events::ProgressEvent::VideoProgress {
+                progress: crate::video_progress::Tracker::fetching(),
+            },
+        )
+        .await;
+        assert_eq!(
+            items.lock().await[&1].view.total,
+            None,
+            "new attempts must clear old totals"
+        );
+    }
+
     #[test]
     fn new_installations_use_light_theme() {
         assert_eq!(super::AppSettings::default().theme, "light");

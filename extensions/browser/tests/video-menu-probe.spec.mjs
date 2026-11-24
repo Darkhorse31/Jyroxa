@@ -43,5 +43,14 @@ try {
   const audioAdded = await engine.request({command:"add",args:{urls:["https://www.youtube.com/shorts/jNQXAC9IVRw"],output_dir:engine.downloads,filename:"audio-100%.mp4",connections:1,connections_auto:true,http_headers:{"X-Jyroxa-Ytdlp-Format":audio.format_id}}});
   assert.equal(audioAdded.ok,true,JSON.stringify(audioAdded));
   engine.decode(await engine.waitFor(audioAdded.result),true);
+  const journal = await engine.request({command:"progress_events"});
+  assert.equal(journal.ok,true,JSON.stringify(journal));
+  for (const id of [added.result, handoff.download_id, audioAdded.result]) {
+    const updates = journal.result.filter(entry=>entry.id===id && entry.event.type==="video_progress").map(entry=>entry.event.progress);
+    assert.ok(updates.some(p=>p.phase==="fetching"), `fetching status for ${id}`);
+    assert.ok(updates.some(p=>p.phase==="downloading" && p.downloaded>0 && p.total>p.downloaded), `intermediate progress for ${id}`);
+    assert.ok(updates.some(p=>p.phase==="processing" || p.phase==="merging"), `processing status for ${id}`);
+    console.log("live video progress",JSON.stringify({id,updates}));
+  }
   console.log("video-menu-probe.spec.mjs OK: desktop, short URL, shorts, Link Grabber, native probe and browser handoff decoded");
 } finally { await engine.close(); }
