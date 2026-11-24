@@ -3015,7 +3015,7 @@ dependencies = [
 
 [[package]]
 name = "jyroxa-cli"
-version = "0.1.12"
+version = "0.1.13"
 dependencies = [
  "anyhow",
  "clap",
@@ -3027,7 +3027,7 @@ dependencies = [
 
 [[package]]
 name = "jyroxa-core"
-version = "0.1.12"
+version = "0.1.13"
 dependencies = [
  "axum 0.7.9",
  "bytes",
@@ -3056,7 +3056,7 @@ dependencies = [
 
 [[package]]
 name = "jyroxa-desktop"
-version = "0.1.12"
+version = "0.1.13"
 dependencies = [
  "jyroxa-core",
  "jyroxa-native-host",
@@ -3079,7 +3079,7 @@ dependencies = [
 
 [[package]]
 name = "jyroxa-ffi"
-version = "0.1.12"
+version = "0.1.13"
 dependencies = [
  "jni",
  "jyroxa-core",
@@ -3090,7 +3090,7 @@ dependencies = [
 
 [[package]]
 name = "jyroxa-native-host"
-version = "0.1.12"
+version = "0.1.13"
 dependencies = [
  "base64 0.22.1",
  "serde",

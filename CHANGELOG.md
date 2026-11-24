@@ -1,3 +1,19 @@
+## 0.1.13 — 2026-11-24
+
+### YouTube downloads
+
+- Route YouTube watch, short, Shorts, live, and embed URLs through yt-dlp from Add Download and Link Grabber, with canonical URL handling, metadata, format choices, and complete MP4 downloads.
+- Use an available JavaScript runtime for YouTube extraction, surface actionable extraction errors with Retry, and support optional browser cookies when YouTube requires sign-in.
+
+### Browser extension
+
+- Register valid, browser-specific native messaging manifests for Chrome, Edge, Brave, Chromium, and Firefox, including discovered installed extension IDs.
+- Distinguish unavailable, forbidden, and failed native host connections without the misleading “Host not registered” message.
+
+### Distribution
+
+- Workspace, desktop, extension, and Android 0.1.13; Android versionCode 13.
+
 # Changelog
 
 ## 0.1.12 — 2026-11-23
