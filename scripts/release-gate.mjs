@@ -210,7 +210,7 @@ try {
   const publicUrl = "https://www.gnu.org/licenses/gpl-3.0.txt";
   const publicResponse = await fetch(publicUrl, {
     signal: AbortSignal.timeout(30_000),
-    headers: { "User-Agent": "Jyroxa/0.1.12" },
+    headers: { "User-Agent": "Jyroxa/0.1.13" },
   });
   assert.equal(publicResponse.ok, true);
   const publicDigest = crypto.createHash("sha256").update(Buffer.from(await publicResponse.arrayBuffer())).digest("hex");
