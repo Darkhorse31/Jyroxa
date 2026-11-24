@@ -17,6 +17,29 @@ async fn command(
 ) -> Result<Value, String> {
     let id = input.get("id").and_then(Value::as_u64).unwrap_or(0);
     match input["command"].as_str().unwrap_or("") {
+        "probe" => engine
+            .probe_url_with_headers(
+                input["url"].as_str().ok_or("url required")?,
+                serde_json::from_value(input.get("headers").cloned().unwrap_or(json!({})))
+                    .map_err(|e| e.to_string())?,
+            )
+            .await
+            .map(|info| json!(info))
+            .map_err(|e| e.to_string()),
+        "grab" => engine
+            .grab_links(
+                input["url"].as_str().ok_or("url required")?,
+                &serde_json::from_value(
+                    input
+                        .get("options")
+                        .cloned()
+                        .unwrap_or(json!({"deep":false,"no_probe":false})),
+                )
+                .map_err(|e| e.to_string())?,
+            )
+            .await
+            .map(|packages| json!(packages))
+            .map_err(|e| e.to_string()),
         "list" => Ok(json!(engine.list_downloads().await)),
         "add" => {
             let args: AddDownloadArgs =

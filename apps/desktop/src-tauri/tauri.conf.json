@@ -6,7 +6,7 @@
   "build": {
     "beforeDevCommand": "npm run dev",
     "devUrl": "http://localhost:1420",
-    "beforeBuildCommand": "npm run build",
+    "beforeBuildCommand": "npm run build && npm run prepare:windows",
     "frontendDist": "../dist"
   },
   "app": {
@@ -35,7 +35,9 @@
       "jyroxa-browser-register.exe": "./jyroxa-browser-register.exe",
       "jyroxa.exe": "./jyroxa.exe",
       "yt-dlp.exe": "./yt-dlp.exe",
-      "ffmpeg.exe": "./ffmpeg.exe"
+      "ffmpeg.exe": "./ffmpeg.exe",
+      "node.exe": "./node.exe",
+      "node-LICENSE.txt": "./node-LICENSE.txt"
     },
     "icon": [
       "icons/32x32.png",
@@ -46,6 +48,7 @@
     ],
     "windows": {
       "nsis": {
+        "installMode": "currentUser",
         "installerIcon": "icons/icon.ico",
         "headerImage": "icons/header.bmp",
         "sidebarImage": "icons/sidebar.bmp",

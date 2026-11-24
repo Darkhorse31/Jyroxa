@@ -4,10 +4,14 @@ import { connectionFailureReason } from "../native.js";
 const cases = [
   {
     in: "Specified native messaging host not found.",
-    short: "Host not registered",
+    short: "Host unavailable",
   },
   {
     in: "desktop pipe not available: Access is denied.",
+    short: "Jyroxa not running",
+  },
+  {
+    in: "desktop pipe not available: The system cannot find the file specified. (os error 2)",
     short: "Jyroxa not running",
   },
   {
@@ -20,7 +24,19 @@ const cases = [
   },
   {
     in: "The system cannot find the file specified.",
-    short: "Jyroxa not reachable",
+    short: "Host failed to start",
+  },
+  {
+    in: "Failed to start native messaging host.",
+    short: "Host failed to start",
+  },
+  {
+    in: "Error when communicating with the native messaging host.",
+    short: "Host connection failed",
+  },
+  {
+    in: "Native host has exited.",
+    short: "Host connection failed",
   },
   {
     in: "disconnected",

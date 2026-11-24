@@ -40,7 +40,5 @@ url = { workspace = true }
 regex = { workspace = true }
 sha2 = { workspace = true }
 winreg = "0.55"
-
-[dev-dependencies]
 tempfile = "3"
 

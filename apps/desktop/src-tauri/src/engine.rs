@@ -420,6 +420,14 @@ impl DesktopEngine {
 
     pub async fn probe_url(&self, url: &str) -> CoreResult<jyroxa_core::ProbeInfo> {
         let normalized = normalize_user_url(url);
+        if jyroxa_core::video::is_youtube_page(&normalized) {
+            return crate::video_sidecar::probe_video(
+                &normalized,
+                &std::collections::HashMap::new(),
+            )
+            .await
+            .map_err(jyroxa_core::Error::other);
+        }
         if jyroxa_core::is_telegram_post_url(&normalized) {
             let client = build_client()?;
             let pool = self.telegram.as_ref();
@@ -427,6 +435,7 @@ impl DesktopEngine {
                 Ok(item) => return Ok(telegram_item_to_probe(&item, &normalized)),
                 Err(jyroxa_core::TelegramError::MediaNeedsAccount) => {
                     return Ok(jyroxa_core::ProbeInfo {
+                        video_formats: None,
                         final_url: normalized.clone(),
                         suggested_name: "telegram_post".into(),
                         size: None,
@@ -460,6 +469,11 @@ impl DesktopEngine {
         headers: std::collections::HashMap<String, String>,
     ) -> CoreResult<jyroxa_core::ProbeInfo> {
         let normalized = normalize_user_url(url);
+        if jyroxa_core::video::is_youtube_page(&normalized) {
+            return crate::video_sidecar::probe_video(&normalized, &headers)
+                .await
+                .map_err(jyroxa_core::Error::other);
+        }
         let client = build_client()?;
         jyroxa_core::probe_url_with_headers(
             &client,
@@ -913,6 +927,21 @@ impl DesktopEngine {
             .map(|u| jyroxa_core::torrent::normalize_torrent_input(u))
             .collect();
         let first = normalize_user_url(&args.urls[0]);
+        if jyroxa_core::video::is_youtube_page(&first) {
+            args.http_headers
+                .get_or_insert_with(Default::default)
+                .insert("X-Jyroxa-Ytdlp-Page".into(), "1".into());
+            if args.filename.is_empty()
+                || args.filename == "download"
+                || !args.filename.contains('.')
+            {
+                let info =
+                    crate::video_sidecar::probe_video(&first, args.http_headers.as_ref().unwrap())
+                        .await
+                        .map_err(jyroxa_core::Error::other)?;
+                args.filename = info.suggested_name;
+            }
+        }
         let mut telegram_mtproto: Option<(i64, u32)> = None;
         if jyroxa_core::is_telegram_post_url(&first) {
             let client = build_client()?;
@@ -1254,7 +1283,12 @@ impl DesktopEngine {
                 .as_ref()
                 .and_then(|h| h.get("X-Jyroxa-Ytdlp-Page"))
                 .is_some_and(|v| v == "1");
-            if ytdlp_page {
+            if ytdlp_page
+                || request
+                    .urls
+                    .first()
+                    .is_some_and(|u| jyroxa_core::video::is_youtube_page(u))
+            {
                 let page_url = request.urls.first().cloned().unwrap_or_default();
                 let format_id = request
                     .extra_headers
@@ -1272,9 +1306,16 @@ impl DesktopEngine {
                     let mut active = engine.active_count.lock().await;
                     *active += 1;
                 }
-                let dl_result =
-                    crate::video_sidecar::download_via_ytdlp(&page_url, &request.output, format_id)
-                        .await;
+                let dl_result = crate::video_sidecar::download_via_ytdlp_with_headers(
+                    &page_url,
+                    &request.output,
+                    format_id,
+                    request
+                        .extra_headers
+                        .as_ref()
+                        .unwrap_or(&Default::default()),
+                )
+                .await;
                 let notifications_on = engine.settings.lock().await.notifications;
                 let mut native_toast: Option<(String, String)> = None;
                 {
@@ -1663,7 +1704,18 @@ impl DesktopEngine {
     }
 
     pub async fn grab_links(&self, input: &str, opts: &GrabOptionsDto) -> CoreResult<Vec<Package>> {
-        self.linkgrabber.grab(input, &opts.into()).await
+        let mut packages = self.linkgrabber.grab(input, &opts.into()).await?;
+        for package in &mut packages {
+            for link in &mut package.links {
+                if jyroxa_core::video::is_youtube_page(&link.url) {
+                    let info = self.probe_url(&link.url).await?;
+                    link.filename = Some(info.suggested_name);
+                    link.mime = info.mime;
+                    link.size = info.size;
+                }
+            }
+        }
+        Ok(packages)
     }
 
     pub async fn probe_urls(&self, urls: Vec<String>) -> Vec<LinkInfo> {
@@ -1830,6 +1882,7 @@ fn telegram_item_to_probe(
 ) -> jyroxa_core::ProbeInfo {
     let category = jyroxa_core::category_for(&item.filename, item.mime.as_deref());
     jyroxa_core::ProbeInfo {
+        video_formats: None,
         final_url: display_url.to_string(),
         suggested_name: item.filename.clone(),
         size: item.size,

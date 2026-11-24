@@ -50,10 +50,8 @@ async function refreshStatus() {
     const reason = pingFailureFromResponse(res);
     statusEl.textContent = reason?.short ?? "Jyroxa not reachable";
     statusEl.className = "muted disconnected";
-    const extra =
-      " Reload this extension on chrome://extensions, then fully quit Chrome (all windows) and reopen. Your extension ID is shown below — add it in Jyroxa Settings → Browser if needed.";
     if (statusDetailEl) {
-      statusDetailEl.textContent = `${reason?.detail || ""}${extra}`.trim();
+      statusDetailEl.textContent = reason?.detail || "Jyroxa did not answer. Click Refresh connection to retry.";
       statusDetailEl.className = "muted disconnected";
     }
   }

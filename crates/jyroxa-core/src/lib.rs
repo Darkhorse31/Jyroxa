@@ -120,3 +120,5 @@ pub fn build_segment_client_with(read_timeout: std::time::Duration) -> Result<re
         .build()?;
     Ok(client)
 }
+
+pub mod video;

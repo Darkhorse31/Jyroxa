@@ -1,0 +1,9 @@
+{
+  "name": "jyroxa-browser-extension",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "test": "node --test handoff-dedupe.test.mjs media-monitor.test.mjs tests/native.spec.mjs tests/send-native.spec.mjs",
+    "test:integration": "node tests/native-host-install.spec.mjs && node tests/native-browser.spec.mjs && node tests/video-menu-probe.spec.mjs"
+  }
+}

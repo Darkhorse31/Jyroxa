@@ -51,11 +51,10 @@ const base = `http://127.0.0.1:${port}/`;
 
 const userDataDir = fs.mkdtempSync(path.join(os.tmpdir(), "jyroxa-vgrab-"));
 const context = await chromium.launchPersistentContext(userDataDir, {
-  channel: "chrome",
+  channel: "chromium",
   headless: true,
+  env: {...process.env, JYROXA_NATIVE_HOST_NO_LAUNCH:"1", JYROXA_DATA_DIR:userDataDir},
   args: [
-    `--disable-extensions-except=${extDir}`,
-    `--load-extension=${extDir}`,
     "--headless=new",
     "--no-sandbox",
   ],

@@ -3,7 +3,9 @@
 use std::path::{Path, PathBuf};
 use std::process::Stdio;
 
-use serde::{Deserialize, Serialize};
+pub use jyroxa_core::probe::VideoFormatChoice;
+use serde::Deserialize;
+use std::collections::HashMap;
 
 #[derive(Debug, Clone, Deserialize)]
 pub struct YtFormat {
@@ -65,13 +67,6 @@ async fn output_ytdlp(
         tokio::time::sleep(std::time::Duration::from_secs(1 << attempt)).await;
     }
     unreachable!("the last attempt always returns its output")
-}
-
-#[derive(Debug, Clone, Serialize)]
-pub struct VideoFormatChoice {
-    pub format_id: String,
-    pub label: String,
-    pub size_bytes: Option<u64>,
 }
 
 fn vcodec_none(fmt: &YtFormat) -> bool {
@@ -143,7 +138,7 @@ pub fn formats_for_menu(info: &YtInfo) -> Vec<VideoFormatChoice> {
     for height in [1080u64, 720, 480, 360, 240] {
         let video = formats
             .iter()
-            .filter(|f| !vcodec_none(f) && f.height == Some(height))
+            .filter(|f| !vcodec_none(f) && acodec_none(f) && f.height == Some(height))
             .max_by_key(|f| f.tbr.unwrap_or(0.0) as u64);
         let audio = formats
             .iter()
@@ -159,7 +154,10 @@ pub fn formats_for_menu(info: &YtInfo) -> Vec<VideoFormatChoice> {
         out.push(VideoFormatChoice {
             format_id: fid,
             label: format!("{height}p (merged)"),
-            size_bytes: v.filesize.or(a.filesize),
+            size_bytes: v
+                .filesize
+                .zip(a.filesize)
+                .and_then(|(v, a)| v.checked_add(a)),
         });
         if out.len() >= 12 {
             break;
@@ -176,30 +174,163 @@ pub fn formats_for_menu(info: &YtInfo) -> Vec<VideoFormatChoice> {
     out
 }
 
+/// Shared extraction policy for Add Download, browser probes and actual transfers.
+fn configure_extraction(
+    cmd: &mut tokio::process::Command,
+    page_url: &str,
+    headers: &HashMap<String, String>,
+) -> Result<Option<tempfile::NamedTempFile>, String> {
+    cmd.args(["--ignore-config", "--no-playlist", "--socket-timeout", "20"]);
+    cmd.args(browser_client_args(page_url));
+    if jyroxa_core::video::is_youtube_page(page_url) {
+        if let Some((runtime, path)) = crate::sidecar_paths::javascript_runtime() {
+            cmd.arg("--js-runtimes")
+                .arg(format!("{runtime}:{}", path.display()));
+        }
+    }
+    // Cookies are opt-in. Never pass secrets on the command line or read a browser
+    // profile unless the user selected it in Add Download.
+    if let Some(browser) = headers
+        .get("X-Jyroxa-Ytdlp-Browser")
+        .filter(|b| !b.is_empty())
+    {
+        if !["chrome", "edge", "brave", "firefox", "chromium"].contains(&browser.as_str()) {
+            return Err("Choose a supported browser for YouTube sign-in cookies.".into());
+        }
+        cmd.arg("--cookies-from-browser").arg(browser);
+    }
+    let cookie_file = cookie_file(page_url, headers)?;
+    if let Some(file) = &cookie_file {
+        cmd.arg("--cookies").arg(file.path());
+    }
+    for (header, flag) in [("User-Agent", "--user-agent"), ("Referer", "--referer")] {
+        if let Some(value) = headers.get(header) {
+            cmd.arg(flag).arg(value);
+        }
+    }
+    Ok(cookie_file)
+}
+
+/// Temporary cookie jars keep extension credentials out of process arguments.
+fn cookie_file(
+    page_url: &str,
+    headers: &HashMap<String, String>,
+) -> Result<Option<tempfile::NamedTempFile>, String> {
+    use std::io::Write;
+    let Some(cookies) = headers.get("Cookie").filter(|v| !v.is_empty()) else {
+        return Ok(None);
+    };
+    let url = url::Url::parse(page_url).map_err(|e| e.to_string())?;
+    let host = url.host_str().ok_or("Video URL has no host")?;
+    let (host, subdomains) = if jyroxa_core::video::is_youtube_page(page_url) {
+        (".youtube.com", "TRUE")
+    } else {
+        (host, "FALSE")
+    };
+    let mut file = tempfile::NamedTempFile::new().map_err(|e| e.to_string())?;
+    writeln!(file, "# Netscape HTTP Cookie File").map_err(|e| e.to_string())?;
+    for part in cookies.split(';') {
+        if let Some((name, value)) = part.trim().split_once('=') {
+            if name.is_empty()
+                || name.contains(['\r', '\n', '\t'])
+                || value.contains(['\r', '\n', '\t'])
+            {
+                return Err("Invalid browser cookies. Send the video from the extension again, then click Retry.".into());
+            }
+            writeln!(file, "{host}\t{subdomains}\t/\tTRUE\t0\t{name}\t{value}")
+                .map_err(|e| e.to_string())?;
+        }
+    }
+    file.flush().map_err(|e| e.to_string())?;
+    Ok(Some(file))
+}
+
+fn extraction_error(stderr: &[u8]) -> String {
+    let raw = String::from_utf8_lossy(stderr);
+    let lower = raw.to_lowercase();
+    let recovery = if lower.contains("not a bot")
+        || lower.contains("sign in")
+        || lower.contains("login required")
+    {
+        "YouTube requires sign-in on this network. Choose your signed-in browser under Sign-in cookies, then click Retry."
+    } else if lower.contains("decrypt")
+        || lower.contains("cookie database")
+        || lower.contains("could not copy")
+    {
+        "Jyroxa could not read browser cookies. Close that browser and click Retry, or choose another signed-in browser. Chrome may protect cookies from other apps."
+    } else if lower.contains("javascript") || lower.contains("challenge") || lower.contains("ejs") {
+        "YouTube's player challenge could not be solved. Use a current yt-dlp with its EJS scripts and a supported Node or Deno runtime beside Jyroxa, then click Retry."
+    } else if lower.contains("403") || lower.contains("429") {
+        "YouTube refused this request. Wait a moment, choose your signed-in browser if needed, then click Retry."
+    } else {
+        "Video fetch failed. Check the URL and connection, then click Retry."
+    };
+    format!("{recovery}\n{}", raw.trim())
+}
+
 pub async fn probe_page_formats(page_url: &str) -> Result<YtInfo, String> {
+    probe_page_formats_with_headers(page_url, &HashMap::new()).await
+}
+
+async fn probe_page_formats_with_headers(
+    page_url: &str,
+    headers: &HashMap<String, String>,
+) -> Result<YtInfo, String> {
+    let canonical = jyroxa_core::video::youtube_page_url(page_url);
+    let page_url = canonical.as_deref().unwrap_or(page_url);
     let ytdlp = yt_dlp_path();
     if !ytdlp.is_file() {
-        return Err("yt-dlp.exe not bundled".into());
+        return Err(
+            "yt-dlp.exe is missing. Repair Jyroxa's video sidecars, then click Retry.".into(),
+        );
     }
     let mut cmd = tokio::process::Command::new(&ytdlp);
-    cmd.args(browser_client_args(page_url))
-        .args([
-            "--no-warnings",
-            "--no-playlist",
-            "-J",
-            "--flat-playlist",
-            page_url,
-        ])
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped());
-    let out = output_ytdlp(&mut cmd, page_url)
-        .await
-        .map_err(|e| e.to_string())?;
+    let _cookies = configure_extraction(&mut cmd, page_url, headers)?;
+    cmd.args(["-J", "--", page_url]);
+    let out = tokio::time::timeout(
+        std::time::Duration::from_secs(120),
+        output_ytdlp(&mut cmd, page_url),
+    )
+    .await
+    .map_err(|_| "Video fetch timed out. Check your connection, then click Retry.".to_string())?
+    .map_err(|e| format!("Could not start yt-dlp: {e}. Repair Jyroxa, then click Retry."))?;
     if !out.status.success() {
-        let err = String::from_utf8_lossy(&out.stderr);
-        return Err(err.trim().to_string());
+        return Err(extraction_error(&out.stderr));
     }
-    serde_json::from_slice(&out.stdout).map_err(|e| e.to_string())
+    let info: YtInfo = serde_json::from_slice(&out.stdout)
+        .map_err(|e| format!("Invalid video metadata: {e}. Click Retry."))?;
+    if info
+        .formats
+        .as_ref()
+        .map_or(true, |f| f.iter().all(|f| vcodec_none(f) && acodec_none(f)))
+    {
+        return Err(extraction_error(
+            b"No playable video formats were returned by yt-dlp.",
+        ));
+    }
+    Ok(info)
+}
+
+pub async fn probe_video(
+    page_url: &str,
+    headers: &HashMap<String, String>,
+) -> Result<jyroxa_core::ProbeInfo, String> {
+    let info = probe_page_formats_with_headers(page_url, headers).await?;
+    Ok(jyroxa_core::ProbeInfo {
+        final_url: page_url.into(),
+        suggested_name: sanitize_filename(&format!(
+            "{}.mp4",
+            info.title.as_deref().unwrap_or("video")
+        )),
+        size: None,
+        mime: Some("video/mp4".into()),
+        resumable: true,
+        category: jyroxa_core::Category::Video,
+        server: "yt-dlp".into(),
+        protocol: "HTTPS".into(),
+        telegram_login_required: false,
+        video_formats: Some(formats_for_menu(&info)),
+    })
 }
 
 pub fn pick_format<'a>(formats: &'a [YtFormat], format_id: Option<&str>) -> Option<&'a YtFormat> {
@@ -235,25 +366,28 @@ pub fn sanitize_filename_public(name: &str) -> String {
 }
 
 fn sanitize_filename(name: &str) -> String {
-    let bad = ['<', '>', ':', '"', '/', '\\', '|', '?', '*'];
-    name.chars()
-        .map(|c| if bad.contains(&c) { '_' } else { c })
-        .collect()
+    jyroxa_core::naming::sanitize_filename(name)
 }
 
-pub async fn download_via_ytdlp(
+pub async fn download_via_ytdlp_with_headers(
     page_url: &str,
     output: &Path,
     format_id: Option<&str>,
+    headers: &HashMap<String, String>,
 ) -> Result<u64, String> {
+    let canonical = jyroxa_core::video::youtube_page_url(page_url);
+    let page_url = canonical.as_deref().unwrap_or(page_url);
     let ytdlp = yt_dlp_path();
     if !ytdlp.is_file() {
         return Err("yt-dlp.exe not bundled".into());
     }
     let ffmpeg = ffmpeg_path();
+    if !ffmpeg.is_file() {
+        return Err(
+            "ffmpeg.exe is missing. Repair Jyroxa's video sidecars, then click Retry.".into(),
+        );
+    }
     let mut args = vec![
-        "--no-warnings".to_string(),
-        "--no-playlist".to_string(),
         // A completed file must contain every fragment. On a rejected CDN URL,
         // fail this attempt so output_ytdlp can refresh the extraction instead
         // of silently skipping fragments for the rest of the video.
@@ -264,11 +398,18 @@ pub async fn download_via_ytdlp(
         args.push(ffmpeg.to_string_lossy().into_owned());
         args.push("--merge-output-format".into());
         args.push("mp4".into());
+        if output
+            .extension()
+            .is_some_and(|ext| ext.eq_ignore_ascii_case("mp4"))
+        {
+            args.push("--remux-video".into());
+            args.push("mp4".into());
+        }
     }
     let out_arg = if output.extension().is_some() {
-        output.to_string_lossy().into_owned()
+        output.to_string_lossy().replace('%', "%%")
     } else {
-        format!("{}.%(ext)s", output.display())
+        return Err("Video output needs a file extension, such as .mp4.".into());
     };
     args.push("-o".to_string());
     args.push(out_arg);
@@ -279,8 +420,10 @@ pub async fn download_via_ytdlp(
         args.push("-f".to_string());
         args.push("bv*+ba/b".to_string());
     }
+    args.push("--".into());
     args.push(page_url.to_string());
     let mut cmd = tokio::process::Command::new(&ytdlp);
+    let _cookies = configure_extraction(&mut cmd, page_url, headers)?;
     cmd.args(&args)
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
@@ -288,33 +431,76 @@ pub async fn download_via_ytdlp(
         .await
         .map_err(|e| e.to_string())?;
     if !out.status.success() {
-        return Err(String::from_utf8_lossy(&out.stderr).trim().to_string());
+        return Err(extraction_error(&out.stderr));
     }
     if let Ok(m) = tokio::fs::metadata(output).await {
-        return Ok(m.len());
-    }
-    let stem = output
-        .file_stem()
-        .and_then(|s| s.to_str())
-        .unwrap_or("video");
-    let parent = output.parent().unwrap_or(Path::new("."));
-    let mut rd = tokio::fs::read_dir(parent)
-        .await
-        .map_err(|e| e.to_string())?;
-    while let Some(ent) = rd.next_entry().await.map_err(|e| e.to_string())? {
-        let fname = ent.file_name();
-        let name = fname.to_string_lossy();
-        if name.starts_with(stem) && name.len() > stem.len() {
-            let m = ent.metadata().await.map_err(|e| e.to_string())?;
+        if m.is_file() && m.len() > 0 {
             return Ok(m.len());
         }
     }
+
     Err("yt-dlp output file missing".into())
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn browser_cookies_use_a_temporary_jar_not_process_arguments() {
+        let headers = HashMap::from([("Cookie".into(), "SID=test-value; theme=dark".into())]);
+        let mut cmd = tokio::process::Command::new("yt-dlp.exe");
+        let file = configure_extraction(&mut cmd, "https://www.youtube.com/watch?v=abc", &headers)
+            .unwrap()
+            .unwrap();
+        let path = file.path().to_owned();
+        let args: Vec<_> = cmd
+            .as_std()
+            .get_args()
+            .map(|a| a.to_string_lossy().into_owned())
+            .collect();
+        assert!(args.contains(&"--cookies".to_string()));
+        assert!(!args.iter().any(|a| a.contains("test-value")));
+        let jar = std::fs::read_to_string(&path).unwrap();
+        assert!(jar.contains(".youtube.com\tTRUE\t/\tTRUE\t0\tSID\ttest-value"));
+        drop(file);
+        assert!(!path.exists());
+        let malicious = HashMap::from([("Cookie".into(), "SID=value\nforged".into())]);
+        assert!(cookie_file("https://www.youtube.com/watch?v=abc", &malicious).is_err());
+    }
+
+    #[test]
+    fn extraction_policy_and_recovery_are_shared() {
+        let mut cmd = tokio::process::Command::new("yt-dlp.exe");
+        configure_extraction(&mut cmd, "https://youtu.be/abc", &HashMap::new()).unwrap();
+        let args: Vec<_> = cmd.as_std().get_args().collect();
+        assert!(args.contains(&std::ffi::OsStr::new("--ignore-config")));
+        assert!(!args.contains(&std::ffi::OsStr::new("--cookies-from-browser")));
+        assert!(!args.contains(&std::ffi::OsStr::new("--flat-playlist")));
+        for (error, expected) in [
+            ("Sign in to confirm you're not a bot", "sign-in"),
+            (
+                "Could not copy Chrome cookie database",
+                "could not read browser cookies",
+            ),
+            (
+                "JS challenge: JavaScript runtime unavailable",
+                "player challenge",
+            ),
+            ("HTTP Error 403", "refused"),
+            ("Video removed", "Check the URL"),
+        ] {
+            let message = extraction_error(error.as_bytes());
+            assert!(message.contains(expected), "{message}");
+            assert!(message.contains("Retry"));
+            assert!(message.contains(error));
+        }
+        let invalid = HashMap::from([(
+            "X-Jyroxa-Ytdlp-Browser".into(),
+            "chrome --exec malicious".into(),
+        )]);
+        assert!(configure_extraction(&mut cmd, "https://youtu.be/abc", &invalid).is_err());
+    }
 
     #[cfg(windows)]
     #[tokio::test]

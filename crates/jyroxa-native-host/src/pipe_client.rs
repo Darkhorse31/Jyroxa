@@ -1,7 +1,6 @@
 //! Forward native-messaging requests to the desktop app named pipe.
 
 use crate::handoff::{PipeEnvelope, PipeMessage};
-use crate::HANDOFF_PIPE_NAME;
 use serde_json::Value;
 use std::io::{Read, Write};
 use thiserror::Error;
@@ -29,7 +28,7 @@ pub fn forward_to_desktop(token: &str, message: PipeMessage) -> Result<Value, Pi
         let mut file = OpenOptions::new()
             .read(true)
             .write(true)
-            .open(HANDOFF_PIPE_NAME)
+            .open(crate::handoff_pipe_name())
             .map_err(|e| PipeError::Unavailable(e.to_string()))?;
         file.write_all(payload.as_bytes())?;
         file.write_all(b"\n")?;

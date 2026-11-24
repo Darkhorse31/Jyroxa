@@ -64,9 +64,68 @@ pub fn sidecar_exe(name: &str) -> PathBuf {
     PathBuf::from(name)
 }
 
+/// Prefer bundled runtimes, then existing system runtimes. Node requires explicit
+/// enablement in yt-dlp even when it is already on PATH.
+const JS_RUNTIMES: &[(&str, &str)] = &[
+    ("deno", "deno.exe"),
+    ("node", "node.exe"),
+    ("bun", "bun.exe"),
+];
+
+fn runtime_in_directories(dirs: &[PathBuf]) -> Option<(&'static str, PathBuf)> {
+    for dir in dirs {
+        for &(runtime, filename) in JS_RUNTIMES {
+            let path = dir.join(filename);
+            if path.is_file() {
+                return Some((runtime, path));
+            }
+        }
+    }
+    None
+}
+
+pub fn javascript_runtime() -> Option<(&'static str, PathBuf)> {
+    if let Ok(exe) = std::env::current_exe() {
+        if let Some(dir) = exe.parent() {
+            if let Some(runtime) =
+                runtime_in_directories(&[dir.to_path_buf(), dir.join("sidecars")])
+            {
+                return Some(runtime);
+            }
+        }
+    }
+    let mut system: Vec<PathBuf> = std::env::var_os("PATH")
+        .map(|p| std::env::split_paths(&p).collect())
+        .unwrap_or_default();
+    if let Some(programs) = std::env::var_os("ProgramFiles") {
+        system.push(PathBuf::from(programs).join("nodejs"));
+    }
+    runtime_in_directories(&system)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn bundled_runtime_precedes_a_system_runtime() {
+        let tmp = tempfile::tempdir().unwrap();
+        let bundle = tmp.path().join("bundle");
+        let system = tmp.path().join("system");
+        std::fs::create_dir_all(&bundle).unwrap();
+        std::fs::create_dir_all(&system).unwrap();
+        std::fs::write(bundle.join("node.exe"), b"bundled node").unwrap();
+        std::fs::write(system.join("deno.exe"), b"system deno").unwrap();
+        assert_eq!(
+            runtime_in_directories(&[bundle.clone(), system.clone()]),
+            Some(("node", bundle.join("node.exe")))
+        );
+        assert_eq!(
+            runtime_in_directories(std::slice::from_ref(&system)),
+            Some(("deno", system.join("deno.exe")))
+        );
+        assert!(runtime_in_directories(&[tmp.path().join("missing")]).is_none());
+    }
 
     #[test]
     fn portable_layout_selects_cli_before_desktop_executable() {

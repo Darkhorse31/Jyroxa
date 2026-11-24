@@ -8,6 +8,8 @@ apps/desktop/src-tauri/jyroxa-browser-register.exe
 apps/desktop/src-tauri/jyroxa.exe
 apps/desktop/src-tauri/yt-dlp.exe
 apps/desktop/src-tauri/ffmpeg.exe
+apps/desktop/src-tauri/node.exe
+apps/desktop/src-tauri/node-LICENSE.txt
 dist/*.zip
 dist/*.exe
 *.apk

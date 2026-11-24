@@ -276,6 +276,16 @@
               </div>
               <ul id="probe-torrent-files" class="probe-torrent-files hidden" aria-label="Torrent files"></ul>
             </div>
+            <label id="video-quality-row" class="hidden">Video quality
+              <select id="video-quality" aria-label="Video quality"><option value="bv*+ba/b">Best available</option></select>
+            </label>
+            <label id="video-cookies-row" class="hidden">Sign-in cookies
+              <select id="video-cookies" aria-label="Sign-in cookies">
+                <option value="">None</option><option value="chrome">Chrome</option>
+                <option value="edge">Edge</option><option value="brave">Brave</option>
+                <option value="firefox">Firefox</option><option value="chromium">Chromium</option>
+              </select>
+            </label>
             <div id="probe-error" class="probe-error-row hidden">
               <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"></circle><line x1="12" y1="8" x2="12" y2="12"></line><line x1="12" y1="16" x2="12.01" y2="16"></line></svg>
               <span id="probe-error-msg" class="probe-error-msg">Probe failed</span>

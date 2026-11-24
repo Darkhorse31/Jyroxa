@@ -27,7 +27,9 @@ fn host_exe_beside(desktop: &Path) -> PathBuf {
 
 #[cfg(windows)]
 fn framed_ping(host_exe: &PathBuf) -> Result<serde_json::Value, String> {
+    use std::os::windows::process::CommandExt;
     let mut child = Command::new(host_exe)
+        .creation_flags(0x0800_0000)
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::null())

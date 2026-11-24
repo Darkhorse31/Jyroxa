@@ -8,10 +8,11 @@
     "dev": "vite",
     "check": "node scripts/check-contract.mjs",
     "lint": "eslint src",
-    "test": "node --test scripts/design-unit.test.mjs",
+    "test": "node --test scripts/design-unit.test.mjs scripts/video-url.test.mjs",
     "test:design": "node scripts/design-v3-verify.mjs",
     "brand:design": "node scripts/generate-design-brand.mjs && node scripts/generate-fluent-icons.mjs",
     "build": "npm run check && tsc && vite build",
+    "prepare:windows": "node scripts/prepare-windows.mjs",
     "preview": "vite preview",
     "tauri": "tauri",
     "e2e": "node scripts/e2e.mjs"
