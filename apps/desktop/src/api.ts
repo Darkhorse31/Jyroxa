@@ -101,6 +101,7 @@ export interface BrowserIntegrationStatus {
   chrome_registry: boolean;
   edge_registry: boolean;
   brave_registry: boolean;
+  chromium_registry: boolean;
   firefox_registry: boolean;
   native_host_installed: boolean;
   packaged_extension_id: string;
@@ -155,6 +156,7 @@ export interface Package {
 }
 
 export interface ProbeInfo {
+  video_formats?: { format_id: string; label: string; size_bytes?: number | null }[];
   final_url: string;
   suggested_name: string;
   size?: number | null;

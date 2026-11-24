@@ -47,6 +47,10 @@ mod tests {
 
     #[test]
     fn packaged_key_matches_constant_id() {
+        let manifest: serde_json::Value =
+            serde_json::from_str(include_str!("../../../extensions/browser/manifest.json"))
+                .unwrap();
+        assert_eq!(manifest["key"], PACKAGED_EXTENSION_PUBLIC_KEY_B64);
         let id =
             chrome_extension_id_from_manifest_key_b64(PACKAGED_EXTENSION_PUBLIC_KEY_B64).unwrap();
         assert_eq!(id, PACKAGED_CHROME_EXTENSION_ID);

@@ -352,6 +352,10 @@ impl LinkGrabber {
         if is_single_url(input) && crate::telegram::is_telegram_post_url(input) {
             return self.grab_telegram_post(input).await;
         }
+        // A video page is a single downloadable item, not a page to crawl for assets.
+        if is_single_url(input) && crate::video::is_youtube_page(input) {
+            return Ok(group_packages(vec![LinkInfo::bare(input.to_string())]));
+        }
         let (base, text, is_page) = if is_single_url(input) {
             let base = Url::parse(input).ok();
             match self.fetch_text(input).await {
@@ -474,11 +478,17 @@ impl LinkGrabber {
         let infos: Vec<LinkInfo> = infos
             .into_iter()
             .filter(|i| self.passes_size_filters(i, opts))
-            .filter(|i| !(is_page && is_html_mime(i.mime.as_deref())))
+            .filter(|i| {
+                crate::video::is_youtube_page(&i.url)
+                    || !(is_page && is_html_mime(i.mime.as_deref()))
+            })
             // An extensionless page link is only a download if the probe
             // confirmed it; unreachable ones (HEAD refused, 404) are dropped.
             .filter(|i| {
-                !(extensionless_links.contains(&i.url) && i.mime.is_none() && i.size.is_none())
+                crate::video::is_youtube_page(&i.url)
+                    || !(extensionless_links.contains(&i.url)
+                        && i.mime.is_none()
+                        && i.size.is_none())
             })
             .collect();
 
@@ -545,6 +555,9 @@ impl LinkGrabber {
                     info
                 }
             };
+        }
+        if crate::video::is_youtube_page(url) {
+            return LinkInfo::bare(url.to_string());
         }
         match probe_url(&self.client, url, self.timeout).await {
             Ok(p) => LinkInfo {
@@ -721,6 +734,42 @@ pub fn group_packages(infos: Vec<LinkInfo>) -> Vec<Package> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[tokio::test]
+    async fn youtube_pages_are_preserved_without_http_page_crawling() {
+        use std::sync::{
+            atomic::{AtomicUsize, Ordering},
+            Arc,
+        };
+        let requests = Arc::new(AtomicUsize::new(0));
+        let attempts = requests.clone();
+        // Count proxy selection so even a failed HTTP probe is detected.
+        let client = reqwest::Client::builder()
+            .proxy(reqwest::Proxy::custom(move |_| {
+                attempts.fetch_add(1, Ordering::SeqCst);
+                Some("http://127.0.0.1:1")
+            }))
+            .build()
+            .unwrap();
+        let initial_requests = requests.load(Ordering::SeqCst);
+        let grabber = LinkGrabber::new(client);
+        for url in [
+            "https://youtube.com/watch?v=abc",
+            "https://youtu.be/abc",
+            "https://www.youtube.com/shorts/abc",
+        ] {
+            let packages = grabber.grab(url, &GrabOptions::default()).await.unwrap();
+            assert_eq!(packages.len(), 1);
+            assert_eq!(packages[0].links.len(), 1);
+            assert_eq!(packages[0].links[0].url, url);
+            assert_eq!(grabber.probe_link(url).await.url, url);
+            assert_eq!(
+                requests.load(Ordering::SeqCst),
+                initial_requests,
+                "video pages must bypass HTTP probing and crawling"
+            );
+        }
+    }
 
     #[test]
     fn extract_anchors_and_resolve_relative() {

@@ -6,7 +6,7 @@ import fs from "node:fs";
 import http from "node:http";
 import os from "node:os";
 import path from "node:path";
-import { spawn, spawnSync } from "node:child_process";
+import { startEngine, existingChromiumExecutable } from "./headless-engine.mjs";
 import { fileURLToPath } from "node:url";
 import { chromium } from "playwright";
 
@@ -16,14 +16,6 @@ const extDir = path.resolve(__dirname, "..");
 const targetDir =
   process.env.CARGO_TARGET_DIR || path.join(repoRoot, "target");
 const fixture = path.join(__dirname, "fixtures", "video-test.html");
-const desktopExe = path.join(
-  targetDir,
-  "release",
-  "bundle",
-  "nsis",
-  "Jyroxa.exe",
-);
-const desktopAlt = path.join(targetDir, "release", "jyroxa-desktop.exe");
 
 function serve(dir) {
   const master = `#EXTM3U
@@ -58,11 +50,10 @@ const base = `http://127.0.0.1:${port}/`;
 
 const userDataDir = fs.mkdtempSync(path.join(os.tmpdir(), "jyroxa-vgrab-e2e-"));
 const context = await chromium.launchPersistentContext(userDataDir, {
-  channel: "chrome",
+  executablePath: existingChromiumExecutable(),
   headless: true,
+  env: {...process.env, JYROXA_NATIVE_HOST_NO_LAUNCH:"1", JYROXA_DATA_DIR:userDataDir},
   args: [
-    `--disable-extensions-except=${extDir}`,
-    `--load-extension=${extDir}`,
     "--headless=new",
     "--no-sandbox",
   ],
@@ -136,8 +127,9 @@ const port2 = server2.address().port;
 const hlsBase = `http://127.0.0.1:${port2}/`;
 const ud2 = fs.mkdtempSync(path.join(os.tmpdir(), "jyroxa-vgrab-hls-"));
 const ctx2 = await chromium.launchPersistentContext(ud2, {
-  channel: "chrome",
+  executablePath: existingChromiumExecutable(),
   headless: true,
+  env: {...process.env, JYROXA_NATIVE_HOST_NO_LAUNCH:"1", JYROXA_DATA_DIR:ud2},
   args: [
     `--disable-extensions-except=${extDir}`,
     `--load-extension=${extDir}`,
@@ -147,111 +139,30 @@ const ctx2 = await chromium.launchPersistentContext(ud2, {
 });
 const p2 = ctx2.pages()[0] || (await ctx2.newPage());
 await ctx2.waitForEvent("serviceworker", { timeout: 25000 }).catch(() => null);
-await p2.goto(`${hlsBase}master.m3u8`);
+
 await p2.goto(hlsBase, { waitUntil: "domcontentloaded" });
 await p2.evaluate((u) => fetch(u).catch(() => {}), `${hlsBase}master.m3u8`);
-await p2.goto(hlsBase, { waitUntil: "networkidle" }).catch(() => {});
 await p2.locator("#v").evaluate((v) => {
   v.removeAttribute("src");
   v.load();
 });
 await p2.waitForTimeout(500);
-await p2.locator(".jx-vgrab-btn").click({ timeout: 15000 }).catch(() => {});
+await p2.locator(".jx-vgrab-btn").click({ timeout: 15000 });
 const menu2 = p2.locator(".jx-vgrab-menu");
-if (await menu2.isVisible().catch(() => false)) {
-  const t2 = await menu2.innerText();
-  if (/720|kbps|HLS/i.test(t2)) results.fixture_hls = "PASS";
-}
+await menu2.waitFor({state:"visible"});
+await p2.waitForFunction(() => /720|kbps|HLS/i.test(document.querySelector(".jx-vgrab-menu")?.textContent || ""));
+results.fixture_hls = "PASS";
 await ctx2.close();
 server2.close();
 
-const exe = fs.existsSync(desktopExe)
-  ? desktopExe
-  : fs.existsSync(desktopAlt)
-    ? desktopAlt
-    : null;
-const ytdlp = path.join(repoRoot, "apps", "desktop", "src-tauri", "yt-dlp.exe");
-
-if (exe && fs.existsSync(ytdlp)) {
-  const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), "jyroxa-vmenu-data-"));
-  const dlDir = path.join(dataDir, "downloads");
-  fs.mkdirSync(dlDir, { recursive: true });
-  fs.copyFileSync(ytdlp, path.join(path.dirname(exe), "yt-dlp.exe"));
-  const ffmpeg = path.join(repoRoot, "apps", "desktop", "src-tauri", "ffmpeg.exe");
-  if (fs.existsSync(ffmpeg)) {
-    fs.copyFileSync(ffmpeg, path.join(path.dirname(exe), "ffmpeg.exe"));
+const engine = await startEngine();
+try {
+  for (const [label, url] of [["youtube", "https://www.youtube.com/watch?v=jNQXAC9IVRw"], ["dailymotion", "https://www.dailymotion.com/video/x89eyek"]]) {
+    const reply = engine.native({type:"probe_video_formats",page_url:url});
+    assert.equal(reply.ok, true, JSON.stringify(reply));
+    assert.ok(reply.formats.length > 0);
+    results[label] = "PASS";
   }
-
-  const desktop = spawn(
-    exe,
-    ["--minimized"],
-    {
-      env: { ...process.env, JYROXA_DATA_DIR: dataDir },
-      stdio: "ignore",
-      windowsHide: true,
-    },
-  );
-
-  const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
-  await sleep(8000);
-
-  const hostExe = path.join(targetDir, "release", "jyroxa-native-host.exe");
-  if (fs.existsSync(hostExe)) {
-    const tokenPath = path.join(dataDir, "browser-integration.token");
-    for (let i = 0; i < 40 && !fs.existsSync(tokenPath); i += 1) {
-      await sleep(500);
-    }
-    if (fs.existsSync(tokenPath)) {
-      const token = fs.readFileSync(tokenPath, "utf8").trim();
-      const probeOne = (pageUrl, label) => {
-        const env = {
-          ...process.env,
-          JYROXA_DATA_DIR: dataDir,
-          JYROXA_NATIVE_HOST_NO_LAUNCH: "1",
-        };
-        const frame = buildFrame({
-          token,
-          type: "probe_video_formats",
-          page_url: pageUrl,
-        });
-        const child = spawnSync(hostExe, [], { env, input: frame, maxBuffer: 8 * 1024 * 1024 });
-        if (child.status !== 0) return { ok: false };
-        const msg = parseFrame(child.stdout);
-        return { ok: msg?.ok && (msg.formats?.length || 0) > 0, msg };
-      };
-
-      const yt = probeOne(
-        "https://www.youtube.com/watch?v=aqz-KE-bpKQ",
-        "youtube",
-      );
-      results.youtube = yt.ok ? "PASS" : "FAIL";
-
-      const dm = probeOne(
-        "https://www.dailymotion.com/video/x89eyek",
-        "dailymotion",
-      );
-      results.dailymotion = dm.ok ? "PASS" : "FAIL";
-    }
-  }
-
-  try {
-    desktop.kill();
-  } catch {
-  }
-}
-
+} finally { await engine.close(); }
 console.log(JSON.stringify(results, null, 2));
 console.log("video-menu-e2e.spec.mjs OK");
-
-function buildFrame(obj) {
-  const body = Buffer.from(JSON.stringify(obj), "utf8");
-  const len = Buffer.alloc(4);
-  len.writeUInt32LE(body.length, 0);
-  return Buffer.concat([len, body]);
-}
-
-function parseFrame(buf) {
-  if (!buf?.length) return null;
-  const n = buf.readUInt32LE(0);
-  return JSON.parse(buf.subarray(4, 4 + n).toString("utf8"));
-}

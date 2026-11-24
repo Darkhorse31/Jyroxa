@@ -9,9 +9,18 @@ use url::Url;
 use crate::error::{Error, Result};
 use crate::naming::{category_for, suggest_filename, Category};
 
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct VideoFormatChoice {
+    pub format_id: String,
+    pub label: String,
+    pub size_bytes: Option<u64>,
+}
+
 /// Metadata from probing a remote URL (after redirects).
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct ProbeInfo {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub video_formats: Option<Vec<VideoFormatChoice>>,
     pub final_url: String,
     pub suggested_name: String,
     pub size: Option<u64>,
@@ -152,6 +161,7 @@ pub async fn probe_url_with_headers(
     let category = category_for(&suggested_name, mime.as_deref());
 
     Ok(ProbeInfo {
+        video_formats: None,
         final_url,
         suggested_name,
         size,

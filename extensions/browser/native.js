@@ -49,15 +49,36 @@ export function connectionFailureReason(errText) {
       detail: "No response from the native messaging host.",
     };
   }
+  if (m.includes("pipe not available")) {
+    return {
+      short: "Jyroxa not running",
+      detail: "The native host started, but Jyroxa is not responding. Start Jyroxa, then click Refresh connection.",
+    };
+  }
+  if (
+    m.includes("failed to start") || m.includes("cannot find the file") ||
+    m.includes("file not found")
+  ) {
+    return {
+      short: "Host failed to start",
+      detail: "The browser could not start or communicate with Jyroxa's native host. Repair Jyroxa's installation, then click Refresh connection. " + raw,
+    };
+  }
+  if (m.includes("error when communicating") || m.includes("native host has exited")) {
+    return {
+      short: "Host connection failed",
+      detail: "Jyroxa's native host exited or sent an invalid response. Repair Jyroxa's installation, then click Refresh connection. " + raw,
+    };
+  }
   if (
     m.includes("native messaging host not found") ||
     m.includes("specified native messaging host not found") ||
     m.includes("specify native messaging host")
   ) {
     return {
-      short: "Host not registered",
+      short: "Host unavailable",
       detail:
-        "Chrome cannot find com.jyroxa.browser. Start Jyroxa once, then fully quit Chrome (all windows) and reopen.",
+        "The browser could not load com.jyroxa.browser. Its registration, manifest, or host file may be missing or invalid. In Jyroxa Settings > Browser, click Install / update host, then Refresh connection. Repair the installation if it still fails.",
     };
   }
   if (m.includes("forbidden") || m.includes("access to the specified native messaging host")) {
@@ -67,10 +88,10 @@ export function connectionFailureReason(errText) {
         "The native host rejected this extension ID. Load the official Jyroxa extension or add your ID in Jyroxa settings.",
     };
   }
-  if (m.includes("native host not installed")) {
+  if (m.includes("native host not installed") || m.includes("integration token missing")) {
     return {
       short: "Host not configured",
-      detail: "Jyroxa has not written the native messaging manifest yet. Start the desktop app once.",
+      detail: "The host started, but Jyroxa's pairing token is missing. Repair browser integration in Jyroxa Settings > Browser, then click Refresh connection.",
     };
   }
   if (m.includes("timeout")) {
@@ -111,29 +132,28 @@ export function connectionFailureReason(errText) {
 
 export async function sendNative(payload, timeoutMs = 12_000) {
   return new Promise((resolve) => {
-    const port = api.runtime.connectNative(HOST);
-    const timer = setTimeout(() => {
-      try {
-        port.disconnect();
-      } catch {
-      }
-      resolve({ ok: false, error: "timeout" });
-    }, timeoutMs);
-
-    port.onMessage.addListener((msg) => {
+    let port;
+    let timer;
+    let settled = false;
+    const finish = (value) => {
+      if (settled) return;
+      settled = true;
       clearTimeout(timer);
-      try {
-        port.disconnect();
-      } catch {
-      }
-      resolve(msg);
-    });
-    port.onDisconnect.addListener(() => {
-      clearTimeout(timer);
-      const err = api.runtime.lastError?.message;
-      resolve({ ok: false, error: err || "disconnected" });
-    });
-    port.postMessage(payload);
+      resolve(value);
+      try { port?.disconnect(); } catch {}
+    };
+    try {
+      port = api.runtime.connectNative(HOST);
+      timer = setTimeout(() => finish({ ok: false, error: "timeout" }), timeoutMs);
+      port.onMessage.addListener(finish);
+      port.onDisconnect.addListener(() => {
+        const error = api.runtime.lastError?.message || "disconnected";
+        finish({ ok: false, error });
+      });
+      port.postMessage(payload);
+    } catch (error) {
+      finish({ ok: false, error: error.message || String(error) });
+    }
   });
 }
 

@@ -9,7 +9,6 @@ pub use jyroxa_native_host::integration::BrowserIntegrationStatus;
 use jyroxa_native_host::integration::{
     self, install_native_host, uninstall_native_host, BrowserOriginsConfig,
 };
-use jyroxa_native_host::HANDOFF_PIPE_NAME;
 use tauri::{AppHandle, Emitter, Manager};
 
 use crate::engine::{AddDownloadArgs, BrowserIntegrationSettings, EngineState};
@@ -27,7 +26,11 @@ pub fn install_browser_integration(
     desktop_exe: &Path,
     settings: &BrowserIntegrationSettings,
 ) -> Result<(), String> {
-    install_native_host(desktop_exe, &origins_config(settings))
+    let installed = integration::installed_desktop_exe();
+    install_native_host(
+        installed.as_deref().unwrap_or(desktop_exe),
+        &origins_config(settings),
+    )
 }
 
 pub fn uninstall_browser_integration() -> Result<(), String> {
@@ -38,6 +41,8 @@ pub fn ensure_browser_integration_on_start(
     desktop_exe: &Path,
     settings: &BrowserIntegrationSettings,
 ) {
+    let installed = integration::installed_desktop_exe();
+    let desktop_exe = installed.as_deref().unwrap_or(desktop_exe);
     match install_native_host(desktop_exe, &origins_config(settings)) {
         Ok(()) => tracing::info!("browser native host registered"),
         Err(e) => tracing::warn!("browser native host registration skipped: {e}"),
@@ -119,14 +124,22 @@ async fn handle_pipe_message(app: &AppHandle, env: PipeEnvelope) -> serde_json::
 
             let mut handoff = handoff;
             let mut ytdlp_page = false;
-            if handoff.video_page == Some(true) || handoff.format_id.is_some() {
-                let page = handoff
-                    .page_url
-                    .clone()
-                    .filter(|s| !s.is_empty())
-                    .unwrap_or_else(|| handoff.url.clone());
+            if jyroxa_core::video::is_youtube_page(&handoff.url)
+                || handoff.video_page == Some(true)
+                || handoff.format_id.is_some()
+            {
+                let page = if jyroxa_core::video::is_youtube_page(&handoff.url) {
+                    handoff.url.clone()
+                } else {
+                    handoff
+                        .page_url
+                        .clone()
+                        .filter(|s| !s.is_empty())
+                        .unwrap_or_else(|| handoff.url.clone())
+                };
                 let fid = handoff.format_id.as_deref();
-                let force_ytdlp = fid.is_some_and(|f| f.contains('+') || f.contains('*'));
+                let force_ytdlp = jyroxa_core::video::is_youtube_page(&page)
+                    || fid.is_some_and(|f| f.contains('+') || f.contains('*'));
                 let mut resolved = false;
                 if !force_ytdlp {
                     if let Ok((direct, name)) =
@@ -216,6 +229,7 @@ async fn handle_pipe_message(app: &AppHandle, env: PipeEnvelope) -> serde_json::
                     "user_agent": handoff.user_agent,
                     "filename": if filename == "download" { handoff.filename } else { Some(filename) },
                     "page_url": handoff.page_url,
+                    "http_headers": headers,
                 });
                 let _ = app.emit("browser-handoff", payload);
                 serde_json::json!({ "ok": true, "silent": false })
@@ -229,10 +243,10 @@ pub async fn run_browser_handoff_server(app: AppHandle) {
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
     use tokio::net::windows::named_pipe::ServerOptions;
 
-    let pipe_name = HANDOFF_PIPE_NAME;
+    let pipe_name = jyroxa_native_host::handoff_pipe_name();
     let mut server = match ServerOptions::new()
         .first_pipe_instance(true)
-        .create(pipe_name)
+        .create(&pipe_name)
     {
         Ok(s) => s,
         Err(e) => {
@@ -260,7 +274,7 @@ pub async fn run_browser_handoff_server(app: AppHandle) {
             let _ = server.write_all(out.as_bytes()).await;
             let _ = server.flush().await;
 
-            server = match ServerOptions::new().create(pipe_name) {
+            server = match ServerOptions::new().create(&pipe_name) {
                 Ok(s) => s,
                 Err(_) => break,
             };

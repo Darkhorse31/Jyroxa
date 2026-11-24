@@ -1,3 +1,4 @@
+import { isYoutubePage } from "./video-url";
 import { listen } from "@tauri-apps/api/event";
 import { open } from "@tauri-apps/plugin-dialog";
 import { readText } from "@tauri-apps/plugin-clipboard-manager";
@@ -123,6 +124,17 @@ async function boot() {
   const probeCategoryEl = document.getElementById("probe-category")!;
   const probeErrorEl = document.getElementById("probe-error")!;
   const probeErrorMsg = document.getElementById("probe-error-msg")!;
+  const videoQuality = document.getElementById("video-quality") as HTMLSelectElement;
+  const videoCookies = document.getElementById("video-cookies") as HTMLSelectElement;
+  const videoQualityRow = document.getElementById("video-quality-row")!;
+  const videoCookiesRow = document.getElementById("video-cookies-row")!;
+  videoCookies.addEventListener("change", () => {
+    pendingBrowserHeaders = { ...pendingBrowserHeaders, "X-Jyroxa-Ytdlp-Browser": videoCookies.value };
+    void triggerProbe(addUrlsInput.value.split("\n")[0]);
+  });
+  videoQuality.addEventListener("change", () => {
+    pendingBrowserHeaders = { ...pendingBrowserHeaders, "X-Jyroxa-Ytdlp-Format": videoQuality.value };
+  });
   const btnRetryProbe = document.getElementById("btn-retry-probe")!;
   const btnProbeTelegramSettings = document.getElementById("btn-probe-telegram-settings")!;
   const probeTorrentFilesEl = document.getElementById("probe-torrent-files")!;
@@ -377,6 +389,8 @@ async function boot() {
     const sequence = ++probeSequence;
     const isCurrent = () => sequence === probeSequence && dlgAdd.open;
     const trimmed = url.trim();
+    videoQualityRow.classList.add("hidden");
+    videoCookiesRow.classList.toggle("hidden", !isYoutubePage(trimmed));
     if (!trimmed) {
       addProbeCard.classList.add("hidden");
       return;
@@ -444,6 +458,13 @@ async function boot() {
         return;
       }
       probeDetailsEl.classList.remove("hidden");
+      if (info.video_formats?.length) {
+        videoQuality.replaceChildren(new Option("Best available", "bv*+ba/b"), ...info.video_formats.map(f => new Option(f.label, f.format_id)));
+        const selected = pendingBrowserHeaders?.["X-Jyroxa-Ytdlp-Format"];
+        if (selected && Array.from(videoQuality.options).some(o => o.value === selected)) videoQuality.value = selected;
+        if (pendingBrowserHeaders) pendingBrowserHeaders["X-Jyroxa-Ytdlp-Format"] = videoQuality.value;
+        videoQualityRow.classList.remove("hidden");
+      }
 
       // Show detected metadata
       probeSizeEl.textContent = info.size ? `Size: ${fmtBytes(info.size)}` : "Size: Unknown";
@@ -498,6 +519,10 @@ async function boot() {
   addUrlsInput.addEventListener("input", () => {
     ++probeSequence;
     const firstUrl = addUrlsInput.value.split("\n")[0].trim();
+    if (firstUrl !== lastProbedUrl) {
+      pendingBrowserHeaders = undefined;
+      videoCookies.value = "";
+    }
     if (firstUrl) {
       debouncedProbe(firstUrl);
     } else {
@@ -539,6 +564,9 @@ async function boot() {
     ++probeSequence;
     if (probeDebounceTimer) clearTimeout(probeDebounceTimer);
     pendingBrowserHeaders = undefined;
+    videoCookies.value = "";
+    videoQualityRow.classList.add("hidden");
+    videoCookiesRow.classList.add("hidden");
     filenameUserEdited = false;
     folderUserEdited = false;
     addProbeCard.classList.add("hidden");
@@ -598,6 +626,7 @@ async function boot() {
     ++probeSequence;
     if (probeDebounceTimer) clearTimeout(probeDebounceTimer);
     pendingBrowserHeaders = undefined;
+    videoCookies.value = "";
   });
 
   addAutoConnCb.addEventListener("change", () => {
@@ -615,7 +644,6 @@ async function boot() {
   formAdd.addEventListener("submit", async (e) => {
     e.preventDefault();
     if (addSubmitInFlight) return;
-    addSubmitInFlight = true;
     const urls = addUrlsInput.value
       .split("\n")
       .map((s) => normalizeTorrentInput(s))
@@ -654,6 +682,7 @@ async function boot() {
       torrent_info_hash: torrentInfoHash,
     };
 
+    addSubmitInFlight = true;
     try {
       await api.addDownload(args);
       pendingBrowserHeaders = undefined;
@@ -894,10 +923,12 @@ async function boot() {
     referrer?: string;
     cookies?: string;
     user_agent?: string;
+    http_headers?: Record<string, string>;
   }>("browser-handoff", (ev) => {
     const p = ev.payload;
     openAddModal(p.url);
     pendingBrowserHeaders = {
+      ...p.http_headers,
       ...(p.user_agent ? { "User-Agent": p.user_agent } : {}),
       ...(p.referrer ? { Referer: p.referrer } : {}),
       ...(p.cookies ? { Cookie: p.cookies } : {}),

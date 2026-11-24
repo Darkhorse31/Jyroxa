@@ -123,10 +123,19 @@ pub fn sanitize_filename(name: &str) -> String {
     }
     if cleaned.len() > MAX_FILENAME_LEN {
         if let Some((stem, ext)) = cleaned.rsplit_once('.') {
-            let max_stem = MAX_FILENAME_LEN.saturating_sub(ext.len() + 1);
-            cleaned = format!("{}.{}", &stem[..stem.len().min(max_stem)], ext);
+            let mut max_stem = stem
+                .len()
+                .min(MAX_FILENAME_LEN.saturating_sub(ext.len() + 1));
+            while !stem.is_char_boundary(max_stem) {
+                max_stem -= 1;
+            }
+            cleaned = format!("{}.{}", &stem[..max_stem], ext);
         } else {
-            cleaned.truncate(MAX_FILENAME_LEN);
+            let mut boundary = MAX_FILENAME_LEN;
+            while !cleaned.is_char_boundary(boundary) {
+                boundary -= 1;
+            }
+            cleaned.truncate(boundary);
         }
     }
     cleaned
@@ -371,6 +380,11 @@ mod tests {
         assert_eq!(sanitize_filename(&name), "foo___bar_.txt");
         assert_eq!(sanitize_filename("CON.txt"), "_CON.txt");
         assert_eq!(sanitize_filename("name..."), "name");
+        let title = format!("{}.mp4", "🎥".repeat(100));
+        let safe = sanitize_filename(&title);
+        assert!(safe.len() <= MAX_FILENAME_LEN);
+        assert!(safe.ends_with(".mp4"));
+        assert!(sanitize_filename(&"🎥".repeat(100)).len() <= MAX_FILENAME_LEN);
     }
 
     #[test]
