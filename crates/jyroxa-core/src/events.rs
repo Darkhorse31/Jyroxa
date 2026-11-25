@@ -2,6 +2,17 @@
 
 use serde::{Deserialize, Serialize};
 
+/// Aggregate media transfer state; byte totals exclude postprocessing output.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct VideoProgress {
+    pub phase: String,
+    pub downloaded: u64,
+    pub total: Option<u64>,
+    pub total_is_estimate: bool,
+    pub speed_bps: f64,
+    pub eta_secs: Option<f64>,
+}
+
 /// Sender half used by the engine. UIs own the matching receiver.
 pub type EventSender = tokio::sync::mpsc::UnboundedSender<ProgressEvent>;
 /// Receiver half handed to UIs.
@@ -50,6 +61,9 @@ pub fn progress_tick(
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum ProgressEvent {
+    VideoProgress {
+        progress: VideoProgress,
+    },
     /// Emitted once metadata is known and the download begins.
     Started {
         total_size: Option<u64>,

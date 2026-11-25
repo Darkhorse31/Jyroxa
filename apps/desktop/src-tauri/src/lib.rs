@@ -10,6 +10,7 @@ pub mod release_gate;
 mod shell_paths;
 mod sidecar_paths;
 mod torrent_host;
+mod video_progress;
 mod video_sidecar;
 mod window_state;
 

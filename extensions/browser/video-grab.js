@@ -5,6 +5,79 @@
 
   let enabled = true;
   let siteHidden = false;
+  const controls = new Map();
+  let activeMenu = null;
+  let placementFrame = 0;
+
+  function closeMenu(restoreFocus = false) {
+    if (!activeMenu) return;
+    const { menu, btn } = activeMenu;
+    activeMenu = null;
+    menu.remove();
+    btn.setAttribute("aria-expanded", "false");
+    if (restoreFocus && btn.isConnected) btn.focus();
+  }
+
+  function schedulePlacement() {
+    if (placementFrame) return;
+    placementFrame = requestAnimationFrame(() => {
+      placementFrame = 0;
+      for (const [video, host] of controls) {
+        if (!video.isConnected || !host.isConnected) {
+          if (activeMenu?.host === host) closeMenu();
+          host.remove();
+          resizeObserver.unobserve(video);
+          controls.delete(video);
+          delete video.__jxVgrabHost;
+          continue;
+        }
+        placeHost(video);
+      }
+      // Track player/sidebar animations while the menu is open; a resize event
+      // alone does not catch transforms or position-only layout changes.
+      if (activeMenu) schedulePlacement();
+    });
+  }
+
+  function positionMenu() {
+    if (!activeMenu) return;
+    const {menu, btn} = activeMenu;
+    const viewport = window.visualViewport;
+    const left = viewport?.offsetLeft || 0;
+    const top = viewport?.offsetTop || 0;
+    const width = viewport?.width || document.documentElement.clientWidth;
+    const height = viewport?.height || document.documentElement.clientHeight;
+    const rect = btn.getBoundingClientRect();
+    menu.style.maxWidth = `${Math.max(0, width - 16)}px`;
+    menu.style.minWidth = `${Math.min(180, Math.max(0, width - 16))}px`;
+    menu.style.maxHeight = `${Math.max(0, height - 16)}px`;
+    const bounds = menu.getBoundingClientRect();
+    const x = Math.max(left + 8, Math.min(rect.right - bounds.width, left + width - bounds.width - 8));
+    const below = rect.bottom + 4;
+    const y = below + bounds.height <= top + height - 8 ? below : Math.max(top + 8, rect.top - bounds.height - 4);
+    menu.style.left = `${x}px`;
+    menu.style.top = `${Math.min(y, top + height - bounds.height - 8)}px`;
+  }
+
+  const resizeObserver = new ResizeObserver(schedulePlacement);
+  window.addEventListener("resize", schedulePlacement);
+  document.addEventListener("scroll", schedulePlacement, true);
+  window.visualViewport?.addEventListener("resize", schedulePlacement);
+  window.visualViewport?.addEventListener("scroll", schedulePlacement);
+  document.addEventListener("fullscreenchange", schedulePlacement);
+  document.addEventListener("pointerdown", event => {
+    if (activeMenu && !activeMenu.host.contains(event.target)) closeMenu();
+  }, true);
+  document.addEventListener("keydown", event => {
+    if (!activeMenu) return;
+    if (event.key === "Escape") { event.preventDefault(); event.stopPropagation(); closeMenu(true); }
+    if (event.key === "ArrowDown" || event.key === "ArrowUp") {
+      const buttons = [...activeMenu.menu.querySelectorAll("button")];
+      const index = buttons.indexOf(document.activeElement);
+      const next = event.key === "ArrowDown" ? index + 1 : (index < 0 ? 0 : index) - 1;
+      if (buttons.length) { event.preventDefault(); buttons[(next + buttons.length) % buttons.length].focus(); }
+    }
+  }, true);
 
   function hostFromLocation() {
     try {
@@ -41,29 +114,46 @@
 
   function placeHost(video) {
     let host = video.__jxVgrabHost;
-    if (!host) {
+    if (!host || !host.isConnected) {
       host = document.createElement("div");
       host.className = HOST_ID;
       host.dataset.jxVgrab = "1";
-      const parent = video.parentElement;
-      if (parent && getComputedStyle(parent).position === "static") {
-        parent.style.position = "relative";
-      }
-      (parent || document.documentElement).appendChild(host);
+      host.setAttribute("popover", "manual");
+      document.documentElement.appendChild(host);
       video.__jxVgrabHost = host;
+      controls.set(video, host);
+      resizeObserver.observe(video);
+    }
+    const fullscreen = document.fullscreenElement;
+    const target = fullscreen && fullscreen.contains(video) && fullscreen !== video
+      ? fullscreen : document.documentElement;
+    if (host.parentElement !== target) {
+      if (typeof host.hidePopover === "function" && host.matches(":popover-open")) host.hidePopover();
+      target.appendChild(host);
     }
     const rect = video.getBoundingClientRect();
-    const parentRect = host.offsetParent?.getBoundingClientRect() || { top: 0, left: 0 };
-    host.style.top = `${rect.top - parentRect.top + 6}px`;
-    host.style.left = `${rect.left - parentRect.left + rect.width - 58}px`;
+    const visible = enabled && !siteHidden && rect.width > 0 && rect.height > 0
+      && rect.bottom > 0 && rect.top < innerHeight
+      && rect.right > 0 && rect.left < innerWidth
+      && (!fullscreen || fullscreen.contains(video));
+    host.style.display = visible ? "block" : "none";
+    if (!visible) {
+      if (activeMenu?.host === host) closeMenu();
+      if (typeof host.hidePopover === "function" && host.matches(":popover-open")) host.hidePopover();
+    }
+    if (visible && typeof host.showPopover === "function" && !host.matches(":popover-open")) {
+      try { host.showPopover(); } catch { /* fixed-position fallback */ }
+    }
+    host.style.top = `${Math.max(6, Math.min(rect.top + 6, innerHeight - 32))}px`;
+    host.style.left = `${Math.max(6, Math.min(rect.right - 58, innerWidth - 40))}px`;
+    positionMenu();
     return host;
   }
 
   function buildUi(video) {
     cssLink();
+    if (!enabled || siteHidden || controls.has(video)) return;
     const host = placeHost(video);
-    host.innerHTML = "";
-    if (!enabled || siteHidden) return;
 
     const btn = document.createElement("button");
     btn.type = "button";
@@ -71,6 +161,8 @@
     btn.title = "Download with Jyroxa";
     btn.textContent = "↓";
     btn.style.background = TEAL;
+    btn.setAttribute("aria-haspopup", "true");
+    btn.setAttribute("aria-expanded", "false");
 
     btn.addEventListener("click", (e) => {
       e.preventDefault();
@@ -81,26 +173,29 @@
     host.appendChild(btn);
 
     const show = () => {
-      host.style.display = "block";
-      placeHost(video);
+      if (enabled && !siteHidden && video.__jxVgrabHost?.isConnected) placeHost(video);
     };
-    const hide = () => {
-      if (!host.querySelector(".jx-vgrab-menu")) {
-        host.style.display = "none";
-      }
-    };
-    video.addEventListener("mouseenter", show);
-    video.addEventListener("mouseleave", hide);
-    video.addEventListener("play", show);
+    if (!video.__jxVgrabWired) {
+      video.__jxVgrabWired = true;
+      video.addEventListener("mouseenter", show);
+      video.addEventListener("play", show);
+    }
     show();
   }
 
   async function openMenu(host, video, btn) {
-    host.querySelector(".jx-vgrab-menu")?.remove();
+    if (activeMenu?.host === host) { closeMenu(true); return; }
+    closeMenu();
     const menu = document.createElement("div");
     menu.className = "jx-vgrab-menu";
+    menu.setAttribute("role", "menu");
+    menu.setAttribute("aria-label", "Download quality");
     menu.innerHTML = '<div class="jx-vgrab-muted">Finding qualities…</div>';
     host.appendChild(menu);
+    activeMenu = {host, menu, btn};
+    schedulePlacement();
+    btn.setAttribute("aria-expanded", "true");
+    positionMenu();
 
   const loadMenu = async () => {
     menu.innerHTML = '<div class="jx-vgrab-muted">Finding qualities…</div>';
@@ -111,7 +206,8 @@
       pageUrl,
       blobLike,
       elementSrc: video.currentSrc || video.src || "",
-    });
+    }).catch(error => ({error: error.message || "Could not fetch qualities. Click Retry."}));
+    if (activeMenu?.menu !== menu) return;
 
     menu.innerHTML = "";
     const items = (res?.items || []).filter(
@@ -148,6 +244,7 @@
         const row = document.createElement("button");
         row.type = "button";
         row.className = "jx-vgrab-item";
+        row.setAttribute("role", "menuitem");
         const size = it.sizeLabel ? ` (${it.sizeLabel})` : "";
         row.textContent = `${it.label}${size}`;
         row.addEventListener("click", () => void handoffDirect(it, pageUrl, menu));
@@ -158,9 +255,11 @@
     const hideSite = document.createElement("button");
     hideSite.type = "button";
     hideSite.className = "jx-vgrab-hide";
+    hideSite.setAttribute("role", "menuitem");
     hideSite.textContent = "Hide on this site";
     hideSite.addEventListener("click", () => void hideOnSite(menu));
     menu.appendChild(hideSite);
+    positionMenu();
   };
 
     await loadMenu();
@@ -173,12 +272,12 @@
     list.add(host);
     await api.storage.local.set({ jyroxaVideoHiddenHosts: [...list] });
     siteHidden = true;
-    menu.remove();
+    closeMenu();
     document.querySelectorAll(`.${HOST_ID}`).forEach((el) => el.remove());
   }
 
   async function handoffPage(pageUrl, menu) {
-    menu.remove();
+    closeMenu();
     await api.runtime.sendMessage({
       type: "video-grab-handoff",
       payload: {
@@ -191,7 +290,7 @@
   }
 
   async function handoffDirect(item, pageUrl, menu) {
-    menu.remove();
+    closeMenu();
     await api.runtime.sendMessage({
       type: "video-grab-handoff",
       payload: {
@@ -207,8 +306,6 @@
 
   function scan(root) {
     root.querySelectorAll("video,audio").forEach((el) => {
-      if (el.__jxVgrabWired) return;
-      el.__jxVgrabWired = true;
       buildUi(el);
     });
   }
@@ -217,6 +314,7 @@
     void loadPrefs().then(() => {
       scan(document);
       const mo = new MutationObserver((mut) => {
+        if (mut.some(m => !m.target.closest?.(`.${HOST_ID}`))) schedulePlacement();
         for (const m of mut) {
           m.addedNodes.forEach((node) => {
             if (node.nodeType !== 1) return;
@@ -225,7 +323,7 @@
           });
         }
       });
-      mo.observe(document.documentElement, { childList: true, subtree: true });
+      mo.observe(document.documentElement, { childList: true, subtree: true, attributes: true, attributeFilter: ["style", "class", "hidden"] });
     });
   }
 
@@ -233,13 +331,22 @@
     if (chg.jyroxaVideoGrab) {
       enabled = chg.jyroxaVideoGrab.newValue !== false;
       document.querySelectorAll(`.${HOST_ID}`).forEach((el) => el.remove());
+      controls.clear();
+      resizeObserver.disconnect();
+      closeMenu();
       scan(document);
     }
   });
 
   api.runtime.onMessage.addListener((msg) => {
     if (msg?.type === "video-grab-refresh") {
-      void loadPrefs().then(() => scan(document));
+      void loadPrefs().then(() => {
+        closeMenu();
+        for (const host of controls.values()) host.remove();
+        controls.clear();
+        resizeObserver.disconnect();
+        scan(document);
+      });
     }
   });
 

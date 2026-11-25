@@ -1,14 +1,15 @@
 {
   "name": "jyroxa-desktop",
   "private": true,
-  "version": "0.1.13",
+  "version": "0.1.15",
   "author": "Prateek Kumar",
   "type": "module",
   "scripts": {
     "dev": "vite",
     "check": "node scripts/check-contract.mjs",
     "lint": "eslint src",
-    "test": "node --test scripts/design-unit.test.mjs scripts/video-url.test.mjs",
+    "test": "node --test scripts/design-unit.test.mjs scripts/video-url.test.mjs scripts/video-progress.test.mjs",
+    "test:video-ui": "node scripts/video-progress-ui.mjs",
     "test:design": "node scripts/design-v3-verify.mjs",
     "brand:design": "node scripts/generate-design-brand.mjs && node scripts/generate-fluent-icons.mjs",
     "build": "npm run check && tsc && vite build",

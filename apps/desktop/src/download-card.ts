@@ -22,6 +22,7 @@ import {
 } from "./formatters";
 import { icons } from "./icons";
 import { remainingTime } from "./sources";
+import { videoProgressText } from "./video-progress";
 import { showToast } from "./toast";
 
 const compactSize = (value: number) => fmtBytes(value, 1).replace(".0 ", " ");
@@ -98,6 +99,7 @@ export class DownloadCard {
     this.callbacks = callbacks;
     this.activeConnections = view.connections;
     this.smoothedSpeed = view.speed_bps;
+    this.smoothedEta = view.video_progress?.eta_secs ?? null;
 
     if (view.urls.length > 0) {
       this.serverHost = extractHost(view.urls[0]);
@@ -472,6 +474,10 @@ export class DownloadCard {
 
   public updateView(newView: DownloadView) {
     this.view = { ...newView };
+    if (this.view.video_progress) {
+      this.smoothedSpeed = this.view.video_progress.speed_bps;
+      this.smoothedEta = this.view.video_progress.eta_secs;
+    }
     if (!this.serverHost || this.serverHost === "—") {
       this.serverHost = extractHost(this.view.urls[0]);
     }
@@ -486,7 +492,16 @@ export class DownloadCard {
     const dt = Math.max(0.001, (now - this.lastProgressTimestamp) / 1000);
     this.lastProgressTimestamp = now;
 
-    if (ev.type === "started") {
+    if (ev.type === "video_progress" && ev.progress) {
+      const p = ev.progress;
+      this.view.video_progress = p;
+      this.view.downloaded = p.downloaded;
+      this.view.total = p.total ?? undefined;
+      this.view.speed_bps = p.speed_bps;
+      this.smoothedSpeed = p.speed_bps;
+      this.smoothedEta = p.eta_secs;
+      this.view.status = "downloading";
+    } else if (ev.type === "started") {
       if (ev.total_size !== undefined) this.view.total = ev.total_size;
       if (ev.connections !== undefined) {
         this.view.connections = ev.connections;
@@ -591,6 +606,7 @@ export class DownloadCard {
       this.view.status = "retrying";
       if (ev.error) this.view.error = `Retrying (attempt ${ev.attempt ?? 1}): ${ev.error}`;
     } else if (ev.type === "completed") {
+      this.view.video_progress = undefined;
       this.view.status = "completed";
       this.view.downloaded = ev.total_size ?? this.view.downloaded;
       this.view.total = ev.total_size ?? this.view.total;
@@ -600,6 +616,7 @@ export class DownloadCard {
       if (ev.elapsed_secs !== undefined) this.elapsedSecs = ev.elapsed_secs;
       if (ev.average_bps !== undefined) this.avgSpeedBps = ev.average_bps;
     } else if (ev.type === "failed") {
+      this.view.video_progress = undefined;
       this.view.status = "failed";
       this.view.error =
         formatDownloadError(ev.error) ?? ev.error ?? "Download failed";
@@ -644,7 +661,10 @@ export class DownloadCard {
 
     this.progressFill.style.width = `${pct.toFixed(1)}%`;
     this.pctText.textContent = total > 0 ? `${pct.toFixed(1)}%` : d.status === "completed" ? "100%" : "—";
-    this.root.querySelector(".progress-track")?.setAttribute("aria-valuenow", pct.toFixed(0));
+    const progressTrack = this.root.querySelector(".progress-track");
+    progressTrack?.toggleAttribute("aria-busy", !!d.video_progress && d.video_progress.phase !== "downloading");
+    if (total > 0 || d.status === "completed" || d.status === "done") progressTrack?.setAttribute("aria-valuenow", pct.toFixed(0));
+    else progressTrack?.removeAttribute("aria-valuenow");
 
     // Size stats
     this.sizeText.textContent = `${fmtBytes(downloaded)}${total > 0 ? ` / ${fmtBytes(total)}` : ""}`;
@@ -662,6 +682,12 @@ export class DownloadCard {
       : d.status === "completed" || d.status === "done" ? "Completed"
       : d.status === "failed" ? `Download failed. ${formatDownloadError(d.error) || "Show details to retry."}`
       : `${this.statusPill.textContent} · ${size}`;
+    if (isRunning && d.video_progress) {
+      const text = videoProgressText(d.video_progress, compactSize, remainingTime);
+      this.summaryEl.textContent = text.summary;
+      this.pctText.textContent = text.percent;
+      this.sizeText.textContent = text.size;
+    }
     this.root.querySelector(".btn-quick-open")!.classList.toggle("hidden", d.status !== "completed" && d.status !== "done");
     this.speedText.classList.toggle("hidden", !isRunning);
 
@@ -688,7 +714,9 @@ export class DownloadCard {
     this.elapsedText.textContent = `${fmtDuration(this.elapsedSecs)} elapsed`;
 
     // Connections count
-    if (d.kind === "torrent") {
+    if (d.video_progress) {
+      this.connText.textContent = "Video transfer";
+    } else if (d.kind === "torrent") {
       const peers = d.torrent_peers ?? 0;
       const seeds = d.torrent_seeds ?? 0;
       const ratio = d.torrent_ratio;

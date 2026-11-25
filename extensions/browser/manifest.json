@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "Jyroxa Download Integration",
-  "version": "0.1.13",
+  "version": "0.1.15",
   "key": "MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEAzoapZGw2eQFZ8vBUz2PAOvpbLFX/m494GBPw/rBpAiCI9iyQGZLxjvNm42+FFTP+vqSW/iXYAF6iruyQqmMEykC6NBKTL8oCVz9dRwyDS1EQxQHO9IkGFQmQe8FB2Q1n6hyR2LICuwoDlwm1uTmljDTTPfXPMnWKvHRRlc8h7wrdJx85Ijn7PLOU7HaI1hFO8GhWyXlohY92MoRwo5JdPmEdSLNe2xJjbnPjYaX3bJe/obr/+rDoJKvpiJt/R2y0M5VcI218DXzv8OKWkSME2hSml/eHCdZKMc1gIH7GE7jklLTcIDY+xjt0jX2gP5kiVxmyqpDl8O4dKUTPn0f3oQIDAQAB",
   "description": "Capture browser downloads and send them to Jyroxa.",
   "icons": {

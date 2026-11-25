@@ -22,8 +22,8 @@ android {
         applicationId = "com.jyroxa.app"
         minSdk = 24
         targetSdk = 34
-        versionCode = 13
-        versionName = "0.1.13"
+        versionCode = 15
+        versionName = "0.1.15"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
         vectorDrawables {

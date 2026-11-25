@@ -1,6 +1,16 @@
 .jx-vgrab-host {
-  position: absolute;
-  z-index: 2147483646;
+  all: initial;
+  position: fixed;
+  inset: auto;
+  margin: 0;
+  padding: 0;
+  border: 0;
+  width: max-content;
+  height: max-content;
+  overflow: visible;
+  background: transparent;
+  color: #1c1712;
+  z-index: 2147483647;
   pointer-events: none;
   font-family: system-ui,Segoe UI,sans-serif;
   font-size: 11px;
@@ -27,7 +37,9 @@
 
 .jx-vgrab-menu {
   pointer-events: auto;
-  margin-top: 4px;
+  position: fixed;
+  margin: 0;
+  box-sizing: border-box;
   min-width: 180px;
   max-width: 260px;
   max-height: 220px;
@@ -82,4 +94,9 @@
   cursor: pointer;
   color: #374151;
   border-radius: 4px;
+}
+.jx-vgrab-host::backdrop { background: transparent; pointer-events: none; }
+.jx-vgrab-btn:focus-visible, .jx-vgrab-menu button:focus-visible {
+  outline: 2px solid #7a5c2e;
+  outline-offset: -2px;
 }

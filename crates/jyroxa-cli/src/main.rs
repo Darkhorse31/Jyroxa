@@ -666,7 +666,9 @@ async fn render_events(rx: &mut events::EventReceiver) {
             ProgressEvent::Failed { error } => {
                 eprintln!("\n  [failed] {error}");
             }
-            ProgressEvent::Completed { .. } | ProgressEvent::SegmentProgress { .. } => {}
+            ProgressEvent::Completed { .. }
+            | ProgressEvent::SegmentProgress { .. }
+            | ProgressEvent::VideoProgress { .. } => {}
         }
     }
 }

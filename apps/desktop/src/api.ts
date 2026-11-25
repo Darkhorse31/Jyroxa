@@ -30,7 +30,17 @@ export interface SegmentState {
   downloaded: number;
 }
 
+export interface VideoProgress {
+  phase: "fetching" | "downloading" | "merging" | "processing";
+  downloaded: number;
+  total: number | null;
+  total_is_estimate: boolean;
+  speed_bps: number;
+  eta_secs: number | null;
+}
+
 export interface DownloadView {
+  video_progress?: VideoProgress;
   id: number;
   urls: string[];
   filename: string;
@@ -176,6 +186,7 @@ export interface DownloadFinishedPayload {
 }
 
 export interface BackendProgressEvent {
+  progress?: VideoProgress;
   type: string;
   downloaded?: number;
   total?: number;
