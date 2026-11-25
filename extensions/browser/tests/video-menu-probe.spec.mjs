@@ -43,6 +43,15 @@ try {
   const audioAdded = await engine.request({command:"add",args:{urls:["https://www.youtube.com/shorts/jNQXAC9IVRw"],output_dir:engine.downloads,filename:"audio-100%.mp4",connections:1,connections_auto:true,http_headers:{"X-Jyroxa-Ytdlp-Format":audio.format_id}}});
   assert.equal(audioAdded.ok,true,JSON.stringify(audioAdded));
   engine.decode(await engine.waitFor(audioAdded.result),true);
+  const playerRegressionUrl = "https://www.youtube.com/watch?v=IfHoc8HJk6E";
+  const regressionProbe = engine.native({type:"probe_video_formats",page_url:playerRegressionUrl});
+  assert.equal(regressionProbe.ok,true,JSON.stringify(regressionProbe));
+  assert.ok(regressionProbe.formats.length >= 2, "reported player must expose real video qualities");
+  const regressionHandoff = engine.native({type:"handoff",url:"https://youtu.be/IfHoc8HJk6E",page_url:playerRegressionUrl,filename:"youtube-player-regression.mp4",video_page:true,format_id:"bv*+ba/b"});
+  assert.equal(regressionHandoff.ok,true,JSON.stringify(regressionHandoff));
+  assert.ok(regressionHandoff.download_id);
+  engine.decode(await engine.waitFor(regressionHandoff.download_id));
+  console.log("reported YouTube player extension handoff decoded",JSON.stringify({formats:regressionProbe.formats.length,id:regressionHandoff.download_id}));
   const journal = await engine.request({command:"progress_events"});
   assert.equal(journal.ok,true,JSON.stringify(journal));
   for (const id of [added.result, handoff.download_id, audioAdded.result]) {

@@ -1,3 +1,15 @@
+## 0.1.15 — 2026-11-25
+
+### YouTube download reliability
+
+- Bundle yt-dlp 2026.11.23 with a pinned SHA-256 and verify both before packaging, so an old sidecar cannot survive a new build.
+- Detect the current `addOnDisposeCallback` YouTube player error and explain that an app update is needed.
+- Add the reported YouTube video to the headless release gate for metadata, quality, download, and decode verification.
+
+### Distribution
+
+- Workspace, desktop, extension, and Android 0.1.15; Android versionCode 15.
+
 ## 0.1.14 — 2026-11-25
 
 ### YouTube downloads and browser extension

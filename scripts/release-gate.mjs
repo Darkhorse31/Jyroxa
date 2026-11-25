@@ -13,6 +13,7 @@ import { fileURLToPath, pathToFileURL } from "node:url";
 const repo = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const target = process.env.CARGO_TARGET_DIR || path.join(repo, "target");
 const sidecars = process.env.JYROXA_VERIFIED_SIDECARS_DIR || path.join(target, "release");
+const videoSidecarLock = JSON.parse(fs.readFileSync(path.join(repo, "scripts/video-sidecars.lock.json"), "utf8"));
 const stage = fs.mkdtempSync(path.join(os.tmpdir(), "jyroxa-release-0112-"));
 console.log(`Evidence: ${stage}`);
 const data = path.join(stage, "data");
@@ -21,7 +22,13 @@ for (const name of ["jyroxa-release-gate.exe", "jyroxa.exe", "jyroxa-native-host
   const source = name === "jyroxa-release-gate.exe" ? path.join(target, "release") : sidecars;
   fs.copyFileSync(path.join(source, name), path.join(stage, name));
 }
-const env = { ...process.env, JYROXA_DATA_DIR: data, JYROXA_CLI: path.join(stage, "jyroxa.exe"), JYROXA_NATIVE_HOST_NO_LAUNCH: "1" };
+const env = {
+  ...process.env,
+  JYROXA_DATA_DIR: data,
+  JYROXA_CLI: path.join(stage, "jyroxa.exe"),
+  JYROXA_NATIVE_HOST_NO_LAUNCH: "1",
+  JYROXA_HANDOFF_PIPE: `\\\\.\\pipe\\jyroxa-test-release-gate-${process.pid}`,
+};
 const sleep = ms => new Promise(resolve => setTimeout(resolve, ms));
 const rows = [];
 const ownedSidecars = new Map();
@@ -123,6 +130,11 @@ async function hashFile(filename) {
   for await (const chunk of fs.createReadStream(filename)) hash.update(chunk);
   return hash.digest("hex");
 }
+
+const bundledYtVersion = (await promisify(execFile)(path.join(stage, "yt-dlp.exe"), ["--version"], { windowsHide: true })).stdout.trim();
+assert.equal(bundledYtVersion, videoSidecarLock.ytDlp.version, "release must use the pinned yt-dlp version");
+assert.equal(await hashFile(path.join(stage, "yt-dlp.exe")), videoSidecarLock.ytDlp.windowsX64Sha256, "release yt-dlp hash must match the lock");
+pass("pinned YouTube sidecar", { version: bundledYtVersion, sha256: videoSidecarLock.ytDlp.windowsX64Sha256 });
 // Capture the raw info dictionary so a magnet has the independently verified hash.
 function metainfo(buffer) {
   let offset = 0;
@@ -210,7 +222,7 @@ try {
   const publicUrl = "https://www.gnu.org/licenses/gpl-3.0.txt";
   const publicResponse = await fetch(publicUrl, {
     signal: AbortSignal.timeout(30_000),
-    headers: { "User-Agent": "Jyroxa/0.1.14" },
+    headers: { "User-Agent": "Jyroxa/0.1.15" },
   });
   assert.equal(publicResponse.ok, true);
   const publicDigest = crypto.createHash("sha256").update(Buffer.from(await publicResponse.arrayBuffer())).digest("hex");
@@ -295,13 +307,17 @@ try {
     pass(`torrent ${index + 1}`, { source, info_hash: info.hash, bytes: completed.downloaded, sha256: expected });
   }
 
-  for (const url of ["https://www.youtube.com/watch?v=aqz-KE-bpKQ", "https://www.dailymotion.com/video/x89eyek"]) {
+  for (const url of [
+    "https://www.youtube.com/watch?v=IfHoc8HJk6E",
+    "https://www.youtube.com/watch?v=aqz-KE-bpKQ",
+    "https://www.dailymotion.com/video/x89eyek",
+  ]) {
     const reply = await native({ type: "probe_video_formats", page_url: url });
     assert.ok(reply.formats?.length >= (url.includes("youtube") ? 2 : 1), `qualities missing: ${url}`);
     assert.ok(reply.formats.every(format => format.format_id !== "bv*+ba/b"), `placeholder qualities: ${url}`);
     const format = reply.formats.find(format => /360p|240p/.test(format.label)) || reply.formats.find(format => /\d+p/.test(format.label));
     assert.ok(format, `a real video quality is required: ${url}`);
-    const filename = url.includes("youtube") ? "youtube.mp4" : "dailymotion.mp4";
+    const filename = url.includes("IfHoc8HJk6E") ? "youtube-player-regression.mp4" : url.includes("youtube") ? "youtube.mp4" : "dailymotion.mp4";
     const videoArgs = args(url, output, filename);
     videoArgs.http_headers = { "X-Jyroxa-Ytdlp-Page": "1", "X-Jyroxa-Ytdlp-Format": format.format_id };
     const videoId = await gate.request("add", { args: videoArgs });

@@ -312,6 +312,8 @@ fn extraction_error(stderr: &[u8]) -> String {
         || lower.contains("could not copy")
     {
         "Jyroxa could not read browser cookies. Close that browser and click Retry, or choose another signed-in browser. Chrome may protect cookies from other apps."
+    } else if lower.contains("addondisposecallback is not a function") {
+        "YouTube changed its player challenge and Jyroxa's yt-dlp sidecar is outdated. Update Jyroxa to the latest version, then click Retry."
     } else if lower.contains("javascript") || lower.contains("challenge") || lower.contains("ejs") {
         "YouTube's player challenge could not be solved. Use a current yt-dlp with its EJS scripts and a supported Node or Deno runtime beside Jyroxa, then click Retry."
     } else if lower.contains("403") || lower.contains("429") {
@@ -616,6 +618,10 @@ mod tests {
             (
                 "JS challenge: JavaScript runtime unavailable",
                 "player challenge",
+            ),
+            (
+                "TypeError: a.addOnDisposeCallback is not a function",
+                "sidecar is outdated",
             ),
             ("HTTP Error 403", "refused"),
             ("Video removed", "Check the URL"),
