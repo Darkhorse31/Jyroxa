@@ -1,3 +1,14 @@
+## 0.1.14 — 2026-11-25
+
+### YouTube downloads and browser extension
+
+- Show live YouTube transfer progress in the task card, including downloaded and remaining bytes, percent, speed, remaining time, and merging/processing states.
+- Keep the in-page video quality menu above site controls and within the viewport, with stable hover behavior.
+
+### Distribution
+
+- Workspace, desktop, extension, and Android 0.1.14; Android versionCode 14.
+
 ## 0.1.13 — 2026-11-24
 
 ### YouTube downloads
